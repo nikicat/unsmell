@@ -1,0 +1,18 @@
+{
+  "name": "unsmell",
+  "description": "Marketplace for the unsmell plugin.",
+  "owner": { "name": "Nikolay Bryskin" },
+  "plugins": [
+    {
+      "name": "unsmell",
+      "source": "./",
+      "description": "Refactor the code smells out of your working changes before you commit them.",
+      "category": "development",
+      "keywords": ["refactoring", "code-smells", "code-quality"],
+      "homepage": "https://github.com/nikicat/unsmell",
+      "repository": "https://github.com/nikicat/unsmell",
+      "license": "MIT",
+      "author": { "name": "Nikolay Bryskin" }
+    }
+  ]
+}
