@@ -53,6 +53,16 @@ or `/plugin marketplace add /path/to/unsmell` (tracks your working tree).
 
 `/unsmell` appears in the skill list after a restart.
 
+## Update
+
+```
+/plugin marketplace update unsmell
+/plugin update unsmell@unsmell
+```
+
+Then restart Claude Code. The first command refreshes the marketplace (this
+repo) so the second one sees the new version.
+
 ## Use
 
 ```

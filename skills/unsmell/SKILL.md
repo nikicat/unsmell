@@ -68,6 +68,11 @@ clumps, concept mixing) is invisible from a diff. For each touched file: read it
 end to end, then grep the repo for the distinctive lines of anything the change
 added — that's how you find the copy it was pasted from.
 
+A second pass in the same session re-reads every touched file from disk. What
+you remember writing is the hunk view with extra confidence: it carries the
+reasons, which is exactly what hides a smell. "I reviewed that last time" covers
+nothing that has been edited since, and nothing you wrote yourself.
+
 **Then inventory the declarations, separately and on purpose.** Reading for flow
 finds smells in *logic* and walks straight past smells in *types*, because a
 declaration is one line that looks fine. List every field, every parameter,
@@ -86,12 +91,47 @@ Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
 
-**Then read each doc comment against its signature.** A doc comment is part
-of the interface: it says what the function produces from what it is given,
-and what happens at the edges. One that narrates the body instead ("takes
-the anchor, walks back, stamps each row, then…") tells a caller nothing the
-signature did not, and goes stale the moment the body changes. Test: cover
-the body — could you call the function correctly from the comment alone?
+**Then read each doc comment against its signature, in this order.** A doc
+comment is part of the interface: it says what the function produces from what
+it is given, and what happens at the edges. "Documented item" means every
+`///` and every `//!`: a module doc is the doc of the largest item in the file
+and the first one a reader meets. Its first sentence says what the module
+decides or provides, in the reader's terms; a list of its mechanisms in the
+order they run is narration, and a word only an ADR defines is a finding. One that narrates the body instead
+("takes the anchor, walks back, stamps each row, then…") tells a caller nothing
+the signature did not, and goes stale the moment the body changes. The author
+cannot see this by comparing the comment to the body — a narrating comment
+always matches the body; matching is the smell. So for each documented item:
+
+1. Read the signature and the doc only. Write down what you expect to get back
+   and when it errors.
+2. Only then read the body, and list three things from it, not from the doc:
+   - the effects: every write, network call, spawn, delete, or state change
+     (grep the body for `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_|
+     record_|store_|remove_`);
+   - the exits: every `bail!`, `ensure!`, `?` with a context, or early return
+     a caller could cause (grep for `bail!|ensure!|context\(`);
+   - the sibling: another method whose difference from this one is one of
+     those effects.
+   Each effect must be in the doc's main clause, not in a participle ("…,
+   registering it when …"). Each caller-caused exit must be named. A sibling
+   must be pointed at from the one with the surprising effect. Two further
+   findings: your expectation was wrong or blank — the doc does not state the
+   contract; or the doc could only have been written after reading the body —
+   it names sort keys, tie-breaks, branch order, a SQL or regex mechanism, or
+   what the *caller* does with the result ("in the order they are tried").
+3. A precondition phrased as "must" ("it must exist and be enabled") is a
+   third: name the error instead.
+4. Narration has a vocabulary: sequence and branching words, which a body has
+   and a contract does not. Grep every doc line in the changeset for them —
+   `grep -nE '//[/!].*\b(then|first when|on a miss|in the order|after that|
+   before that|once |, or,)\b'` — and treat each hit as a finding until it is
+   shown to state what comes out rather than how.
+5. A rewrite is the newest text in the changeset and the only text nobody
+   re-read. Before the report, run step 1 on every doc you rewrote as if seen
+   cold, and run the grep of step 4 over it; a rewrite that needs a second
+   reading, or that satisfied a rule by cramming the mechanism into a clause,
+   goes back. Presence of the effects and exits is necessary, not sufficient.
 
 Write the fix in Google developer documentation style for API reference
 comments (https://developers.google.com/style/api-reference-comments):
@@ -102,12 +142,18 @@ method" or the method's own name. A parameter description starts with "The"
 or "A"; a boolean reads "True if …; false otherwise." A field is a brief noun
 phrase. A type's first sentence states its purpose without repeating its name.
 
+A doc comment is two sentences unless it earns a third: what comes out and
+what it does, then the errors a caller can cause. Leave out what the types,
+defaults, or the type's own doc already say, and infrastructure failures (the
+database, the network), which every method has. If the rewrite is longer than
+the signature block below it, cut before shipping.
+
 ```
-/// Takes `self` as the balance after the last row and walks back,
-/// stamping each row with the balance after it.                       ✗ steps
-/// Sets each row's balance to the balance after its transfer, given
-/// `self` as the balance after the last row, and returns the balance
-/// before the first row. Rows before an impossible step are Unknown.  ✓ contract
+/// The registered chain `chain_ref` names, registering it from the
+/// catalog when it is only listed there.                  ✗ effect in a participle, no errors
+/// Returns the registered chain `chain_ref` names, registering it (schema
+/// included) when only the catalog knows it. Errors when the reference is
+/// unknown or ambiguous; [`Db::registered_chain`] never registers.      ✓ effect, errors, sibling
 ```
 
 ## 4. The catalog
@@ -131,7 +177,7 @@ phrase. A type's first sentence states its purpose without repeating its name.
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why* | Rename; delete the comment the name replaced |
-| **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment |
+| **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
 
@@ -181,6 +227,11 @@ them enough to mention. Before fixing it:
 
 Fixing only what was pointed at guarantees another round, and teaches the user
 that pointing is how this gets done.
+
+When the pointed-at smell is one a previous run of this skill should have
+caught, the report also names, before the fix, which survey step would have
+found it and why that step was skipped or passed it. A miss with no named cause
+will repeat.
 
 ## 6. Fixing outside the changeset
 
@@ -240,11 +291,21 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
+Survey   <n> files read whole · <n> declarations inventoried · <n> doc items checked, <e> with an effect or exit missing
+Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
 Kept     path:line  smell → why, and the trigger
 Noticed  path:line  out-of-scope smell, untouched
 ```
+
+The Survey line is not optional and its numbers come from the pass, not from
+memory: a run that skipped a step cannot fill it honestly, and a reader can hold
+the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
+*looked at* proves nothing by itself; the count with a missing effect or exit
+is what a skipped step cannot fake. Every rewritten doc comment appears
+verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
+that reads badly in the report reads badly in the code.
 
 Then the verification result (tests/typecheck: pass/fail/absent) in one line. No
 essays. If the explanation is longer than the diff, the diff was wrong.
