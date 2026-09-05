@@ -1,6 +1,6 @@
 {
   "name": "unsmell",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find and fix code smells in your working changes before you commit: duplication, unnamed tuples and returns, primitive obsession, boolean and algebraic blindness, long functions, if-forests, parameter bloat, data clumps, concept mixing.",
   "author": { "name": "Nikolay Bryskin" },
   "repository": "https://github.com/nikicat/unsmell",

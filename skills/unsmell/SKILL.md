@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing, narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -86,6 +86,30 @@ Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
 
+**Then read each doc comment against its signature.** A doc comment is part
+of the interface: it says what the function produces from what it is given,
+and what happens at the edges. One that narrates the body instead ("takes
+the anchor, walks back, stamps each row, then…") tells a caller nothing the
+signature did not, and goes stale the moment the body changes. Test: cover
+the body — could you call the function correctly from the comment alone?
+
+Write the fix in Google developer documentation style for API reference
+comments (https://developers.google.com/style/api-reference-comments):
+present tense, third person, a verb first — `Returns …` for a value, `Gets …`
+for a getter, `Checks whether …` for a boolean, `Sets …` / `Updates …` /
+`Deletes …` for an effect, `Creates …` for a constructor — and never "this
+method" or the method's own name. A parameter description starts with "The"
+or "A"; a boolean reads "True if …; false otherwise." A field is a brief noun
+phrase. A type's first sentence states its purpose without repeating its name.
+
+```
+/// Takes `self` as the balance after the last row and walks back,
+/// stamping each row with the balance after it.                       ✗ steps
+/// Sets each row's balance to the balance after its transfer, given
+/// `self` as the balance after the last row, and returns the balance
+/// before the first row. Rows before an impossible step are Unknown.  ✓ contract
+```
+
 ## 4. The catalog
 
 | Smell | Tell | Usual fix |
@@ -107,6 +131,7 @@ tired the way reading does.
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why* | Rename; delete the comment the name replaced |
+| **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
 
