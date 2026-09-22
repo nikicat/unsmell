@@ -7,7 +7,7 @@ It reads what you've actually changed — unstaged, staged, and untracked — th
 checks it against a catalog of smells: duplication, unnamed tuples and unnamed
 returns, boolean and algebraic blindness, long functions and files, if-forests,
 parameter bloat, data clumps, concept mixing, primitive obsession, speculative
-generality.
+generality, and comments that narrate the code instead of stating its contract.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
@@ -27,6 +27,14 @@ finding. Findings get triaged three ways:
   reason and the trigger that ends it. That list of reasons is exhaustive:
   "only one call site", "it's obvious here" and "it's small" are not on it, and
   a Keep that appears only in the report is a silent skip rather than a Keep.
+
+Comments get a pass of their own, because both of the other reads walk straight
+past them. A doc that narrates the body, restates the signature, or reads the
+interface back is not a style slip to trim — it is a second copy of the code
+with a shorter life, and it usually points at something structural: a doc that
+can't say why the call exists in a line is describing a function that does too
+much. So the fix goes to whichever is actually wrong, the comment or the thing
+it sits above.
 
 The survey covers the whole changeset every time; only the *fixing* is
 proportional to the diff. Anything surveyed and not fixed shows up as **Noticed**
