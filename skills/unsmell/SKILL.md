@@ -192,7 +192,14 @@ doc attached to a `struct`, `enum`, `trait`, `type` or module and read each
 for a list of verbs or of members — the flow read walks straight past them.
 
 A doc comment is two sentences unless it earns a third: what comes out and
-what it does, then the errors a caller can cause. Leave out what the types,
+what it does, then the errors a caller can cause. Its first clause says why
+the item is called, in the caller's terms, and a reader who finishes it still
+not knowing why the call exists has read a useless comment whatever else it
+lists ("adds every output of tx paying a tail pkScript to the tracked
+outpoints" tells the mechanism; "remembers tx's outputs to tail pkScripts so
+the scan can recognise a later spend by its input alone" tells the reason).
+One or two lines is the target; a doc that needs more to say why is
+describing a function that does too much, so refactor before rewording. Leave out what the types,
 defaults, or the type's own doc already say, and infrastructure failures (the
 database, the network), which every method has. If the rewrite is longer than
 the signature block below it, cut before shipping.
@@ -214,7 +221,9 @@ constructor doc that names its parameters back ("Creates a runner over
 cadence)`), a field doc that names its type back ("The source." on `source:
 SourceId`), a getter doc that names the method back ("Gets the label.") is a
 tautology: delete it, do not reword it — verb-first restatement is still
-restatement. What stays is a unit, an ordering, a None or panic condition,
+restatement. A clause that follows from the one before it is a tautology
+too ("it is never mutated; a change replaces it whole": the second is the
+first), and what earns the line is the reason for the first. What stays is a unit, an ordering, a None or panic condition,
 an inclusive bound, where a value comes from, or who consumes it. Survey it
 by listing every doc of a sentence or less and every constructor doc next to
 its declaration; tautology lives in the short ones. Restating what sits in
@@ -237,7 +246,20 @@ overloaded nouns once, grep the changeset's doc lines for each, and rewrite
 every hit that does not disambiguate. The same sweep catches a stale name
 (a type renamed, a mechanism removed) and a claim the code no longer makes
 (an exemption, a replacement, a fallback); check each against the code, not
-against memory.
+against memory. An identifier is a noun too: a method or field whose name is
+also a word — `commit`, `retry`, `start`, `next`, `loop` — written bare in
+prose ("and commit recomputes it") reads as the word, so it carries its
+qualifier (`pendingUpdate.commit`, `blockStream.retry`) wherever it is not
+the doc's own subject. Grep the changeset's comment lines for the project's
+word-named identifiers and qualify every hit that means the identifier. And a
+verb with a settled technical meaning — commit, publish, flush, lock, seal,
+sign — applied to an operation that does none of it ("commit the pending set",
+for a state that is neither persisted nor bound to anything; "publish", when
+nobody gains access) misleads the same way, and the misuse usually starts at a
+method name: rename the operation, and the prose follows. Before proposing the
+new name, say in one sentence what the operation does and pick the plainest
+verb for that ("apply", for an update that takes effect). Include such verbs in
+the overloaded-noun list.
 
 **A normal comment is two to three lines**, doc or not. Longer is not a
 style slip to trim; it is a smell with one of two causes, and the fix goes to
@@ -289,7 +311,7 @@ smell. The report names which cause it was.
 | **Mixed altitude** | One function alternating between orchestration and byte-twiddling | Lift details into named helpers so the caller reads as prose |
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
-| **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why* | Rename; delete the comment the name replaced |
+| **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why*; a compound whose modifier is a domain term binds to the wrong noun (`pendingUpdate` for an update *to the pending set* reads as an update that is *waiting*) | Rename. First say in one sentence what the objects are, who makes them and how long they live; that sentence usually names a known pattern, and the pattern is the name (`pendingSetBuilder`: a mutable builder of an immutable `pendingSet`, one per event). A name coined from the description alone (`pendingSetEdit`) was judged worse than the original. Take the pattern's name, not its shape: splitting the code to match the pattern's method set (`build` + a separate install step) only added a hand-off and was reverted. Delete the comment the name replaced |
 | **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
 | **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a field comment opening with the field's own name (`// pending is the committed…` above `pending`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a field comment opening with its name drops the name and starts at the noun phrase. Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
