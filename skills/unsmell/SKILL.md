@@ -142,11 +142,79 @@ method" or the method's own name. A parameter description starts with "The"
 or "A"; a boolean reads "True if …; false otherwise." A field is a brief noun
 phrase. A type's first sentence states its purpose without repeating its name.
 
+**An entity's doc states its place in the system, never its interface.** A
+type, trait or module doc says what the thing is the one way to, who reaches
+what through it, and what it keeps the rest from knowing: "The one interface
+coverage is read and chunks written through, so rows and coverage agreeing is
+the store's concern alone." It never lists its fields ("One run: the chain,
+its connections, its block estimator"), its methods ("adds one, finds one by
+reference, lists them, slices one") or its subcommands: those are the
+declaration read back, they say nothing about why the thing exists, and they
+go stale with every change to the interface — an encapsulation leak in prose.
+An actor is placed by what it serves and hides; a state or message type by
+who produces it and who consumes it for what; an interface by what an
+implementor is trusted with. Two lines, rarely three; a worked example
+belongs in the ADR or the module doc. Survey it separately: extract every
+doc attached to a `struct`, `enum`, `trait`, `type` or module and read each
+for a list of verbs or of members — the flow read walks straight past them.
+
 A doc comment is two sentences unless it earns a third: what comes out and
 what it does, then the errors a caller can cause. Leave out what the types,
 defaults, or the type's own doc already say, and infrastructure failures (the
 database, the network), which every method has. If the rewrite is longer than
 the signature block below it, cut before shipping.
+
+**A doc names a value by what it is at the signature.** A parameter is bare
+(`want`); a field is its path (`Query.need`); a method is its path
+(`Query::call`). Never the option or flag that fed the value (`--min-sources`
+for `Query.need`): that leaks another layer's vocabulary into this one, and
+the reader of this layer has no way to find it. And a bare name that is
+neither a parameter nor a sibling field reads as a missing or renamed
+argument, which is a bug report against the doc. Grep the changeset's doc
+lines for flag names — `grep -nE '//[/!].*\B--[a-z]'` — outside the module
+that parses them.
+
+**A doc earns its place by a fact the code does not show.** Read each doc
+beside its item and ask what the reader learns beyond the signature. A
+constructor doc that names its parameters back ("Creates a runner over
+`store` and `sources`, paced for `cadence`" on `new(store, sources,
+cadence)`), a field doc that names its type back ("The source." on `source:
+SourceId`), a getter doc that names the method back ("Gets the label.") is a
+tautology: delete it, do not reword it — verb-first restatement is still
+restatement. What stays is a unit, an ordering, a None or panic condition,
+an inclusive bound, where a value comes from, or who consumes it. Survey it
+by listing every doc of a sentence or less and every constructor doc next to
+its declaration; tautology lives in the short ones. Restating what sits in
+another file counts too: a field doc that lists the fields of its type
+("Fetching: chunk size, requests in flight, finality" on `fetch:
+FetchTuning`), a method doc that lists what its return type holds — that is
+duplication, and it drifts the first time the other file changes. Exceptions that stay
+when plain: user-facing help text (clap), columns a doc-capturing table macro
+requires, and associated types of a trait. No missing-docs lint means an
+undocumented item costs nothing.
+
+**Every noun in a doc names its referent.** A project uses one word for
+several things — "request" for a JSON-RPC request, a planner's request and a
+fetcher's ask; "call" for a contract call and an RPC method; "logs" for EVM
+logs and diagnostics; "lists" for chain lists and token lists; "chunk" for a
+log range, a halver's unit and a hypertable's — and a doc that says the bare
+word makes the reader guess. Say which: "JSON-RPC requests in flight",
+"reports on stderr", "the configured token lists". List the project's
+overloaded nouns once, grep the changeset's doc lines for each, and rewrite
+every hit that does not disambiguate. The same sweep catches a stale name
+(a type renamed, a mechanism removed) and a claim the code no longer makes
+(an exemption, a replacement, a fallback); check each against the code, not
+against memory.
+
+**A normal comment is two to three lines**, doc or not. Longer is not a
+style slip to trim; it is a smell with one of two causes, and the fix goes to
+the cause, not the prose: (a) the thing commented is not structured well — it
+does several jobs, its parameters need explaining one by one, its edge cases
+outnumber its purpose — so the comment is carrying what the code's shape
+should; or (b) the comment describes the wrong thing — the body's steps, the
+mechanism, the history, the caller — instead of the contract. Shorten by
+fixing (a) or (b); a comment cut in half that still narrates is still the
+smell. The report names which cause it was.
 
 ```
 /// The registered chain `chain_ref` names, registering it from the
@@ -154,6 +222,18 @@ the signature block below it, cut before shipping.
 /// Returns the registered chain `chain_ref` names, registering it (schema
 /// included) when only the catalog knows it. Errors when the reference is
 /// unknown or ambiguous; [`Db::registered_chain`] never registers.      ✓ effect, errors, sibling
+
+/// One run: the chain, its connections, its block estimator, and the
+/// requested block range.                                   ✗ an actor described by its fields
+/// Runs one log-serving command: resolves the chain and the range, serves
+/// logs through the cache, stamps block times and answers contract calls.  ✗ its methods read back
+/// One command's run on one chain: what the log-serving commands place
+/// their ranges and logs in time through; knows no source.  ✓ its place in the system
+
+/// Creates a runner over the log cache `store` and `sources`, the
+/// fetchers paced for a chain of `cadence`.                 ✗ the signature read back: delete
+/// Requests in flight per fetcher.                          ✗ which requests?
+/// JSON-RPC requests in flight per fetcher, at most.        ✓ the referent named
 ```
 
 ## 4. The catalog
@@ -177,6 +257,10 @@ the signature block below it, cut before shipping.
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why* | Rename; delete the comment the name replaced |
+| **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
+| **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
+| **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it. Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
+| **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
