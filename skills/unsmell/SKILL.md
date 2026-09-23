@@ -132,6 +132,15 @@ always matches the body; matching is the smell. So for each documented item:
    cold, and run the grep of step 4 over it; a rewrite that needs a second
    reading, or that satisfied a rule by cramming the mechanism into a clause,
    goes back. Presence of the effects and exits is necessary, not sufficient.
+   Two shapes pass every rule above and still read as nonsense, so check for
+   them by form: a stand-in main verb (gives, makes, handles, deals with) with
+   the real contract in an appositive after a colon ("gives block its state
+   and its portal transactions: the candidates that…, applied … on state"),
+   and an adjective or participle with no referent in the doc or signature
+   ("a changed entry": changed from what? "applied on state": what is?). The
+   cause is usually that the function's result has no name, because it is
+   written into a parameter instead of returned; make it return the result
+   and the verb ("returns X and Y") writes itself.
 
 Write the fix in Google developer documentation style for API reference
 comments (https://developers.google.com/style/api-reference-comments):
@@ -144,9 +153,11 @@ phrase that never opens with the field's own name: `// pending is the committed
 snapshot…` above `pending *pendingSet` is the identifier read back, so the
 phrase starts at what the field holds (`// The committed snapshot of the
 mempool view…`), and a trailing `// Wraps since prevState.` on `wraps` is the
-same smell in one line. The `Name verbs…` opening belongs to functions, types
-and package-level declarations, which a doc index lists by name; a field is
-reached through its struct and has no entry to open. And it says why the field
+same smell in one line. No declaration's doc opens with its own name —
+function, method, type, constant or field: the comment sits on the declaration,
+so the name is duplication however much Go's `Name verbs…` convention asks for
+it. Only a linter rule the repo enables (revive `exported`, stylecheck
+ST1020–ST1022) keeps it, as a §2 rule. And a field comment says why the field
 is there — who reads it, or what would go wrong without it — not only what it
 holds: `// The outputs paying a tail pkScript; a spend of one is a portal tx`
 narrates the set, `…: an input names only the outpoint it spends, so this is
@@ -155,23 +166,26 @@ why the way step 2 surveys a function doc for its effects; a field is the one
 declaration whose reason the signature cannot carry. A type's first sentence
 states its purpose without repeating its name.
 
-**Check field comments mechanically, not by reading**: the eye skips a name it
-has just read on the line below, and a `Name is…` habit from function docs
-writes the smell fluently. For every struct field with a doc or trailing
-comment, compare the comment's first word to the field name, case-insensitively,
-and rewrite every match. Exact: a `go/ast` walk over `StructType.Fields`. Quick,
-over the changeset's Go files:
+**Check doc openings mechanically, not by reading**: the eye skips a name it
+has just read on the line below, and the `Name verbs…` habit writes the smell
+fluently. For every declaration with a doc or trailing comment, compare the
+comment's first word to the declared name, case-insensitively for fields, and
+rewrite every match. Exact: a `go/ast` walk over `FuncDecl`, `GenDecl` specs and
+`StructType.Fields`. Quick, over the changeset's Go files:
 
 ```sh
+awk '/^[[:space:]]*\/\/ / { if (c=="") { c=$2; sub(/[:,.]$/, "", c) }; next }
+     /^(func|type) / { n=$0; sub(/^func (\([^)]*\) )?/, "", n); sub(/^type /, "", n); sub(/[^A-Za-z0-9_].*/, "", n); if (c!="" && c==n) print FILENAME":"FNR": "n }
+     { c="" }' $files                                              # doc above a func or type
 awk '/^[[:space:]]*\/\/ / { if (c=="") { c=$2; sub(/[:,.]$/, "", c) }; next }
      /^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([,[:space:]]|$)/ && !/=/ && $1 !~ /^(if|for|return|switch|case|go|defer|var|const|type|func|select|break|continue|else)$/ { if (c!="" && tolower($1)==tolower(c)) print FILENAME":"FNR": "$1 }
      { c="" }' $files                                              # doc comment above the field
 grep -nP '(?i)^\s+([A-Za-z_]\w*)\b[^/]*//\s*\1\b' $files          # trailing comment on the field line
 ```
 
-The awk also fires on an implicit-iota entry of a `const (` block, which is a
-declaration a doc index lists, so its `Name is…` opening stays; everything else
-it prints is a finding. Other languages: the same comparison over `struct`/`class` members
+The field awk also fires on an implicit-iota entry of a `const (` block; that
+is a finding too. Everything the three commands print is a finding. Other
+languages: the same comparison over functions and `struct`/`class` members
 (`/// foo: …` above `foo:` in Rust, a `#:` or attribute docstring in Python).
 Fix all of them in one pass; one left over teaches the next reader the habit.
 
@@ -314,7 +328,7 @@ smell. The report names which cause it was.
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why*; a compound whose modifier is a domain term binds to the wrong noun (`pendingUpdate` for an update *to the pending set* reads as an update that is *waiting*) | Rename. First say in one sentence what the objects are, who makes them and how long they live; that sentence usually names a known pattern, and the pattern is the name (`pendingSetBuilder`: a mutable builder of an immutable `pendingSet`, one per event). A name coined from the description alone (`pendingSetEdit`) was judged worse than the original. Take the pattern's name, not its shape: splitting the code to match the pattern's method set (`build` + a separate install step) only added a hand-off and was reverted. Delete the comment the name replaced |
 | **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
-| **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a field comment opening with the field's own name (`// pending is the committed…` above `pending`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a field comment opening with its name drops the name and starts at the noun phrase. Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
+| **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a doc opening with its declaration's own name (`// pending is the committed…` above `pending`, `// portalTxBase returns…` above `func portalTxBase`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a doc opening with its declaration's name drops the name and starts at the verb (function) or noun phrase (field, type). Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
@@ -410,6 +424,9 @@ reasons, however reasonable they sound in the moment:
   and the catalog has no size threshold
 - "renaming would churn the diff" — churn is the cost of the fix, not a reason
   against it
+- "this file's diff is one line" — a touched file is in the changeset whole (§3);
+  a mechanical class is fixed everywhere it lives, and a commit split isolates
+  the churn
 
 If you find yourself writing a justification longer than the fix, the fix was
 smaller than the argument against it. Just do it.
