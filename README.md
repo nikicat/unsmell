@@ -7,7 +7,8 @@ It reads what you've actually changed — unstaged, staged, and untracked — th
 checks it against a catalog of smells: duplication, unnamed tuples and unnamed
 returns, boolean and algebraic blindness, long functions and files, if-forests,
 parameter bloat, data clumps, concept mixing, primitive obsession, speculative
-generality, and comments that narrate the code instead of stating its contract.
+generality, generic machinery (caches, retries, bounded parallel maps) written
+inline in domain code, and comments that narrate the code instead of stating its contract.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
