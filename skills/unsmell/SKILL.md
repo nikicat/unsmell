@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing, narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing, generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -90,6 +90,55 @@ pub exit: i32                  → "an exit status, 77 meaning refused"       �
 Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
+
+**Then look for generic data structures and algorithms written inline in
+domain code.** A mechanism hand-built inside a domain function (a cache, a
+queue, a traversal, a concurrency pattern) is two concerns in one body. The
+reader has to verify the mechanism before reaching the domain logic, and each
+copy carries its own subtle bugs. It hides in plain sight because it looks
+like ordinary code, in any language. Sweep the changeset for these shapes by
+what the code does, not by its names:
+
+| What the body does | The generic thing it is |
+|---|---|
+| keeps a table of in-progress or finished results per key; later callers wait for or reuse the first | memoize / compute once per key |
+| starts work for every item with at most N running, collecting results by index | ordered parallel map with bounded concurrency |
+| packs a request with a reply slot, sends it to the owner of some state, and waits with a timeout or cancellation | a call into an actor / mailbox |
+| stores a value and wakes one consumer, overwriting what it has not taken yet | latest-value cell / conflating channel |
+| races a result against cancellation or a timeout by hand | the codebase's or runtime's await-with-cancel helper |
+| copies a collection while skipping, grouping, indexing, partitioning or deduplicating | the standard library's filter / group-by / associate / unique operations |
+| walks a graph of dependencies with a visited set, or orders items by them | a traversal / topological sort |
+| loops with a sleep that grows, a counter and a give-up condition | retry with backoff |
+| evicts by age or size, keeps the N most recent, merges overlapping ranges, keeps a sorted buffer | a cache, a ring buffer, an interval set, a priority queue |
+
+For each hit, look for an existing implementation in this order: the repo's
+own utility module, the language's standard library, then the ecosystem's
+well-known supplementary libraries. Some places to look:
+
+- Rust: std, `itertools`, `futures` (`buffered`, `join_all`), `tokio::sync`
+  (`watch`, `oneshot`, `mpsc`), `once_cell` or `OnceLock`.
+- TypeScript/JavaScript: `Map`/`Set`, array and iterator helpers,
+  `Promise.all`/`Promise.race`, `AbortSignal`, a small limiter such as
+  `p-limit`.
+- Kotlin: stdlib collection operations (`groupBy`, `associateBy`,
+  `partition`), coroutines (`Channel`, `StateFlow`, `async`/`awaitAll`,
+  `Semaphore`, `withTimeout`).
+- C++: `<algorithm>` and ranges, `std::future`/`std::promise`,
+  `std::call_once`, the containers.
+- Python: `functools.cache`, `itertools`, `collections`, `asyncio`
+  (`gather`, `Semaphore`, `Queue`, `wait_for`).
+- Go: the standard library, `golang.org/x/sync` (`errgroup`,
+  `singleflight`).
+
+Check that the semantics match before reusing one. For example, a
+single-flight helper shares only an in-flight call and forgets its result, so
+it is not memoization. If nothing fits, extract a small generic type or
+function into the repo's utility module, in the language's own idiom
+(generics, templates, type parameters). Give it its own tests, with the race
+checker or sanitizer the language offers and a fake clock for anything
+concurrent. Then replace every site in the changeset that has the same shape;
+one extraction usually finds two or three callers. The domain code left
+behind reads as its domain: a fetch, a decision, a state change.
 
 **Then read each doc comment against its signature, in this order.** A doc
 comment is part of the interface: it says what the function produces from what
@@ -321,6 +370,7 @@ smell. The report names which cause it was.
 | **If-forest** | Cascading branches on a type tag; nested conditionals; flag-combination matrix | Dispatch table, polymorphism, or pattern match; early returns |
 | **Parameter bloat** | 5+ params, or adjacent same-typed params easy to transpose | Parameter object — or the function does too much, split it |
 | **Data clump** | The same 3+ arguments threaded through a series of functions | That cluster *is* a type. Name it, pass one thing. |
+| **Inline generic machinery** | Domain code that also hand-builds a generic data structure or algorithm: a per-key memo, a bounded parallel map, a request/reply mailbox, a latest-value cell, a hand-rolled await-with-cancel, a filtering or grouping copy loop, a traversal, a retry loop, a cache or queue (the table in §3) | Use the existing helper, the standard library or a well-known library; otherwise extract a generic type or function into the repo's utility module with its own tests (race-checked where concurrent), and replace every site of that shape |
 | **Concept mixing** | I/O + business logic + formatting in one unit; a module importing across three layers | Separate; push I/O to the edges, keep the core pure |
 | **Mixed altitude** | One function alternating between orchestration and byte-twiddling | Lift details into named helpers so the caller reads as prose |
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
@@ -341,7 +391,9 @@ Every finding lands in exactly one bucket.
 **FIX** — do it now, no asking. Mechanical, behaviour-preserving, one obviously
 correct answer, blast radius you can see and verify: extract a function, name a
 tuple, replace a bool param with an enum, collapse a duplicate, introduce the type
-a data clump was already implying, delete dead flexibility.
+a data clump was already implying, delete dead flexibility, extract inline
+generic machinery into the repo's existing utility module (the new file there
+is part of the fix, not a reason to ask).
 
 **ASK** — one batched round of questions (`AskUserQuestion`), never a drip feed.
 Ask when:
