@@ -10,6 +10,14 @@ parameter bloat, data clumps, concept mixing, primitive obsession, speculative
 generality, generic machinery (caches, retries, bounded parallel maps) written
 inline in domain code, and comments that narrate the code instead of stating its contract.
 
+Functions that grew a second job get their own pass, because reading hunk by
+hunk never sees them: every changed function is taken apart line by line and
+each block tagged with one role — step, detail, decision, effect, assembly.
+Two roles written inline is a finding (named steps with builder chains wedged
+between them, a policy written inside the code that acts on it, a loop that
+both selects and mutates), and so is the opposite: a function whose whole body
+is one call to a callee only it calls.
+
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
 and element type gets written down next to what the value actually *is*. Where
