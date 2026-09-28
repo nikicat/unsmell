@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing, generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -106,7 +106,7 @@ what the code does, not by its names:
 | packs a request with a reply slot, sends it to the owner of some state, and waits with a timeout or cancellation | a call into an actor / mailbox |
 | stores a value and wakes one consumer, overwriting what it has not taken yet | latest-value cell / conflating channel |
 | races a result against cancellation or a timeout by hand | the codebase's or runtime's await-with-cancel helper |
-| copies a collection while skipping, grouping, indexing, partitioning or deduplicating | the standard library's filter / group-by / associate / unique operations |
+| copies a collection while skipping, grouping, indexing, partitioning or deduplicating, even when the copy is consumed in the same loop that mutates state | the standard library's filter / group-by / associate / unique operations, applied before the effect |
 | walks a graph of dependencies with a visited set, or orders items by them | a traversal / topological sort |
 | loops with a sleep that grows, a counter and a give-up condition | retry with backoff |
 | evicts by age or size, keeps the N most recent, merges overlapping ranges, keeps a sorted buffer | a cache, a ring buffer, an interval set, a priority queue |
@@ -139,6 +139,73 @@ checker or sanitizer the language offers and a fake clock for anything
 concurrent. Then replace every site in the changeset that has the same shape;
 one extraction usually finds two or three callers. The domain code left
 behind reads as its domain: a fetch, a decision, a state change.
+
+**Then take every changed function apart by what its lines do.** The
+declaration inventory and the doc read both judge one line at a time, and a
+flow read judges each hunk on its own ("this edit is small"). None of them
+sees a function that grew a second job, one small edit at a time. List every
+function the changeset added or changed, with its whole body
+(`git diff HEAD -W` prints each touched function in full). Tag each block of
+statements with exactly one role:
+
+- **step**: a call to a named thing that the function orders ("create the
+  file", "install the layers", "announce the path");
+- **detail**: building or configuring a value in place (builder chains,
+  format strings, filter parsing, closures handed to a library);
+- **decision**: a policy written inline (a heuristic, a string match on a
+  message, a threshold, a classification of an error or a value);
+- **effect**: I/O, a write, a log line, a send, a state change;
+- **assembly**: shaping the result that is returned.
+
+Each of these is a finding:
+
+1. **Steps and details mixed** (mixed altitude): the function orders named
+   steps, and between them sit blocks of detail. Extract each block into a
+   named `build_…`/`make_…` helper, and move its comment with it, so the
+   function reads as its steps.
+2. **A decision inside assembly or an effect** (concept mixing): the function
+   builds a result or does I/O and also holds the rule that picks the branch.
+   The rule gets its own named predicate or classifier. Find the siblings
+   before you name it: when other rules of the same kind already live in named
+   helpers (`looks_like_range_limit`), a new inline rule
+   (`message.contains("batch")`) is a finding however short it is, and its
+   helper goes next to theirs.
+3. **The diff added a role**: compare with `git show HEAD:<file>`. A function
+   that had one role and now has two is a finding even when every added line
+   is fine on its own. Growth is how these arrive.
+4. **No role of its own** (a pass-through): the whole body is one call,
+   passing the parameters on, reshaped at most, plus a trivial result
+   (`Ok(())`). One call is not the cleanest shape: it is two names for one
+   thing, and the reader hops for nothing. Grep the callee's callers: when
+   this function is the only one, merge them. Put the body where the name
+   is required (a trait method, a public entry point) and move the callee's
+   doc with it. Shrinkage is how these arrive: a refactor removes the
+   checks or conversions that surrounded the call and leaves the shell.
+   Mark such a function `pass-through` in the role list, never `step`. A
+   wrapper that adds something is not one: a default argument, a narrower
+   type, a lock, a trait or visibility boundary the callee cannot sit
+   behind itself.
+5. **A loop that computes and mutates**: one loop body both works out a
+   collection or a selection (skipping, splitting into kept and missing,
+   grouping, looking a value up to decide) and changes state or does I/O
+   with what it found. Tells: a `match`/`if` whose arms mix a `push` onto a
+   local with a mutation of `self` or a call with effects; a local `Vec` or
+   counter filled beside a write; an `if` wrapping the whole body. The
+   selection is a pure computation with a standard name (`partition`,
+   `filter`, `filter_map`, `group_by`); take it out first, then run the
+   effect over its result. The shape hides from the table row below
+   ("copies a collection while partitioning") because the copy is never
+   returned: it is consumed in the same body. Mark the loop `decision +
+   effect, inline` in the role list.
+
+Write one line per function: `name: roles`, and mark each role as inline or
+called (it goes through a named function). A function may combine roles as
+long as all but one are called: `match` on a named classifier, then assemble
+the result, is fine. Two roles written inline is the finding, and so is a
+function whose only role is a call to a callee it alone calls. Fix it, or list
+it as Noticed with the split you would make. This is a checklist like
+the declaration inventory; do it for the whole changeset, including functions
+whose diff is one line.
 
 **Then read each doc comment against its signature, in this order.** A doc
 comment is part of the interface: it says what the function produces from what
@@ -371,10 +438,12 @@ smell. The report names which cause it was.
 | **Parameter bloat** | 5+ params, or adjacent same-typed params easy to transpose | Parameter object — or the function does too much, split it |
 | **Data clump** | The same 3+ arguments threaded through a series of functions | That cluster *is* a type. Name it, pass one thing. |
 | **Inline generic machinery** | Domain code that also hand-builds a generic data structure or algorithm: a per-key memo, a bounded parallel map, a request/reply mailbox, a latest-value cell, a hand-rolled await-with-cancel, a filtering or grouping copy loop, a traversal, a retry loop, a cache or queue (the table in §3) | Use the existing helper, the standard library or a well-known library; otherwise extract a generic type or function into the repo's utility module with its own tests (race-checked where concurrent), and replace every site of that shape |
-| **Concept mixing** | I/O + business logic + formatting in one unit; a module importing across three layers | Separate; push I/O to the edges, keep the core pure |
-| **Mixed altitude** | One function alternating between orchestration and byte-twiddling | Lift details into named helpers so the caller reads as prose |
+| **Concept mixing** | I/O + business logic + formatting in one unit; a module importing across three layers; a rule (a heuristic, a message match, a classification) written inline in a function that builds a result, while rules of the same kind live in named helpers | Separate; push I/O to the edges, keep the core pure; give the inline rule a named predicate next to its siblings (§3, the role pass) |
+| **Mixed altitude** | One function alternating between orchestration and byte-twiddling; a setup function whose named steps are separated by blocks of builder chains, filter parsing or closures | Lift details into named helpers so the caller reads as prose; each helper takes the comment that explained its block |
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
+| **Computing loop with effects** | One loop both selects or splits (a `match` pushing onto a local, an `if` choosing what to act on) and mutates state or does I/O with the result | Compute the selection first with `partition`/`filter`/`filter_map`, then apply the effect over it |
+| **Pass-through** | A function whose whole body calls another with its own parameters, and it is the callee's only caller; often left behind when a refactor removed the work around the call | Merge the two: keep the body where the name is required, move the doc along, delete the other |
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why*; a compound whose modifier is a domain term binds to the wrong noun (`pendingUpdate` for an update *to the pending set* reads as an update that is *waiting*) | Rename. First say in one sentence what the objects are, who makes them and how long they live; that sentence usually names a known pattern, and the pattern is the name (`pendingSetBuilder`: a mutable builder of an immutable `pendingSet`, one per event). A name coined from the description alone (`pendingSetEdit`) was judged worse than the original. Take the pattern's name, not its shape: splitting the code to match the pattern's method set (`build` + a separate install step) only added a hand-off and was reverted. Delete the comment the name replaced |
 | **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
@@ -499,7 +568,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
@@ -511,7 +580,8 @@ The Survey line is not optional and its numbers come from the pass, not from
 memory: a run that skipped a step cannot fill it honestly, and a reader can hold
 the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
 *looked at* proves nothing by itself; the count with a missing effect or exit
-is what a skipped step cannot fake. Every rewritten doc comment appears
+is what a skipped step cannot fake, and the same goes for the count of
+functions mixing roles. Every rewritten doc comment appears
 verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
 that reads badly in the report reads badly in the code.
 
