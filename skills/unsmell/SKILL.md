@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -90,6 +90,34 @@ pub exit: i32                  → "an exit status, 77 meaning refused"       �
 Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
+
+**Then group the functions by the parameters they share.** A free function
+reads fine alone; the smell is only visible across siblings, when the same
+context arrives as arguments again and again. For every file, write a table
+with one row per function and one column per parameter. Name each column by
+what the value is, not by its spelling: `buckets`, `store` and `db` are one
+column when they hold the same store. Then look down the columns:
+
+```
+answer(request, buckets, console_user)
+create_bucket(request, buckets, bucket)       buckets ×3, console_user ×1 but
+heartbeat(request, query, buckets, bucket)    only to pick the user for the others
+serve(port, buckets, console_user)            → struct Api { buckets, console_user }
+```
+
+A column is a finding when two or more functions take it and it is context,
+not the input being worked on: a store, a client, a connection, a config, a
+registry, a logger, a callback. The input (the request, the line, the event)
+stays a parameter. Two more tells make it certain: one sibling passes the
+value straight down to another, and the value is captured once by a closure
+or a thread and then handed to every call. The fix is the receiver the
+functions were missing: the shared values become its fields, the functions its
+methods, and the caller builds it once. Use the language's form for state
+plus behaviour: a struct with an impl block, a class, a Go type with methods,
+a closure over the values, a module-level object. A single shared column
+counts when it is real state; the catalog's 3+ threshold for a data clump is
+for values that travel together, not for state that every function reaches
+into.
 
 **Then look for generic data structures and algorithms written inline in
 domain code.** A mechanism hand-built inside a domain function (a cache, a
@@ -437,6 +465,7 @@ smell. The report names which cause it was.
 | **If-forest** | Cascading branches on a type tag; nested conditionals; flag-combination matrix | Dispatch table, polymorphism, or pattern match; early returns |
 | **Parameter bloat** | 5+ params, or adjacent same-typed params easy to transpose | Parameter object — or the function does too much, split it |
 | **Data clump** | The same 3+ arguments threaded through a series of functions | That cluster *is* a type. Name it, pass one thing. |
+| **Missing receiver** | Sibling free functions all take the same context (a store, a client, a connection, a config, a callback) besides their real input; one passes it on to the next; a closure or thread captures it once and threads it into every call. Fires at one shared value, not three (§3, the parameter table) | A type holding the shared context as fields, with the functions as its methods, built once by the caller: a struct and impl, a class, a type with methods, a closure over the values |
 | **Inline generic machinery** | Domain code that also hand-builds a generic data structure or algorithm: a per-key memo, a bounded parallel map, a request/reply mailbox, a latest-value cell, a hand-rolled await-with-cancel, a filtering or grouping copy loop, a traversal, a retry loop, a cache or queue (the table in §3) | Use the existing helper, the standard library or a well-known library; otherwise extract a generic type or function into the repo's utility module with its own tests (race-checked where concurrent), and replace every site of that shape |
 | **Concept mixing** | I/O + business logic + formatting in one unit; a module importing across three layers; a rule (a heuristic, a message match, a classification) written inline in a function that builds a result, while rules of the same kind live in named helpers | Separate; push I/O to the edges, keep the core pure; give the inline rule a named predicate next to its siblings (§3, the role pass) |
 | **Mixed altitude** | One function alternating between orchestration and byte-twiddling; a setup function whose named steps are separated by blocks of builder chains, filter parsing or closures | Lift details into named helpers so the caller reads as prose; each helper takes the comment that explained its block |
@@ -568,7 +597,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
@@ -581,7 +610,7 @@ memory: a run that skipped a step cannot fill it honestly, and a reader can hold
 the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
 *looked at* proves nothing by itself; the count with a missing effect or exit
 is what a skipped step cannot fake, and the same goes for the count of
-functions mixing roles. Every rewritten doc comment appears
+functions mixing roles and of shared context columns. Every rewritten doc comment appears
 verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
 that reads badly in the report reads badly in the code.
 
