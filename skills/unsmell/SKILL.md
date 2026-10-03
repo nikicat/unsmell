@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), misplaced rules (a constant, check or derivation living outside the type it serves), request-scoped values threaded through methods, unparsed input (raw strings, key or position access, too many CLI flags), split protocols (a literal that a writer and a reader must both spell the same way), repeated derivations, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -91,6 +91,13 @@ Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
 
+**Write every inventory down, one line per item, in a scratch file.** That
+covers this one, the parameter tables, the role list and each pass below. An
+inventory kept in your head comes out as a plausible count and a list of the
+items you happened to notice. Without the file, a skipped step and a done one
+look the same. The Survey numbers in the report are counted from these files
+(§8).
+
 **Then group the functions by the parameters they share.** A free function
 reads fine alone; the smell is only visible across siblings, when the same
 context arrives as arguments again and again. For every file, write a table
@@ -118,6 +125,74 @@ a closure over the values, a module-level object. A single shared column
 counts when it is real state; the catalog's 3+ threshold for a data clump is
 for values that travel together, not for state that every function reaches
 into.
+
+**Then place every rule on the type it is about.** For each constant, check,
+default and derived value in the changeset, write the type whose invariant it
+serves, then where it lives. A lifetime, an expiry check or a storage key that
+belongs to one type but is written in another is a finding, however short it
+is: the next change to that type will miss it. Three tells find the rest:
+- a method that never uses its receiver;
+- a free function whose main input is one type, and which only reads it or
+  formats it;
+- a body that touches another type's fields or constants more than its own.
+
+The fix moves the rule onto its owner, as a method, a constant on the type or
+its formatting method. A function that uses neither its receiver nor any one type belongs
+with what it builds, or free at the module level. It does not belong as a
+method of whatever happened to call it.
+
+**Then sort the values by how long they live.** Mark each field, parameter and
+local of the changeset as one of three: built once per process (config,
+clients, stores), once per request or event, or once per item. Two findings
+follow:
+- A per-request value that two or more functions take as a parameter: the
+  request is missing an object of its own. Name it for what it is, not for what
+  it does, and the next layer up often needs one too. It is the parameter table
+  at request scope, which the per-file table misses because the functions often
+  sit on a receiver already.
+- A type with fields of two lifetimes, such as an identity plus a session's
+  expiry, or a config plus a cache. Split it, so that neither part can outlive
+  or outrun the other.
+
+**Then list every input at the program's edge.** Write down each way data
+enters:
+- command-line arguments and environment variables;
+- config files;
+- request paths, queries and headers;
+- database rows;
+- external API bodies;
+- files read.
+
+Each one becomes a domain type in the first function that touches it. A finding
+is any of these:
+- raw text or a number passed beyond that first function;
+- dynamic access by key or position (`value["key"]`, `row[0]`,
+  `dict.get("k")`), which is a schema the code depends on without saying so;
+- a value validated later than the edge, or validated again at each use;
+- more than about five settings at one edge, which is a config file the program
+  has not been given.
+
+Parse into the type at the edge, and keep the raw form only where it is passed
+on unchanged.
+
+**Then look for one name or one expression in two places.** Two greps over the
+changeset:
+- **Literals:** every string or number literal that appears two or more times,
+  and every exported constant whose only use is to be matched or formatted by
+  another module. Each is one protocol split across two places that must agree:
+  a cookie name written in one place and read in another, a route path in the
+  router and again in a link, a query parameter name in its writer and in its
+  reader. The fix is one type that both writes and reads it (an enum with
+  parse and render, a struct that serializes both ways), and a round-trip test
+  that writes with one side and reads with the other.
+- **Expressions:** every expression shape that recurs once identifiers are
+  normalized: a path joined to a directory, a URL prefix, a lookup and the
+  failure check after it, a value built the same way in each test. A derivation written twice
+  is a rule with no name, and it drifts the first time one copy changes. Give it
+  a named function on the type it derives from.
+
+Neither shape shows up in a read for flow, because each copy is short and looks
+right where it stands.
 
 **Then look for generic data structures and algorithms written inline in
 domain code.** A mechanism hand-built inside a domain function (a cache, a
@@ -456,7 +531,7 @@ smell. The report names which cause it was.
 | **Duplication** | Same shape twice non-trivially, or three times at all; two sites you'd have to edit together | Extract the shared thing. Merge only what changes *for the same reason* — coincidental resemblance stays apart. |
 | **Unnamed tuple** | `return (a, b)`, positional bag, dict with implicit keys, `result[0]` at call sites | Named record / dataclass / struct / NamedTuple |
 | **Boolean blindness** | `f(true, false)` unreadable at the call site; a bool param that only picks a branch | Enum, or two named functions. Kill the flag param. |
-| **Algebraic blindness** | Impossible states are representable: co-dependent nullables, `status` string beside a payload, `(value, error)` both optional, "this field only matters when kind == X" | Sum type / discriminated union / tagged variant. Make the illegal state unspeakable. |
+| **Algebraic blindness** | Impossible states are representable: co-dependent nullables, `status` string beside a payload, `(value, error)` both optional, "this field only matters when kind == X"; a doc that explains what a none, empty or zero value means ("none for the list", "0 means unlimited"), above all when several docs repeat it | Sum type / discriminated union / tagged variant. Make the illegal state unspeakable. |
 | **Primitive obsession** | `str`/`int`/`&[&str]` carrying domain meaning; a collection whose element type says nothing; two fields that must hold the same kind of value, typed independently; a value with an invariant the type does not carry ("validated", "resolved", "escaped"); re-validated at every use | Wrapper type; validate once at the boundary. A type earns its place by (a) linking the places that must agree and (b) saying what is inside |
 | **Unnamed return** | A return type that names nothing — `-> String`, `-> Vec<(A, B)>`, `-> bool`. The function's name is not the value's name: at the call site the name is gone and only the type is left | Name the thing returned, not just the act of returning it |
 | **Stringly-typed control flow** | Branching on magic strings | Enum / typed constants |
@@ -472,6 +547,11 @@ smell. The report names which cause it was.
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
 | **Computing loop with effects** | One loop both selects or splits (a `match` pushing onto a local, an `if` choosing what to act on) and mutates state or does I/O with the result | Compute the selection first with `partition`/`filter`/`filter_map`, then apply the effect over it |
+| **Misplaced rule** | A constant, check, default or derivation that serves one type's invariant but lives in another (a lifetime, an expiry test, a storage key); a method that never uses its receiver; a free function that only reads or formats one type (§3, the placement pass) | Move it onto its owner as a method, an associated constant or a formatting impl. A function that belongs to no type goes with what it builds, not with its caller |
+| **Request-scoped value threaded** | A value built once per request or event passed as a parameter through two or more functions, often on a receiver that already exists; a type mixing fields of different lifetimes (§3, the lifetime pass) | A per-request object built once at the entry point, holding the value, with those functions as its methods; split a mixed type by lifetime |
+| **Unparsed input** | Raw text or numbers from outside the program passed past the first function that sees them; access by key or position (`value["key"]`, `row[0]`); validation later than the edge or repeated at each use; a program edge with more than about five settings (§3, the input pass) | Parse into a domain type at the edge, using the ecosystem's types where they exist (a URL, an authority, a connection config, a typed body); many settings become a config file read into one type |
+| **Split protocol** | A literal or an exported constant that two places must spell the same way: one writes it and the other reads it (a route and its link, a cookie name, a query parameter, a header) | One type that owns both directions (parse and render, serialize and deserialize), the literals private to it, and a round-trip test |
+| **Repeated derivation** | The same expression shape, identifiers aside, computed in two or more places: a joined path, a URL prefix, a lookup and its unwrap, a test fixture built inline each time | A named function or constructor on the type it derives from, used everywhere |
 | **Pass-through** | A function whose whole body calls another with its own parameters, and it is the callee's only caller; often left behind when a refactor removed the work around the call | Merge the two: keep the body where the name is required, move the doc along, delete the other |
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why*; a compound whose modifier is a domain term binds to the wrong noun (`pendingUpdate` for an update *to the pending set* reads as an update that is *waiting*) | Rename. First say in one sentence what the objects are, who makes them and how long they live; that sentence usually names a known pattern, and the pattern is the name (`pendingSetBuilder`: a mutable builder of an immutable `pendingSet`, one per event). A name coined from the description alone (`pendingSetEdit`) was judged worse than the original. Take the pattern's name, not its shape: splitting the code to match the pattern's method set (`build` + a separate install step) only added a hand-off and was reverted. Delete the comment the name replaced |
 | **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
@@ -552,6 +632,14 @@ Bounded by:
 - **Verify.** Run the project's tests/typecheck/lint if they exist. If they don't,
   leave one runnable assert-level check behind for any non-trivial logic you
   restructured. Report honestly when something fails.
+- **Pin before you move.** A fix that touches a URL, a path, an encoding, a
+  parser, a default, or who may do what is where a refactor changes behaviour
+  without anyone noticing. Examples: a relative redirect that now resolves
+  against another host, an identifier no longer escaped, a default taken from
+  the wrong source. Before the edit, write a test that pins the current
+  behaviour of the function you are changing. After it, run the role pass again
+  over every function the fix touched: the fix is new code, and it is the code
+  least read.
 
 ## 7. Keeping a smell on purpose
 
@@ -597,7 +685,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
@@ -610,7 +698,9 @@ memory: a run that skipped a step cannot fill it honestly, and a reader can hold
 the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
 *looked at* proves nothing by itself; the count with a missing effect or exit
 is what a skipped step cannot fake, and the same goes for the count of
-functions mixing roles and of shared context columns. Every rewritten doc comment appears
+functions mixing roles and of shared context columns. Each number is the line
+count of the inventory file it comes from (§3); a number with no file behind it
+is a step you skipped, so report it as skipped. Every rewritten doc comment appears
 verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
 that reads badly in the report reads badly in the code.
 
