@@ -6,7 +6,7 @@ out of your working changes before you commit them.
 It reads what you've actually changed — unstaged, staged, and untracked — then
 checks it against a catalog of smells: duplication, unnamed tuples and unnamed
 returns, boolean and algebraic blindness, long functions and files, if-forests,
-parameter bloat, data clumps, concept mixing, primitive obsession, speculative
+parameter bloat, data clumps, missing receivers, concept mixing, primitive obsession, speculative
 generality, generic machinery (caches, retries, bounded parallel maps) written
 inline in domain code, and comments that narrate the code instead of stating its contract.
 
@@ -17,6 +17,13 @@ Two roles written inline is a finding (named steps with builder chains wedged
 between them, a policy written inside the code that acts on it, a loop that
 both selects and mutates), and so is the opposite: a function whose whole body
 is one call to a callee only it calls.
+
+Free functions that should have been methods get caught across siblings rather
+than one at a time: for every file, unsmell tables each function against the
+parameters it takes, naming columns by what the value is. A store, client,
+config or callback that two or more functions take besides their real input is
+a missing receiver — the shared values become fields of one type, the
+functions its methods, and the caller builds it once.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
