@@ -6,9 +6,11 @@ out of your working changes before you commit them.
 It reads what you've actually changed — unstaged, staged, and untracked — then
 checks it against a catalog of smells: duplication, unnamed tuples and unnamed
 returns, boolean and algebraic blindness, long functions and files, if-forests,
-parameter bloat, data clumps, missing receivers, concept mixing, primitive obsession, speculative
-generality, generic machinery (caches, retries, bounded parallel maps) written
-inline in domain code, and comments that narrate the code instead of stating its contract.
+parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped
+values threaded through methods, unparsed input, split protocols, repeated
+derivations, concept mixing, primitive obsession, speculative generality,
+generic machinery (caches, retries, bounded parallel maps) written inline in
+domain code, and comments that narrate the code instead of stating its contract.
 
 Functions that grew a second job get their own pass, because reading hunk by
 hunk never sees them: every changed function is taken apart line by line and
@@ -24,6 +26,21 @@ parameters it takes, naming columns by what the value is. A store, client,
 config or callback that two or more functions take besides their real input is
 a missing receiver — the shared values become fields of one type, the
 functions its methods, and the caller builds it once.
+
+Structure that no single function shows gets passes of its own:
+- **Placement.** Each constant, check and derivation is matched to the type
+  whose invariant it serves, so a session's lifetime written in the auth code
+  moves onto the session.
+- **Lifetime.** Values are sorted by how long they live, so a per-request value
+  threaded through methods becomes a per-request object.
+- **The program's edge.** Every input entering the program (arguments, config,
+  request paths and headers, database rows, API bodies) is checked for being
+  parsed into a type where it enters.
+- **Repeats.** Two greps find a literal that a writer and a reader must both
+  spell the same way, and an expression computed in two places.
+
+Each pass writes its inventory to a file, and the report's counts come from
+those files, so a skipped pass can't report numbers.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
