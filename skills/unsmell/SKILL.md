@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), misplaced rules (a constant, check or derivation living outside the type it serves), request-scoped values threaded through methods, unparsed input (raw strings, key or position access, too many CLI flags), split protocols (a literal that a writer and a reader must both spell the same way), repeated derivations, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating or garbled doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), misplaced rules (a constant, check or derivation living outside the type it serves), request-scoped values threaded through methods, unparsed input (raw strings, key or position access, too many CLI flags), split protocols (a literal that a writer and a reader must both spell the same way), repeated derivations, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating, garbled or wrong-layer doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -471,6 +471,27 @@ argument, which is a bug report against the doc. Grep the changeset's doc
 lines for flag names — `grep -nE '//[/!].*\B--[a-z]'` — outside the module
 that parses them.
 
+**A doc stays at its own layer.** It states what the item is or does at its
+interface. Two other layers leak into it:
+- **from above, the callers':** who calls it ("as the service manager, the
+  puller's ssh key or a developer starts it"), or why a caller wants it ("for
+  a phone, whose own hostname is its model name");
+- **from below, the implementation's:** how the work gets done ("to stdout,
+  read-only", "logging to the event log", "serves the database").
+
+One test finds both. Would the sentence stay true if the callers changed? Would
+it stay true if the implementation changed without changing what the item
+does? A sentence that fails either one belongs to that other layer. The
+caller's reason goes in the caller's doc or the ADR, and the mechanism goes in
+a `//` comment beside the code that does it. What is left is often one line:
+`--hostname`, "Overrides every bucket's hostname"; `run`, "Runs as a console
+app". Help text (a clap doc, a `--help` line, a subcommand's about) is where
+this leaks most: it is written beside the code, and it ends up retelling the
+code. Survey every interface doc (subcommand, flag, public item, unit
+`Description=`) with the test, sentence by sentence. Naming who reads a value
+stays legitimate ("read by scripts/pocket_id.py"); retelling why they read it
+or what they do with it does not.
+
 **A doc earns its place by a fact the code does not show.** Read each doc
 beside its item and ask what the reader learns beyond the signature. A
 constructor doc that names its parameters back ("Creates a runner over
@@ -582,6 +603,7 @@ smell. The report names which cause it was.
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
 | **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a doc opening with its declaration's own name (`// pending is the committed…` above `pending`, `// portalTxBase returns…` above `func portalTxBase`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a doc opening with its declaration's name drops the name and starts at the verb (function) or noun phrase (field, type). Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
+| **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
 | **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
