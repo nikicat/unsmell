@@ -10,7 +10,8 @@ parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped
 values threaded through methods, unparsed input, split protocols, repeated
 derivations, concept mixing, primitive obsession, speculative generality,
 generic machinery (caches, retries, bounded parallel maps) written inline in
-domain code, and comments that narrate the code instead of stating its contract.
+domain code, and comments that narrate the code instead of stating its contract
+or do not parse as English.
 
 Functions that grew a second job get their own pass, because reading hunk by
 hunk never sees them: every changed function is taken apart line by line and
