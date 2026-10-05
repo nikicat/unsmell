@@ -1,6 +1,6 @@
 ---
 name: unsmell
-description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), misplaced rules (a constant, check or derivation living outside the type it serves), request-scoped values threaded through methods, unparsed input (raw strings, key or position access, too many CLI flags), split protocols (a literal that a writer and a reader must both spell the same way), repeated derivations, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
+description: Find and fix code smells in the current working changes (unstaged + staged + untracked) — duplication, unnamed tuples and returns, primitive obsession and blind types, boolean and algebraic blindness, long functions/files, if-forests, parameter bloat, data clumps, missing receivers (sibling functions that all take the same context and want to be methods of one type), misplaced rules (a constant, check or derivation living outside the type it serves), request-scoped values threaded through methods, unparsed input (raw strings, key or position access, too many CLI flags), split protocols (a literal that a writer and a reader must both spell the same way), repeated derivations, concept mixing and mixed altitude (functions whose steps are interleaved with setup detail or inline rules), generic data structures and algorithms written inline (memoizing, bounded parallel maps, mailboxes, traversals, retries, caches), narrating or garbled doc comments. Refactors what has one right answer, asks about what doesn't, and leaves a reasoned comment on the rare smell worth keeping. Use when the user says "unsmell", "/unsmell", "refactor this", "clean up my changes", "is this smelly", "code smells", "deodorize", or asks for a refactor pass before committing.
 ---
 
 # Unsmell
@@ -360,6 +360,30 @@ always matches the body; matching is the smell. So for each documented item:
    cause is usually that the function's result has no name, because it is
    written into a parameter instead of returned; make it return the result
    and the verb ("returns X and Y") writes itself.
+6. A doc must also parse. A sentence compressed far enough turns
+   ungrammatical while every word in it is right, so it passes every rule
+   above. "Whose buckets the export reports them as." on `enum Hostnames`
+   is the type of it. Check every doc in the changeset, rewritten or not:
+   - **Grep for free relatives:**
+     `grep -nE '(//[/!]|#)\s*(Whose|What|Which|Where|When|How|Why)\b'`.
+     "What the puller asks for" or "Where a person's aw-server stands" is a
+     sound noun phrase: the thing, place or time that the clause
+     describes. A hit is a finding when the question word cannot head one.
+     "Whose X …" and "Which X …" almost never can, and they read as a
+     question with its question mark missing.
+   - **Match the question word to the value.** Name the kind of value the
+     item holds or returns (a hostname, a duration, a path). "Whose" points
+     to an owner, "when" to a time, "how long" to a duration, "where" to a
+     place or address. A mismatch, such as "whose" on a name, is a finding.
+   - **Read it complete.** Put the item in front of it: "`Hostnames`: whose
+     buckets the export reports them as." Every finding below is a
+     rewrite:
+     - it does not read as plain English;
+     - a clause trails off with a preposition and a pronoun ("… them as");
+     - a pronoun has two referents, or none.
+
+     A type or field gets a noun phrase ("The hostname each exported bucket
+     is reported under."), and a function gets a verb first.
 
 Write the fix in Google developer documentation style for API reference
 comments (https://developers.google.com/style/api-reference-comments):
@@ -558,6 +582,7 @@ smell. The report names which cause it was.
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
 | **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a doc opening with its declaration's own name (`// pending is the committed…` above `pending`, `// portalTxBase returns…` above `func portalTxBase`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a doc opening with its declaration's name drops the name and starts at the verb (function) or noun phrase (field, type). Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
+| **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
