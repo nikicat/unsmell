@@ -384,6 +384,55 @@ always matches the body; matching is the smell. So for each documented item:
 
      A type or field gets a noun phrase ("The hostname each exported bucket
      is reported under."), and a function gets a verb first.
+7. A doc must read as plain English on the first pass. A doc can parse and
+   still be compressed: every rule above is met, but the reader has to
+   unpack it like code. The user rejects this style outright as "AI slop".
+   They prefer a longer doc in simple sentences. This one passes steps 1–6
+   and fails here:
+
+   ```
+   // Returns the base of a portal tx spending parent's portal output: the pending
+   // portal tx parent is, with the ones under it, or the confirmed tip keeping
+   // none when parent is no pending tx.                                       ✗
+   // Returns the base of a proposed portal tx, given the id of the tx it spends.
+   // If parent is a pending portal tx, the base keeps parent and the pending txs
+   // under it. Otherwise, the base is the confirmed tip and keeps no pending tx. ✓
+   ```
+
+   Check every doc and every `//` comment in the changeset for these tells.
+   Each hit is a finding:
+   - **A colon or semicolon inside a sentence** that joins a second idea
+     onto the first ("Returns X: the Y that…", "…; false when…"). Make it two
+     sentences. A colon that introduces a list stays.
+   - **An appositive or a reduced clause standing in for a sentence**:
+     "…, the one it extends", "…, a prefix of the chain", "…, whose X…",
+     "…, keeping none". Write it as a sentence with a subject and a verb.
+   - **A parameter or field name used as a noun inside a clause**, so that
+     the sentence reads as broken English ("the pending portal tx parent
+     is", "the room tx leaves", "the weight out adds"). Put "that" or "the
+     given" in front of the name, or restructure the sentence.
+   - **A noun stack or a missing verb or article**: "a fee for the next
+     block within the ceiling", "more settled than", "of more varint bytes
+     than a zero's". Write the verb and the articles out.
+   - **"Errors when…"** for the error contract. Google style says "Returns
+     an error if…". Use a bulleted list when there are three or more
+     conditions.
+   - **A trailing comment on a field or constant that is longer than a few
+     words.** Move it to its own line above the item and write it as
+     sentences.
+
+   Grep the changeset's comment lines as a first pass. The read-aloud test
+   decides: a comment that a colleague would have to read twice is a
+   finding.
+
+   ```sh
+   git diff HEAD -U0 | grep -nE '^\+.*//.*([a-z]: [a-z]|; |, (the one|a prefix|whose|keeping|leaving)\b|\bErrors (when|on)\b)'
+   ```
+
+   Neither the two-sentence target nor the two-to-three-line limit may be met
+   by compression. If the plain version is longer, keep the plain version. If
+   it is much longer, the item probably does too much (§3, the long-comment
+   rule).
 
 Write the fix in Google developer documentation style for API reference
 comments (https://developers.google.com/style/api-reference-comments):
@@ -434,9 +483,9 @@ Fix all of them in one pass; one left over teaches the next reader the habit.
 
 **An entity's doc states its place in the system, never its interface.** A
 type, trait or module doc says what the thing is the one way to, who reaches
-what through it, and what it keeps the rest from knowing: "The one interface
-coverage is read and chunks written through, so rows and coverage agreeing is
-the store's concern alone." It never lists its fields ("One run: the chain,
+what through it, and what it keeps the rest from knowing: "The only interface for
+reading coverage and writing chunks. Because everything goes through it, only
+the store has to keep the rows and the coverage in agreement." It never lists its fields ("One run: the chain,
 its connections, its block estimator"), its methods ("adds one, finds one by
 reference, lists them, slices one") or its subcommands: those are the
 declaration read back, they say nothing about why the thing exists, and they
@@ -552,16 +601,18 @@ smell. The report names which cause it was.
 ```
 /// The registered chain `chain_ref` names, registering it from the
 /// catalog when it is only listed there.                  ✗ effect in a participle, no errors
-/// Returns the registered chain `chain_ref` names, registering it (schema
-/// included) when only the catalog knows it. Errors when the reference is
-/// unknown or ambiguous; [`Db::registered_chain`] never registers.      ✓ effect, errors, sibling
+/// Returns the registered chain that `chain_ref` names. If only the catalog
+/// knows the chain, this registers it first, schema included. Returns an
+/// error if the reference is unknown or ambiguous. To look up a chain
+/// without registering it, use [`Db::registered_chain`].   ✓ effect, errors, sibling, plain sentences
 
 /// One run: the chain, its connections, its block estimator, and the
 /// requested block range.                                   ✗ an actor described by its fields
 /// Runs one log-serving command: resolves the chain and the range, serves
 /// logs through the cache, stamps block times and answers contract calls.  ✗ its methods read back
-/// One command's run on one chain: what the log-serving commands place
-/// their ranges and logs in time through; knows no source.  ✓ its place in the system
+/// One run of a log-serving command on one chain. The commands use it to
+/// place their block ranges and logs in time. It does not know which source
+/// the logs came from.                                       ✓ its place in the system, plain sentences
 
 /// Creates a runner over the log cache `store` and `sources`, the
 /// fetchers paced for a chain of `cadence`.                 ✗ the signature read back: delete
@@ -605,6 +656,7 @@ smell. The report names which cause it was.
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
 | **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
+| **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence, an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Returns an error if…", a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
