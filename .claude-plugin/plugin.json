@@ -1,7 +1,7 @@
 {
   "name": "unsmell",
-  "version": "0.11.0",
-  "description": "Find and fix code smells in your working changes before you commit: duplication, unnamed tuples and returns, primitive obsession, boolean and algebraic blindness, long functions, if-forests, parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped values threaded through methods, unparsed input, split protocols, repeated derivations, concept mixing, mixed altitude, pass-through wrappers, generic machinery written inline, and comments that narrate instead of contract, do not parse, or speak for another layer.",
+  "version": "0.12.0",
+  "description": "Find and fix code smells in your working changes before you commit: duplication, unnamed tuples and returns, primitive obsession, boolean and algebraic blindness, long functions, if-forests, parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped values threaded through methods, unparsed input, split protocols, repeated derivations, concept mixing, mixed altitude, pass-through wrappers, generic machinery written inline, and comments that narrate instead of contract, do not parse, read as compressed shorthand, or speak for another layer.",
   "author": { "name": "Nikolay Bryskin" },
   "repository": "https://github.com/nikicat/unsmell",
   "license": "MIT",
