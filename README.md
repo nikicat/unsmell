@@ -1,4 +1,6 @@
-# unsmell
+# /unsmell
+
+![unsmell](assets/banner.webp)
 
 A [Claude Code](https://claude.com/claude-code) skill that refactors the smells
 out of your working changes before you commit them.
