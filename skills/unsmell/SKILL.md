@@ -414,9 +414,11 @@ always matches the body; matching is the smell. So for each documented item:
    - **A noun stack or a missing verb or article**: "a fee for the next
      block within the ceiling", "more settled than", "of more varint bytes
      than a zero's". Write the verb and the articles out.
-   - **"Errors when…"** for the error contract. Google style says "Returns
-     an error if…". Use a bulleted list when there are three or more
-     conditions.
+   - **"Returns an error if…"** for the error contract. The user's house
+     style is "Errors when…" ("Errors with ErrX when…", and "Errors on any
+     of these:" before a bulleted list of three or more conditions). It
+     overrides Google style here. Never rewrite an existing "Errors when…"
+     doc into the Google form.
    - **A trailing comment on a field or constant that is longer than a few
      words.** Move it to its own line above the item and write it as
      sentences.
@@ -426,7 +428,7 @@ always matches the body; matching is the smell. So for each documented item:
    finding.
 
    ```sh
-   git diff HEAD -U0 | grep -nE '^\+.*//.*([a-z]: [a-z]|; |, (the one|a prefix|whose|keeping|leaving)\b|\bErrors (when|on)\b)'
+   git diff HEAD -U0 | grep -nE '^\+.*//.*([a-z]: [a-z]|; |, (the one|a prefix|whose|keeping|leaving)\b|\bReturns an error\b)'
    ```
 
    Neither the two-sentence target nor the two-to-three-line limit may be met
@@ -439,7 +441,9 @@ comments (https://developers.google.com/style/api-reference-comments):
 present tense, third person, a verb first — `Returns …` for a value, `Gets …`
 for a getter, `Checks whether …` for a boolean, `Sets …` / `Updates …` /
 `Deletes …` for an effect, `Creates …` for a constructor — and never "this
-method" or the method's own name. A parameter description starts with "The"
+method" or the method's own name. The one exception to Google style is the
+error contract: it reads "Errors when …", not "Returns an error if …".
+A parameter description starts with "The"
 or "A"; a boolean reads "True if …; false otherwise." A field is a brief noun
 phrase that never opens with the field's own name: `// pending is the committed
 snapshot…` above `pending *pendingSet` is the identifier read back, so the
@@ -602,8 +606,8 @@ smell. The report names which cause it was.
 /// The registered chain `chain_ref` names, registering it from the
 /// catalog when it is only listed there.                  ✗ effect in a participle, no errors
 /// Returns the registered chain that `chain_ref` names. If only the catalog
-/// knows the chain, this registers it first, schema included. Returns an
-/// error if the reference is unknown or ambiguous. To look up a chain
+/// knows the chain, this registers it first, schema included. Errors when
+/// the reference is unknown or ambiguous. To look up a chain
 /// without registering it, use [`Db::registered_chain`].   ✓ effect, errors, sibling, plain sentences
 
 /// One run: the chain, its connections, its block estimator, and the
@@ -656,7 +660,7 @@ smell. The report names which cause it was.
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
 | **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
-| **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence, an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Returns an error if…", a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
+| **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence, an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Returns an error if…" instead of the house "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Errors when…" for the error contract, a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
