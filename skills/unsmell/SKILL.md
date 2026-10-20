@@ -175,8 +175,8 @@ is any of these:
 Parse into the type at the edge, and keep the raw form only where it is passed
 on unchanged.
 
-**Then look for one name or one expression in two places.** Two greps over the
-changeset:
+**Then look for one name, one expression or one fact in two places.** Three
+greps over the changeset:
 - **Literals:** every string or number literal that appears two or more times,
   and every exported constant whose only use is to be matched or formatted by
   another module. Each is one protocol split across two places that must agree:
@@ -190,9 +190,28 @@ changeset:
   failure check after it, a value built the same way in each test. A derivation written twice
   is a rule with no name, and it drifts the first time one copy changes. Give it
   a named function on the type it derives from.
+- **Facts in comments:** every identifier that a doc or comment names (an
+  error sentinel, a constant, a type, a method) and every rule that a doc
+  explains. Grep the changeset's comment lines, and the docs outside the code
+  (ADRs, invariant lists, READMEs), for each one. Two comments that say the
+  same thing about it are one fact with two copies, and the second copy goes
+  stale at the next change. Typical cases:
+  - an error contract repeated up a call chain, where the checker, its caller
+    and the caller's caller each list the same sentinels and conditions;
+  - why an error happens, explained on the sentinel and again on each function
+    that returns it;
+  - a rule explained on its type and again on a method, a caller or a test;
+  - a reason given in the code and again in a design doc or an invariant list.
 
-Neither shape shows up in a read for flow, because each copy is short and looks
-right where it stands.
+  Each fact gets one owner, which is the item that decides it. A sentinel owns
+  what it means. The function that classifies an error owns which one it
+  returns, and in which order. The function that marks an error fatal owns
+  that it is fatal. Every other site points to the owner ("Errors as
+  checkPrefix does") and adds only its own facts. A design doc names where
+  the code enforces a rule, and does not repeat the code's reasoning.
+
+None of these shows up in a read for flow, because each copy is short and
+looks right where it stands.
 
 **Then look for generic data structures and algorithms written inline in
 domain code.** A mechanism hand-built inside a domain function (a cache, a
@@ -660,6 +679,7 @@ smell. The report names which cause it was.
 | **Misleading name** | Name says less (or other) than the body does; comment explains *what* instead of *why*; a compound whose modifier is a domain term binds to the wrong noun (`pendingUpdate` for an update *to the pending set* reads as an update that is *waiting*) | Rename. First say in one sentence what the objects are, who makes them and how long they live; that sentence usually names a known pattern, and the pattern is the name (`pendingSetBuilder`: a mutable builder of an immutable `pendingSet`, one per event). A name coined from the description alone (`pendingSetEdit`) was judged worse than the original. Take the pattern's name, not its shape: splitting the code to match the pattern's method set (`build` + a separate install step) only added a hand-off and was reverted. Delete the comment the name replaced |
 | **Long comment** | Any comment past three lines, doc or `//`. Tells: a bullet list of parameters; a "why" paragraph that is really the design history; a warning to the caller about state the type could enforce | Find the cause. (a) Structure: the item does too much or hides its shape — split it, type the invariant, name the helper — and the comment shrinks by itself. (b) Wrong subject: it narrates steps, mechanism, or the caller — rewrite as the contract per §3. Never just trim; a shorter comment with the same cause is the same smell |
 | **Interface read back** | An entity doc that lists its fields ("One run: the chain, its connections…"), its methods ("adds one, finds one, lists them") or its subcommands; changes whenever the interface does | Rewrite as the entity's place in the system: what it is the one way to, who reaches what through it, what it hides (§3) |
+| **Duplicated knowledge** | One fact stated in two comments: an error contract listed by a checker and again by each caller up the chain; a sentinel's cause explained on the sentinel and on each function that returns it; a type's rule explained again on a method, a caller, a test or a design doc (§3, facts in comments) | Give the fact one owner, the item that decides it. Every other site points to the owner ("Errors as X does") and states only what it adds |
 | **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a doc opening with its declaration's own name (`// pending is the committed…` above `pending`, `// portalTxBase returns…` above `func portalTxBase`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a doc opening with its declaration's name drops the name and starts at the verb (function) or noun phrase (field, type). Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
@@ -792,7 +812,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
