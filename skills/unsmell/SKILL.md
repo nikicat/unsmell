@@ -91,6 +91,27 @@ Do this before triage, for the whole changeset, even when you have already found
 plenty to fix. It is a checklist rather than a judgement, so it does not get
 tired the way reading does.
 
+**Then inventory the locks, and what each one guards.** For every mutex,
+read-write lock, `synchronized` block or similar guard in a touched file, write
+the fields or values that only it protects. The declaration inventory judges
+each field on its own line, so it walks past a lock whose job has shrunk. Each
+of these is a finding:
+- it guards one scalar, such as a counter, a flag or a pointer: use the
+  language's atomic type (`atomic.Int64`, `AtomicU64`, `AtomicBoolean`);
+- it guards nothing that is still shared: delete it;
+- it guards a value that is read far more often than written, and is replaced
+  whole: use an atomic pointer to an immutable value, or the repo's
+  latest-value cell.
+
+**Re-check what serves a field whenever the field narrows.** When a change
+shrinks what a field holds, re-check everything that exists only for it: its
+lock, its constructor argument, its cleanup and its helper methods. Examples
+are a map that becomes one counter, or a list that becomes one value. Compare
+with `git show HEAD:<file>`, and with what the changeset itself first wrote. A
+narrowing usually arrives in an edit made for another reason, such as a rename
+or a lint fix, so nobody re-reads what surrounds the field. This is the
+pass-through rule (§3, the role pass) applied to state.
+
 **Write every inventory down, one line per item, in a scratch file.** That
 covers this one, the parameter tables, the role list and each pass below. An
 inventory kept in your head comes out as a plausible count and a list of the
@@ -227,6 +248,7 @@ what the code does, not by its names:
 | starts work for every item with at most N running, collecting results by index | ordered parallel map with bounded concurrency |
 | packs a request with a reply slot, sends it to the owner of some state, and waits with a timeout or cancellation | a call into an actor / mailbox |
 | stores a value and wakes one consumer, overwriting what it has not taken yet | latest-value cell / conflating channel |
+| takes a mutex around one counter, flag or pointer, and nothing else | the language's atomic type |
 | races a result against cancellation or a timeout by hand | the codebase's or runtime's await-with-cancel helper |
 | copies a collection while skipping, grouping, indexing, partitioning or deduplicating, even when the copy is consumed in the same loop that mutates state | the standard library's filter / group-by / associate / unique operations, applied before the effect |
 | walks a graph of dependencies with a visited set, or orders items by them | a traversal / topological sort |
@@ -667,6 +689,7 @@ smell. The report names which cause it was.
 | **Inline generic machinery** | Domain code that also hand-builds a generic data structure or algorithm: a per-key memo, a bounded parallel map, a request/reply mailbox, a latest-value cell, a hand-rolled await-with-cancel, a filtering or grouping copy loop, a traversal, a retry loop, a cache or queue (the table in §3) | Use the existing helper, the standard library or a well-known library; otherwise extract a generic type or function into the repo's utility module with its own tests (race-checked where concurrent), and replace every site of that shape |
 | **Concept mixing** | I/O + business logic + formatting in one unit; a module importing across three layers; a rule (a heuristic, a message match, a classification) written inline in a function that builds a result, while rules of the same kind live in named helpers | Separate; push I/O to the edges, keep the core pure; give the inline rule a named predicate next to its siblings (§3, the role pass) |
 | **Mixed altitude** | One function alternating between orchestration and byte-twiddling; a setup function whose named steps are separated by blocks of builder chains, filter parsing or closures | Lift details into named helpers so the caller reads as prose; each helper takes the comment that explained its block |
+| **Oversized lock** | A mutex that guards one scalar, or nothing that is still shared; it was often left behind when the value it guarded shrank (§3, the lock inventory) | An atomic for one scalar; delete a lock that guards nothing |
 | **Temporal coupling** | Must call `init()`/`setup()` before the thing works | Constructor, builder, or context manager |
 | **Speculative generality** | Unused param, single-implementation interface, config value that never varies, hook nothing calls | Delete it |
 | **Computing loop with effects** | One loop both selects or splits (a `match` pushing onto a local, an `if` choosing what to act on) and mutates state or does I/O with the result | Compute the selection first with `partition`/`filter`/`filter_map`, then apply the effect over it |
@@ -812,7 +835,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <g> locks inventoried, <o> oversized · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
