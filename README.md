@@ -12,7 +12,8 @@ parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped
 values threaded through methods, unparsed input, split protocols, repeated
 derivations, concept mixing, primitive obsession, speculative generality,
 generic machinery (caches, retries, bounded parallel maps) written inline in
-domain code, and comments that narrate the code instead of stating its contract
+domain code, locks that outgrew what they guard, one fact stated in two
+comments, and comments that narrate the code instead of stating its contract
 or do not parse as English, docs compressed into shorthand that has to be read
 twice, and interface docs that retell their callers or their implementation.
 
