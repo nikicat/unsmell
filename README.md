@@ -41,13 +41,14 @@ Structure that no single function shows gets passes of its own:
 - **The program's edge.** Every input entering the program (arguments, config,
   request paths and headers, database rows, API bodies) is checked for being
   parsed into a type where it enters.
-- **Repeats.** Two greps find a literal that a writer and a reader must both
-  spell the same way, and an expression computed in two places.
+- **Repeats.** Three greps find a literal that a writer and a reader must both
+  spell the same way, an expression computed in two places, and a fact stated
+  in two comments.
 
-The agent that wrote the code is the worst one to survey it, because it remembers why
-each line is there. So the survey runs in fresh subagents, one per batch of a
-few related files, all in parallel, plus one that looks across their
-inventories for what no single batch can see. The main agent triages and fixes,
+The agent that wrote the code is the worst one to survey it, because it
+remembers why each line is there. So the survey runs in fresh subagents, one
+per batch of a few related files, all in parallel, plus one that looks across
+their inventories for what no single batch can see. The main agent triages and fixes,
 and a last fresh agent re-checks the code the fixes touched. The report's
 counts come from the agents' inventory lines, so a skipped pass or file shows
 up as an incomplete run rather than as numbers.
