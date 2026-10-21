@@ -63,6 +63,54 @@ If `git diff HEAD` is empty but the index isn't, fall back to `git diff --cached
 Not a git repo, or the user named a target explicitly? Use what they named. If
 there is no changeset at all, say so and stop — don't invent one.
 
+### 3.0 Who runs the survey
+
+The agent that wrote the code is the worst one to survey it. It remembers why
+each line is there, and those reasons hide the smells. It also tires on a big
+changeset: it narrows the survey to the code it thinks of as new, and it writes
+inventories from memory. So the survey runs in fresh subagents, and the main
+agent runs everything else.
+
+1. **The main agent splits the changeset into batches.** A batch is a few
+   related files that one agent can read whole: about five, or about 1,500
+   lines. A file goes in the same batch as its tests, and a moved file goes
+   with the place it moved from. Every file of the changeset is in exactly one
+   batch, tests and moved files included. Nothing counts as "only moved" or
+   "only edited".
+2. **One survey agent per batch, all in parallel.** Each is a fresh agent,
+   never a fork: a fork inherits the main agent's context, and that context is
+   exactly what blinds it. Its prompt gives the batch's paths, the style
+   ground truth from §2, any arguments from §1, and an instruction to read this
+   skill's §3 and §4 and to run every §3 step on the batch. It reports only:
+   - each finding as `path:line`, the catalog row, and one sentence;
+   - its inventory lines, each starting with `path:line`, for the
+     declarations, the repeated literals, the repeated expressions and the
+     facts in comments;
+   - the files of its batch that it read whole. It names a file it could not
+     read, and why.
+   It edits nothing.
+3. **One cross-file agent.** It is also fresh. It gets the union of the
+   inventories, not the files, and the changeset's file list. It looks only
+   for what no single batch can see:
+   - a literal that two batches spell (a split protocol);
+   - a derivation written in two batches;
+   - a fact stated in two batches' comments;
+   - a value that two batches' functions take as a parameter (a missing
+     receiver).
+   It reports findings in the same form.
+4. **The main agent triages and fixes**, by §5 to §7, because only it knows
+   what the user has already decided or rejected in this conversation. It
+   reads each finding's lines from disk before it acts on it. A survey agent
+   can be wrong, and that is a reason to check the finding, not to drop it.
+5. **One fresh re-check agent.** It gets the files that the fixes touched and
+   the list of fixes. It runs §3 on them, because the fixes are the newest
+   code and the least read. Its findings go back to step 4, once.
+
+A changeset of one or two small files may skip the orchestration. The main
+agent then still runs every step, and it says so in the report.
+
+The steps below are what each survey agent runs on its batch.
+
 **Read whole files, not hunks.** Half this catalog (duplication, long file, data
 clumps, concept mixing) is invisible from a diff. For each touched file: read it
 end to end, then grep the repo for the distinctive lines of anything the change
@@ -753,7 +801,10 @@ them enough to mention. Before fixing it:
 
 1. Sweep the whole changeset for every sibling of that kind. `grep` for the
    shape, not the identifier: other `(A, B)` returns, other `&[&str]` fields,
-   other magic-string branches.
+   other magic-string branches. Hand the sweep to a fresh agent (§3.0) that
+   gets the kind, not the instance. It also re-runs, over the files the smell
+   is in, the generic-machinery table and the literal and expression greps:
+   a pointed smell usually has neighbours of another kind.
 2. Fix the class in one pass.
 3. Report the sweep — how many you found, where — so the count answers "did you
    get them all?" before it is asked.
@@ -848,9 +899,12 @@ memory: a run that skipped a step cannot fill it honestly, and a reader can hold
 the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
 *looked at* proves nothing by itself; the count with a missing effect or exit
 is what a skipped step cannot fake, and the same goes for the count of
-functions mixing roles and of shared context columns. Each number is the line
-count of the inventory file it comes from (§3); a number with no file behind it
-is a step you skipped, so report it as skipped. Every rewritten doc comment appears
+functions mixing roles and of shared context columns. Each number is the sum
+of what the survey agents returned (§3.0), counted from their inventory lines.
+A number with no lines behind it means the step did not run, and so does a
+batch whose agent failed or skipped a file. Then the run is incomplete. Say
+so at the top of the report, name the steps and the files that were missed,
+and do not present the fixes as the result of a full pass. Every rewritten doc comment appears
 verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
 that reads badly in the report reads badly in the code.
 
