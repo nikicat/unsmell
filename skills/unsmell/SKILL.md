@@ -426,7 +426,8 @@ always matches the body; matching is the smell. So for each documented item:
    must be pointed at from the one with the surprising effect. Two further
    findings: your expectation was wrong or blank — the doc does not state the
    contract; or the doc could only have been written after reading the body —
-   it names sort keys, tie-breaks, branch order, a SQL or regex mechanism, or
+   it names sort keys, tie-breaks or branch order that the caller does not
+   rely on, a SQL or regex mechanism, or
    what the *caller* does with the result ("in the order they are tried").
 3. A precondition phrased as "must" ("it must exist and be enabled") is a
    third: name the error instead.
@@ -441,7 +442,8 @@ always matches the body; matching is the smell. So for each documented item:
    reading, or that satisfied a rule by cramming the mechanism into a clause,
    goes back. Presence of the effects and exits is necessary, not sufficient.
    Two shapes pass every rule above and still read as nonsense, so check for
-   them by form: a stand-in main verb (gives, makes, handles, deals with) with
+   them by form: a stand-in main verb (gives, makes, handles, deals with, matches,
+   verifies) with
    the real contract in an appositive after a colon ("gives block its state
    and its portal transactions: the candidates that…, applied … on state"),
    and an adjective or participle with no referent in the doc or signature
@@ -638,6 +640,20 @@ code. Survey every interface doc (subcommand, flag, public item, unit
 stays legitimate ("read by scripts/pocket_id.py"); retelling why they read it
 or what they do with it does not.
 
+**One kind of mechanism passes the own-layer test.** Such a sentence describes
+a check that the function runs on its own result, and it uses the result's
+words, so it reads like part of the promise. Examples are "each record is
+checked against its source and dropped when it does not match", "every
+returned record matches its source" and "the input is not taken on faith". A
+doc that says what comes out ("Returns the records that match the filter")
+already promises valid records. How the function keeps that promise is its
+own business. Such a sentence only makes sense if the reader imagines a
+weaker implementation that skips the check. Test each sentence of a function
+doc with one question: would the caller act differently knowing this? The facts listed under "A doc earns its place" pass
+this test, and an ordering is one of them. Write an ordering as what the
+caller sees, not as the steps that produce it. Grep the changeset's doc lines for
+`checked|verified|matches|on faith` and test each hit.
+
 **A doc earns its place by a fact the code does not show.** Read each doc
 beside its item and ask what the reader learns beyond the signature. A
 constructor doc that names its parameters back ("Creates a runner over
@@ -645,9 +661,17 @@ constructor doc that names its parameters back ("Creates a runner over
 cadence)`), a field doc that names its type back ("The source." on `source:
 SourceId`), a getter doc that names the method back ("Gets the label.") is a
 tautology: delete it, do not reword it — verb-first restatement is still
-restatement. A clause that follows from the one before it is a tautology
-too ("it is never mutated; a change replaces it whole": the second is the
-first), and what earns the line is the reason for the first. What stays is a unit, an ordering, a None or panic condition,
+restatement. The same goes for a doc on a method whose contract the language
+or a standard interface already fixes, such as a `Compare` that returns
+-1, 0 or +1, or a `String`. Any rewording of such a doc either restates that
+contract or describes the mechanism. A clause that follows from the one before it is a
+tautology too ("it is never mutated; a change replaces it whole": the second
+is the first), and what earns the line is the reason for the first. A claim
+that every deterministic function makes ("the same on every run", "every
+process agrees on it") is one as well. Grep for `on every|agrees|every run`.
+When the caller relies on getting the same result for the same inputs,
+whatever order or source they came from, write "in a canonical order". What stays is a unit, an ordering, a None or
+panic condition,
 an inclusive bound, where a value comes from, or who consumes it. Survey it
 by listing every doc of a sentence or less and every constructor doc next to
 its declaration; tautology lives in the short ones. Restating what sits in
@@ -753,10 +777,10 @@ smell. The report names which cause it was.
 | **Duplicated knowledge** | One fact stated in two comments: an error contract listed by a checker and again by each caller up the chain; a sentinel's cause explained on the sentinel and on each function that returns it; a type's rule explained again on a method, a caller, a test or a design doc (§3, facts in comments) | Give the fact one owner, the item that decides it. Every other site points to the owner ("Errors as X does") and states only what it adds |
 | **Tautological comment** | A doc that restates the signature: a constructor naming its parameters, a field naming its type, a doc opening with its declaration's own name (`// pending is the committed…` above `pending`, `// portalTxBase returns…` above `func portalTxBase`), a getter naming itself, "Serves `cmd`." on `run(cmd)`; or restates another file — a field doc listing its type's fields, a method doc listing what its return type holds | Delete it; a doc opening with its declaration's name drops the name and starts at the verb (function) or noun phrase (field, type). Keep only a fact the code does not show: unit, order, None/panic condition, bound, origin, consumer (§3) |
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
-| **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
+| **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log"), or a check that the function runs on its own result ("every returned record matches its source") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
 | **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
 | **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence (a colon that lists the items its sentence announces is fine), an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Returns an error if…" instead of the house "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Errors when…" for the error contract, a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
-| **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
+| **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order that the caller does not rely on; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
 
@@ -810,7 +834,8 @@ them enough to mention. Before fixing it:
    get them all?" before it is asked.
 
 Fixing only what was pointed at guarantees another round, and teaches the user
-that pointing is how this gets done.
+that pointing is how this gets done. For a doc, rewording only the doc that
+the user cited counts as fixing only what was pointed at.
 
 When the pointed-at smell is one a previous run of this skill should have
 caught, the report also names, before the fix, which survey step would have
@@ -886,7 +911,7 @@ Name the smell, the reason, and the trigger that ends it.
 Code first, then at most:
 
 ```
-Survey   <n> files read whole · <n> declarations inventoried · <g> locks inventoried, <o> oversized · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing
+Survey   <n> files read whole · <n> declarations inventoried · <g> locks inventoried, <o> oversized · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing, <s> leaking mechanism
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
