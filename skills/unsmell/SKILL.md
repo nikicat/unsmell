@@ -16,7 +16,7 @@ read it as intent and apply it before anything else. Common shapes:
 | The user says | You do |
 | -- | -- |
 | `only src/parser.rs`, `just the auth module`, `*.py` | Restrict the changeset (§3) to those paths. Still read them whole. |
-| `only changeset-local fixes`, `don't touch other files` | §6 is off. A smell whose fix lives outside the diff becomes ASK or Noticed, never an edit. |
+| `only changeset-local fixes`, `don't touch other files` | §6 is off. A smell whose fix lives outside the diff becomes ASK or PLAN, never an edit. |
 | `only duplication`, `just the long functions`, `skip naming` | Run the named rows of §4 only. |
 | `report only`, `dry run`, `don't fix anything` | Everything becomes a report line. Zero edits, zero questions. |
 | `fix everything`, `don't ask`, `just do it` | ASK collapses into FIX: pick the option you'd have recommended, apply it, and say what you chose and what the alternative was. |
@@ -396,8 +396,8 @@ Write one line per function: `name: roles`, and mark each role as inline or
 called (it goes through a named function). A function may combine roles as long
 as all but one are called: `match` on a named classifier, then assemble the
 result, is fine. Two roles written inline is the finding, and so is a function
-whose only role is a call to a callee it alone calls. Fix it, or list it as
-Noticed with the split you would make. This is a checklist like the declaration
+whose only role is a call to a callee it alone calls. Fix it, or plan it (§5)
+with the split you would make. This is a checklist like the declaration
 inventory; do it for the whole changeset, including functions whose diff is one
 line.
 
@@ -821,13 +821,38 @@ questions you can answer yourself.
 
 **KEEP** — rare. See §7.
 
+**PLAN** — a real smell that this run does not fix: it is out of scope, too
+large for this commit, or waits on a decision. Write it into the project's own
+plan, the place where the next person will look for work: the `TODO.md` or plan
+document the repo already keeps, or its issue tracker. If the repo has none, ask
+once where plans go. Each entry says where the smell is, what is wrong, and the
+fix or the options, so that someone without this conversation can act on it.
+Group the entries of one run under one heading that names the run. A smell that
+appears only in the report is not planned: the report scrolls away, and the
+smell goes with it.
+
+**DISCARD** — the finding does not hold. The code does not do what the finding
+says, a fix earlier in the run already removed it, it duplicates another
+finding, or the user already decided that question in this conversation. Each
+discard gets one line in the report with its reason, so that the user can
+overrule it. A discard is never a smell kept on purpose; that is a Keep (§7),
+and §7's list of reasons that are not reasons applies to discards too.
+
 **Survey exhaustively, fix proportionally.** These are different budgets and
 collapsing them is how findings go missing. The survey covers the whole
 changeset every time — a three-line change does not license a repo-wide rewrite,
 but it does not excuse a partial look either. Only then decide volume: if the
-list runs long, fix the top few and put *every* survivor in the report as
-Noticed. A finding you chose not to fix is a line in the report; a finding you
-never wrote down is a miss you will be told about later.
+list runs long, fix the top few and plan *every* survivor. A finding you never
+wrote down is a miss you will be told about later.
+
+**Every finding ends in one of these buckets.** That covers the survey agents'
+findings, the cross-file agent's, the re-check's, and everything a subagent that
+fixed code reports as skipped, left over, out of scope or "noticed". There is no
+"noticed" end state: a leftover is fixed, asked, kept, planned or discarded
+before the run reports. An ASK that the user leaves unanswered becomes a PLAN
+entry that records the options. Before the report, walk the union of every
+agent's report and tick each finding off against its bucket. One that fits no
+bucket is the run's open work, not its result.
 
 ### 5.1 A smell you are pointed at is a class, not an instance
 
@@ -864,8 +889,8 @@ appeared, the function whose signature the new caller made unwieldy.
 Bounded by:
 
 - **Only where the fix belongs.** Following the root cause outward: yes. Editing
-  unrelated smells you passed on the way: no, they're not in scope — mention
-  them in the report if they're bad.
+  unrelated smells you passed on the way: no, they're not in scope — plan them
+  (§5).
 - **Update every caller.** Grep before you change a signature; leave nothing
   broken.
 - **Refactors stay pure.** No behaviour changes riding along in a rename commit.
@@ -930,7 +955,8 @@ Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
 Asked    path:line  smell → the question (answers pending)
 Kept     path:line  smell → why, and the trigger
-Noticed  path:line  out-of-scope smell, untouched
+Planned  path:line  smell → where the plan entry is (file and heading, or issue)
+Discarded path:line  finding → why it does not hold
 ```
 
 The Survey line is not optional and its numbers come from the pass, not from
@@ -946,6 +972,10 @@ report, name the steps and the files that were missed, and do not present the
 fixes as the result of a full pass. Every rewritten doc comment appears verbatim
 under `Rewrote`: the user reviews them in one place, and a rewrite that reads
 badly in the report reads badly in the code.
+
+The `Fixed`, `Asked`, `Kept`, `Planned` and `Discarded` lines together account
+for every finding of the run (§5). The report counts them against the findings
+that the agents returned, and names any finding that is still open.
 
 Then the verification result (tests/typecheck: pass/fail/absent) in one line. No
 essays. If the explanation is longer than the diff, the diff was wrong.
