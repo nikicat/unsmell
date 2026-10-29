@@ -14,7 +14,7 @@ Anything after `/unsmell` narrows or steers this run. Free text, not flags —
 read it as intent and apply it before anything else. Common shapes:
 
 | The user says | You do |
-|---|---|
+| -- | -- |
 | `only src/parser.rs`, `just the auth module`, `*.py` | Restrict the changeset (§3) to those paths. Still read them whole. |
 | `only changeset-local fixes`, `don't touch other files` | §6 is off. A smell whose fix lives outside the diff becomes ASK or Noticed, never an edit. |
 | `only duplication`, `just the long functions`, `skip naming` | Run the named rows of §4 only. |
@@ -24,9 +24,9 @@ read it as intent and apply it before anything else. Common shapes:
 | `the whole file`, `this module`, `the repo` | Scope becomes what they named instead of the changeset. Warn if it's huge, then do it. |
 | `aggressive` / `light touch` | Move the bar for what's worth fixing, not the catalog. |
 
-Combine freely — `/unsmell only src/db.rs, duplication only, report only` is three
-constraints. If an argument contradicts a written style guide (§2), the user's
-argument wins for this run; say so once.
+Combine freely — `/unsmell only src/db.rs, duplication only, report only` is
+three constraints. If an argument contradicts a written style guide (§2), the
+user's argument wins for this run; say so once.
 
 Ambiguous argument? Take the reading a careful colleague would and state the
 assumption in the report. Only stop to ask if getting it wrong would waste the
@@ -37,14 +37,16 @@ whole run. No arguments at all: full default behaviour, everything below.
 Load, in this order, and treat as binding:
 
 1. `CLAUDE.md` / `AGENTS.md` (repo and parent dirs)
-2. explicit style docs: `CONTRIBUTING.md`, `STYLE.md`, `docs/style*`, `.editorconfig`
-3. linter/formatter config: `ruff.toml`, `.eslintrc*`, `biome.json`, `rustfmt.toml`,
-   `.golangci.yml`, `clippy.toml`, `pyproject.toml`, `tsconfig.json` (strictness flags)
+2. explicit style docs: `CONTRIBUTING.md`, `STYLE.md`, `docs/style*`,
+   `.editorconfig`
+3. linter/formatter config: `ruff.toml`, `.eslintrc*`, `biome.json`,
+   `rustfmt.toml`, `.golangci.yml`, `clippy.toml`, `pyproject.toml`,
+   `tsconfig.json` (strictness flags)
 
 **Surrounding code is not a style guide.** If the neighbours are smelly, do not
-match them. "The rest of the file does it this way" justifies nothing on its own —
-only a written rule does. Conversely, never violate a written rule to fix a smell;
-if the guide mandates the smell, that is a Keep (§7).
+match them. "The rest of the file does it this way" justifies nothing on its own
+— only a written rule does. Conversely, never violate a written rule to fix a
+smell; if the guide mandates the smell, that is a Keep (§7).
 
 If the language has an idiomatic construct for the fix, use it rather than
 inventing one: TS discriminated unions, Python `dataclass`/`Enum`/`match`, Rust
@@ -59,9 +61,10 @@ git diff HEAD                          # staged + unstaged vs HEAD, tracked file
 git ls-files --others --exclude-standard   # untracked files — read them whole
 ```
 
-If `git diff HEAD` is empty but the index isn't, fall back to `git diff --cached`.
-Not a git repo, or the user named a target explicitly? Use what they named. If
-there is no changeset at all, say so and stop — don't invent one.
+If `git diff HEAD` is empty but the index isn't, fall back to
+`git diff --cached`. Not a git repo, or the user named a target explicitly? Use
+what they named. If there is no changeset at all, say so and stop — don't invent
+one.
 
 ### 3.0 Who runs the survey
 
@@ -73,41 +76,38 @@ agent runs everything else.
 
 1. **The main agent splits the changeset into batches.** A batch is a few
    related files that one agent can read whole: about five, or about 1,500
-   lines. A file goes in the same batch as its tests, and a moved file goes
-   with the place it moved from. Every file of the changeset is in exactly one
-   batch, tests and moved files included. Nothing counts as "only moved" or
-   "only edited".
-2. **One survey agent per batch, all in parallel.** Each is a fresh agent,
-   never a fork: a fork inherits the main agent's context, and that context is
-   exactly what blinds it. Its prompt gives the batch's paths, the style
-   ground truth from §2, any arguments from §1, and an instruction to read this
-   skill's §3 and §4 and to run every §3 step on the batch. It reports only:
+   lines. A file goes in the same batch as its tests, and a moved file goes with
+   the place it moved from. Every file of the changeset is in exactly one batch,
+   tests and moved files included. Nothing counts as "only moved" or "only
+   edited".
+2. **One survey agent per batch, all in parallel.** Each is a fresh agent, never
+   a fork: a fork inherits the main agent's context, and that context is exactly
+   what blinds it. Its prompt gives the batch's paths, the style ground truth
+   from §2, any arguments from §1, and an instruction to read this skill's §3
+   and §4 and to run every §3 step on the batch. It reports only:
    - each finding as `path:line`, the catalog row, and one sentence;
-   - its inventory lines, each starting with `path:line`, for the
-     declarations, the repeated literals, the repeated expressions and the
-     facts in comments;
+   - its inventory lines, each starting with `path:line`, for the declarations,
+     the repeated literals, the repeated expressions and the facts in comments;
    - the files of its batch that it read whole. It names a file it could not
-     read, and why.
-   It edits nothing.
+     read, and why. It edits nothing.
 3. **One cross-file agent.** It is also fresh. It gets the union of the
-   inventories, not the files, and the changeset's file list. It looks only
-   for what no single batch can see:
+   inventories, not the files, and the changeset's file list. It looks only for
+   what no single batch can see:
    - a literal that two batches spell (a split protocol);
    - a derivation written in two batches;
    - a fact stated in two batches' comments;
    - a value that two batches' functions take as a parameter (a missing
-     receiver).
-   It reports findings in the same form.
-4. **The main agent triages and fixes**, by §5 to §7, because only it knows
-   what the user has already decided or rejected in this conversation. It
-   reads each finding's lines from disk before it acts on it. A survey agent
-   can be wrong, and that is a reason to check the finding, not to drop it.
+     receiver). It reports findings in the same form.
+4. **The main agent triages and fixes**, by §5 to §7, because only it knows what
+   the user has already decided or rejected in this conversation. It reads each
+   finding's lines from disk before it acts on it. A survey agent can be wrong,
+   and that is a reason to check the finding, not to drop it.
 5. **One fresh re-check agent.** It gets the files that the fixes touched and
-   the list of fixes. It runs §3 on them, because the fixes are the newest
-   code and the least read. Its findings go back to step 4, once.
+   the list of fixes. It runs §3 on them, because the fixes are the newest code
+   and the least read. Its findings go back to step 4, once.
 
-A changeset of one or two small files may skip the orchestration. The main
-agent then still runs every step, and it says so in the report.
+A changeset of one or two small files may skip the orchestration. The main agent
+then still runs every step, and it says so in the report.
 
 The steps below are what each survey agent runs on its batch.
 
@@ -144,18 +144,19 @@ read-write lock, `synchronized` block or similar guard in a touched file, write
 the fields or values that only it protects. The declaration inventory judges
 each field on its own line, so it walks past a lock whose job has shrunk. Each
 of these is a finding:
+
 - it guards one scalar, such as a counter, a flag or a pointer: use the
   language's atomic type (`atomic.Int64`, `AtomicU64`, `AtomicBoolean`);
 - it guards nothing that is still shared: delete it;
 - it guards a value that is read far more often than written, and is replaced
-  whole: use an atomic pointer to an immutable value, or the repo's
-  latest-value cell.
+  whole: use an atomic pointer to an immutable value, or the repo's latest-value
+  cell.
 
 **Re-check what serves a field whenever the field narrows.** When a change
 shrinks what a field holds, re-check everything that exists only for it: its
-lock, its constructor argument, its cleanup and its helper methods. Examples
-are a map that becomes one counter, or a list that becomes one value. Compare
-with `git show HEAD:<file>`, and with what the changeset itself first wrote. A
+lock, its constructor argument, its cleanup and its helper methods. Examples are
+a map that becomes one counter, or a list that becomes one value. Compare with
+`git show HEAD:<file>`, and with what the changeset itself first wrote. A
 narrowing usually arrives in an edit made for another reason, such as a rename
 or a lint fix, so nobody re-reads what surrounds the field. This is the
 pass-through rule (§3, the role pass) applied to state.
@@ -167,12 +168,12 @@ items you happened to notice. Without the file, a skipped step and a done one
 look the same. The Survey numbers in the report are counted from these files
 (§8).
 
-**Then group the functions by the parameters they share.** A free function
-reads fine alone; the smell is only visible across siblings, when the same
-context arrives as arguments again and again. For every file, write a table
-with one row per function and one column per parameter. Name each column by
-what the value is, not by its spelling: `buckets`, `store` and `db` are one
-column when they hold the same store. Then look down the columns:
+**Then group the functions by the parameters they share.** A free function reads
+fine alone; the smell is only visible across siblings, when the same context
+arrives as arguments again and again. For every file, write a table with one row
+per function and one column per parameter. Name each column by what the value
+is, not by its spelling: `buckets`, `store` and `db` are one column when they
+hold the same store. Then look down the columns:
 
 ```
 answer(request, buckets, console_user)
@@ -181,39 +182,39 @@ heartbeat(request, query, buckets, bucket)    only to pick the user for the othe
 serve(port, buckets, console_user)            → struct Api { buckets, console_user }
 ```
 
-A column is a finding when two or more functions take it and it is context,
-not the input being worked on: a store, a client, a connection, a config, a
+A column is a finding when two or more functions take it and it is context, not
+the input being worked on: a store, a client, a connection, a config, a
 registry, a logger, a callback. The input (the request, the line, the event)
-stays a parameter. Two more tells make it certain: one sibling passes the
-value straight down to another, and the value is captured once by a closure
-or a thread and then handed to every call. The fix is the receiver the
-functions were missing: the shared values become its fields, the functions its
-methods, and the caller builds it once. Use the language's form for state
-plus behaviour: a struct with an impl block, a class, a Go type with methods,
-a closure over the values, a module-level object. A single shared column
-counts when it is real state; the catalog's 3+ threshold for a data clump is
-for values that travel together, not for state that every function reaches
-into.
+stays a parameter. Two more tells make it certain: one sibling passes the value
+straight down to another, and the value is captured once by a closure or a
+thread and then handed to every call. The fix is the receiver the functions were
+missing: the shared values become its fields, the functions its methods, and the
+caller builds it once. Use the language's form for state plus behaviour: a
+struct with an impl block, a class, a Go type with methods, a closure over the
+values, a module-level object. A single shared column counts when it is real
+state; the catalog's 3+ threshold for a data clump is for values that travel
+together, not for state that every function reaches into.
 
 **Then place every rule on the type it is about.** For each constant, check,
 default and derived value in the changeset, write the type whose invariant it
 serves, then where it lives. A lifetime, an expiry check or a storage key that
-belongs to one type but is written in another is a finding, however short it
-is: the next change to that type will miss it. Three tells find the rest:
+belongs to one type but is written in another is a finding, however short it is:
+the next change to that type will miss it. Three tells find the rest:
+
 - a method that never uses its receiver;
 - a free function whose main input is one type, and which only reads it or
   formats it;
 - a body that touches another type's fields or constants more than its own.
 
 The fix moves the rule onto its owner, as a method, a constant on the type or
-its formatting method. A function that uses neither its receiver nor any one type belongs
-with what it builds, or free at the module level. It does not belong as a
-method of whatever happened to call it.
+its formatting method. A function that uses neither its receiver nor any one
+type belongs with what it builds, or free at the module level. It does not
+belong as a method of whatever happened to call it.
 
 **Then sort the values by how long they live.** Mark each field, parameter and
-local of the changeset as one of three: built once per process (config,
-clients, stores), once per request or event, or once per item. Two findings
-follow:
+local of the changeset as one of three: built once per process (config, clients,
+stores), once per request or event, or once per item. Two findings follow:
+
 - A per-request value that two or more functions take as a parameter: the
   request is missing an object of its own. Name it for what it is, not for what
   it does, and the next layer up often needs one too. It is the parameter table
@@ -225,6 +226,7 @@ follow:
 
 **Then list every input at the program's edge.** Write down each way data
 enters:
+
 - command-line arguments and environment variables;
 - config files;
 - request paths, queries and headers;
@@ -234,9 +236,10 @@ enters:
 
 Each one becomes a domain type in the first function that touches it. A finding
 is any of these:
+
 - raw text or a number passed beyond that first function;
-- dynamic access by key or position (`value["key"]`, `row[0]`,
-  `dict.get("k")`), which is a schema the code depends on without saying so;
+- dynamic access by key or position (`value["key"]`, `row[0]`, `dict.get("k")`),
+  which is a schema the code depends on without saying so;
 - a value validated later than the edge, or validated again at each use;
 - more than about five settings at one edge, which is a config file the program
   has not been given.
@@ -246,25 +249,29 @@ on unchanged.
 
 **Then look for one name, one expression or one fact in two places.** Three
 greps over the changeset:
+
 - **Literals:** every string or number literal that appears two or more times,
   and every exported constant whose only use is to be matched or formatted by
   another module. Each is one protocol split across two places that must agree:
   a cookie name written in one place and read in another, a route path in the
   router and again in a link, a query parameter name in its writer and in its
-  reader. The fix is one type that both writes and reads it (an enum with
-  parse and render, a struct that serializes both ways), and a round-trip test
-  that writes with one side and reads with the other.
+  reader. The fix is one type that both writes and reads it (an enum with parse
+  and render, a struct that serializes both ways), and a round-trip test that
+  writes with one side and reads with the other.
+
 - **Expressions:** every expression shape that recurs once identifiers are
   normalized: a path joined to a directory, a URL prefix, a lookup and the
-  failure check after it, a value built the same way in each test. A derivation written twice
-  is a rule with no name, and it drifts the first time one copy changes. Give it
-  a named function on the type it derives from.
-- **Facts in comments:** every identifier that a doc or comment names (an
-  error sentinel, a constant, a type, a method) and every rule that a doc
-  explains. Grep the changeset's comment lines, and the docs outside the code
-  (ADRs, invariant lists, READMEs), for each one. Two comments that say the
-  same thing about it are one fact with two copies, and the second copy goes
-  stale at the next change. Typical cases:
+  failure check after it, a value built the same way in each test. A derivation
+  written twice is a rule with no name, and it drifts the first time one copy
+  changes. Give it a named function on the type it derives from.
+
+- **Facts in comments:** every identifier that a doc or comment names (an error
+  sentinel, a constant, a type, a method) and every rule that a doc explains.
+  Grep the changeset's comment lines, and the docs outside the code (ADRs,
+  invariant lists, READMEs), for each one. Two comments that say the same thing
+  about it are one fact with two copies, and the second copy goes stale at the
+  next change. Typical cases:
+
   - an error contract repeated up a call chain, where the checker, its caller
     and the caller's caller each list the same sentinels and conditions;
   - why an error happens, explained on the sentinel and again on each function
@@ -274,24 +281,24 @@ greps over the changeset:
 
   Each fact gets one owner, which is the item that decides it. A sentinel owns
   what it means. The function that classifies an error owns which one it
-  returns, and in which order. The function that marks an error fatal owns
-  that it is fatal. Every other site points to the owner ("Errors as
-  checkPrefix does") and adds only its own facts. A design doc names where
-  the code enforces a rule, and does not repeat the code's reasoning.
+  returns, and in which order. The function that marks an error fatal owns that
+  it is fatal. Every other site points to the owner ("Errors as checkPrefix
+  does") and adds only its own facts. A design doc names where the code enforces
+  a rule, and does not repeat the code's reasoning.
 
-None of these shows up in a read for flow, because each copy is short and
-looks right where it stands.
+None of these shows up in a read for flow, because each copy is short and looks
+right where it stands.
 
-**Then look for generic data structures and algorithms written inline in
-domain code.** A mechanism hand-built inside a domain function (a cache, a
-queue, a traversal, a concurrency pattern) is two concerns in one body. The
-reader has to verify the mechanism before reaching the domain logic, and each
-copy carries its own subtle bugs. It hides in plain sight because it looks
-like ordinary code, in any language. Sweep the changeset for these shapes by
-what the code does, not by its names:
+**Then look for generic data structures and algorithms written inline in domain
+code.** A mechanism hand-built inside a domain function (a cache, a queue, a
+traversal, a concurrency pattern) is two concerns in one body. The reader has to
+verify the mechanism before reaching the domain logic, and each copy carries its
+own subtle bugs. It hides in plain sight because it looks like ordinary code, in
+any language. Sweep the changeset for these shapes by what the code does, not by
+its names:
 
 | What the body does | The generic thing it is |
-|---|---|
+| -- | -- |
 | keeps a table of in-progress or finished results per key; later callers wait for or reuse the first | memoize / compute once per key |
 | starts work for every item with at most N running, collecting results by index | ordered parallel map with bounded concurrency |
 | packs a request with a reply slot, sends it to the owner of some state, and waits with a timeout or cancellation | a call into an actor / mailbox |
@@ -303,47 +310,45 @@ what the code does, not by its names:
 | loops with a sleep that grows, a counter and a give-up condition | retry with backoff |
 | evicts by age or size, keeps the N most recent, merges overlapping ranges, keeps a sorted buffer | a cache, a ring buffer, an interval set, a priority queue |
 
-For each hit, look for an existing implementation in this order: the repo's
-own utility module, the language's standard library, then the ecosystem's
-well-known supplementary libraries. Some places to look:
+For each hit, look for an existing implementation in this order: the repo's own
+utility module, the language's standard library, then the ecosystem's well-known
+supplementary libraries. Some places to look:
 
 - Rust: std, `itertools`, `futures` (`buffered`, `join_all`), `tokio::sync`
   (`watch`, `oneshot`, `mpsc`), `once_cell` or `OnceLock`.
 - TypeScript/JavaScript: `Map`/`Set`, array and iterator helpers,
   `Promise.all`/`Promise.race`, `AbortSignal`, a small limiter such as
   `p-limit`.
-- Kotlin: stdlib collection operations (`groupBy`, `associateBy`,
-  `partition`), coroutines (`Channel`, `StateFlow`, `async`/`awaitAll`,
-  `Semaphore`, `withTimeout`).
-- C++: `<algorithm>` and ranges, `std::future`/`std::promise`,
-  `std::call_once`, the containers.
-- Python: `functools.cache`, `itertools`, `collections`, `asyncio`
-  (`gather`, `Semaphore`, `Queue`, `wait_for`).
-- Go: the standard library, `golang.org/x/sync` (`errgroup`,
-  `singleflight`).
+- Kotlin: stdlib collection operations (`groupBy`, `associateBy`, `partition`),
+  coroutines (`Channel`, `StateFlow`, `async`/`awaitAll`, `Semaphore`,
+  `withTimeout`).
+- C++: `<algorithm>` and ranges, `std::future`/`std::promise`, `std::call_once`,
+  the containers.
+- Python: `functools.cache`, `itertools`, `collections`, `asyncio` (`gather`,
+  `Semaphore`, `Queue`, `wait_for`).
+- Go: the standard library, `golang.org/x/sync` (`errgroup`, `singleflight`).
 
-Check that the semantics match before reusing one. For example, a
-single-flight helper shares only an in-flight call and forgets its result, so
-it is not memoization. If nothing fits, extract a small generic type or
-function into the repo's utility module, in the language's own idiom
-(generics, templates, type parameters). Give it its own tests, with the race
-checker or sanitizer the language offers and a fake clock for anything
-concurrent. Then replace every site in the changeset that has the same shape;
-one extraction usually finds two or three callers. The domain code left
-behind reads as its domain: a fetch, a decision, a state change.
+Check that the semantics match before reusing one. For example, a single-flight
+helper shares only an in-flight call and forgets its result, so it is not
+memoization. If nothing fits, extract a small generic type or function into the
+repo's utility module, in the language's own idiom (generics, templates, type
+parameters). Give it its own tests, with the race checker or sanitizer the
+language offers and a fake clock for anything concurrent. Then replace every
+site in the changeset that has the same shape; one extraction usually finds two
+or three callers. The domain code left behind reads as its domain: a fetch, a
+decision, a state change.
 
-**Then take every changed function apart by what its lines do.** The
-declaration inventory and the doc read both judge one line at a time, and a
-flow read judges each hunk on its own ("this edit is small"). None of them
-sees a function that grew a second job, one small edit at a time. List every
-function the changeset added or changed, with its whole body
-(`git diff HEAD -W` prints each touched function in full). Tag each block of
-statements with exactly one role:
+**Then take every changed function apart by what its lines do.** The declaration
+inventory and the doc read both judge one line at a time, and a flow read judges
+each hunk on its own ("this edit is small"). None of them sees a function that
+grew a second job, one small edit at a time. List every function the changeset
+added or changed, with its whole body (`git diff HEAD -W` prints each touched
+function in full). Tag each block of statements with exactly one role:
 
-- **step**: a call to a named thing that the function orders ("create the
-  file", "install the layers", "announce the path");
-- **detail**: building or configuring a value in place (builder chains,
-  format strings, filter parsing, closures handed to a library);
+- **step**: a call to a named thing that the function orders ("create the file",
+  "install the layers", "announce the path");
+- **detail**: building or configuring a value in place (builder chains, format
+  strings, filter parsing, closures handed to a library);
 - **decision**: a policy written inline (a heuristic, a string match on a
   message, a threshold, a classification of an error or a value);
 - **effect**: I/O, a write, a log line, a send, a state change;
@@ -352,134 +357,139 @@ statements with exactly one role:
 Each of these is a finding:
 
 1. **Steps and details mixed** (mixed altitude): the function orders named
-   steps, and between them sit blocks of detail. Extract each block into a
-   named `build_…`/`make_…` helper, and move its comment with it, so the
-   function reads as its steps.
+   steps, and between them sit blocks of detail. Extract each block into a named
+   `build_…`/`make_…` helper, and move its comment with it, so the function
+   reads as its steps.
 2. **A decision inside assembly or an effect** (concept mixing): the function
    builds a result or does I/O and also holds the rule that picks the branch.
-   The rule gets its own named predicate or classifier. Find the siblings
-   before you name it: when other rules of the same kind already live in named
-   helpers (`looks_like_range_limit`), a new inline rule
-   (`message.contains("batch")`) is a finding however short it is, and its
-   helper goes next to theirs.
+   The rule gets its own named predicate or classifier. Find the siblings before
+   you name it: when other rules of the same kind already live in named helpers
+   (`looks_like_range_limit`), a new inline rule (`message.contains("batch")`)
+   is a finding however short it is, and its helper goes next to theirs.
 3. **The diff added a role**: compare with `git show HEAD:<file>`. A function
-   that had one role and now has two is a finding even when every added line
-   is fine on its own. Growth is how these arrive.
-4. **No role of its own** (a pass-through): the whole body is one call,
-   passing the parameters on, reshaped at most, plus a trivial result
-   (`Ok(())`). One call is not the cleanest shape: it is two names for one
-   thing, and the reader hops for nothing. Grep the callee's callers: when
-   this function is the only one, merge them. Put the body where the name
-   is required (a trait method, a public entry point) and move the callee's
-   doc with it. Shrinkage is how these arrive: a refactor removes the
-   checks or conversions that surrounded the call and leaves the shell.
-   Mark such a function `pass-through` in the role list, never `step`. A
-   wrapper that adds something is not one: a default argument, a narrower
-   type, a lock, a trait or visibility boundary the callee cannot sit
+   that had one role and now has two is a finding even when every added line is
+   fine on its own. Growth is how these arrive.
+4. **No role of its own** (a pass-through): the whole body is one call, passing
+   the parameters on, reshaped at most, plus a trivial result (`Ok(())`). One
+   call is not the cleanest shape: it is two names for one thing, and the reader
+   hops for nothing. Grep the callee's callers: when this function is the only
+   one, merge them. Put the body where the name is required (a trait method, a
+   public entry point) and move the callee's doc with it. Shrinkage is how these
+   arrive: a refactor removes the checks or conversions that surrounded the call
+   and leaves the shell. Mark such a function `pass-through` in the role list,
+   never `step`. A wrapper that adds something is not one: a default argument, a
+   narrower type, a lock, a trait or visibility boundary the callee cannot sit
    behind itself.
 5. **A loop that computes and mutates**: one loop body both works out a
    collection or a selection (skipping, splitting into kept and missing,
-   grouping, looking a value up to decide) and changes state or does I/O
-   with what it found. Tells: a `match`/`if` whose arms mix a `push` onto a
-   local with a mutation of `self` or a call with effects; a local `Vec` or
-   counter filled beside a write; an `if` wrapping the whole body. The
-   selection is a pure computation with a standard name (`partition`,
-   `filter`, `filter_map`, `group_by`); take it out first, then run the
-   effect over its result. The shape hides from the table row below
-   ("copies a collection while partitioning") because the copy is never
-   returned: it is consumed in the same body. Mark the loop `decision +
-   effect, inline` in the role list.
+   grouping, looking a value up to decide) and changes state or does I/O with
+   what it found. Tells: a `match`/`if` whose arms mix a `push` onto a local
+   with a mutation of `self` or a call with effects; a local `Vec` or counter
+   filled beside a write; an `if` wrapping the whole body. The selection is a
+   pure computation with a standard name (`partition`, `filter`, `filter_map`,
+   `group_by`); take it out first, then run the effect over its result. The
+   shape hides from the table row below ("copies a collection while
+   partitioning") because the copy is never returned: it is consumed in the same
+   body. Mark the loop `decision + effect, inline` in the role list.
 
 Write one line per function: `name: roles`, and mark each role as inline or
-called (it goes through a named function). A function may combine roles as
-long as all but one are called: `match` on a named classifier, then assemble
-the result, is fine. Two roles written inline is the finding, and so is a
-function whose only role is a call to a callee it alone calls. Fix it, or list
-it as Noticed with the split you would make. This is a checklist like
-the declaration inventory; do it for the whole changeset, including functions
-whose diff is one line.
+called (it goes through a named function). A function may combine roles as long
+as all but one are called: `match` on a named classifier, then assemble the
+result, is fine. Two roles written inline is the finding, and so is a function
+whose only role is a call to a callee it alone calls. Fix it, or list it as
+Noticed with the split you would make. This is a checklist like the declaration
+inventory; do it for the whole changeset, including functions whose diff is one
+line.
 
 **Then read each doc comment against its signature, in this order.** A doc
 comment is part of the interface: it says what the function produces from what
-it is given, and what happens at the edges. "Documented item" means every
-`///` and every `//!`: a module doc is the doc of the largest item in the file
-and the first one a reader meets. Its first sentence says what the module
-decides or provides, in the reader's terms; a list of its mechanisms in the
-order they run is narration, and a word only an ADR defines is a finding. One that narrates the body instead
-("takes the anchor, walks back, stamps each row, then…") tells a caller nothing
-the signature did not, and goes stale the moment the body changes. The author
-cannot see this by comparing the comment to the body — a narrating comment
-always matches the body; matching is the smell. So for each documented item:
+it is given, and what happens at the edges. "Documented item" means every `///`
+and every `//!`: a module doc is the doc of the largest item in the file and the
+first one a reader meets. Its first sentence says what the module decides or
+provides, in the reader's terms; a list of its mechanisms in the order they run
+is narration, and a word only an ADR defines is a finding. One that narrates the
+body instead ("takes the anchor, walks back, stamps each row, then…") tells a
+caller nothing the signature did not, and goes stale the moment the body
+changes. The author cannot see this by comparing the comment to the body — a
+narrating comment always matches the body; matching is the smell. So for each
+documented item:
 
 1. Read the signature and the doc only. Write down what you expect to get back
    and when it errors.
+
 2. Only then read the body, and list three things from it, not from the doc:
+
    - the effects: every write, network call, spawn, delete, or state change
-     (grep the body for `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_|
-     record_|store_|remove_`);
-   - the exits: every `bail!`, `ensure!`, `?` with a context, or early return
-     a caller could cause (grep for `bail!|ensure!|context\(`);
-   - the sibling: another method whose difference from this one is one of
-     those effects.
-   Each effect must be in the doc's main clause, not in a participle ("…,
-   registering it when …"). Each caller-caused exit must be named. A sibling
-   must be pointed at from the one with the surprising effect. Two further
-   findings: your expectation was wrong or blank — the doc does not state the
-   contract; or the doc could only have been written after reading the body —
-   it names sort keys, tie-breaks or branch order that the caller does not
-   rely on, a SQL or regex mechanism, or
-   what the *caller* does with the result ("in the order they are tried").
-3. A precondition phrased as "must" ("it must exist and be enabled") is a
-   third: name the error instead.
+     (grep the body for
+     `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_| record_|store_|remove_`);
+   - the exits: every `bail!`, `ensure!`, `?` with a context, or early return a
+     caller could cause (grep for `bail!|ensure!|context\(`);
+   - the sibling: another method whose difference from this one is one of those
+     effects. Each effect must be in the doc's main clause, not in a participle
+     ("…, registering it when …"). Each caller-caused exit must be named. A
+     sibling must be pointed at from the one with the surprising effect. Two
+     further findings: your expectation was wrong or blank — the doc does not
+     state the contract; or the doc could only have been written after reading
+     the body — it names sort keys, tie-breaks or branch order that the caller
+     does not rely on, a SQL or regex mechanism, or what the *caller* does with
+     the result ("in the order they are tried").
+
+3. A precondition phrased as "must" ("it must exist and be enabled") is a third:
+   name the error instead.
+
 4. Narration has a vocabulary: sequence and branching words, which a body has
    and a contract does not. Grep every doc line in the changeset for them —
-   `grep -nE '//[/!].*\b(then|first when|on a miss|in the order|after that|
-   before that|once |, or,)\b'` — and treat each hit as a finding until it is
-   shown to state what comes out rather than how.
+   `grep -nE '//[/!].*\b(then|first when|on a miss|in the order|after that| before that|once |, or,)\b'`
+   — and treat each hit as a finding until it is shown to state what comes out
+   rather than how.
+
 5. A rewrite is the newest text in the changeset and the only text nobody
    re-read. Before the report, run step 1 on every doc you rewrote as if seen
    cold, and run the grep of step 4 over it; a rewrite that needs a second
    reading, or that satisfied a rule by cramming the mechanism into a clause,
    goes back. Presence of the effects and exits is necessary, not sufficient.
    Two shapes pass every rule above and still read as nonsense, so check for
-   them by form: a stand-in main verb (gives, makes, handles, deals with, matches,
-   verifies) with
-   the real contract in an appositive after a colon ("gives block its state
-   and its portal transactions: the candidates that…, applied … on state"),
-   and an adjective or participle with no referent in the doc or signature
-   ("a changed entry": changed from what? "applied on state": what is?). The
-   cause is usually that the function's result has no name, because it is
-   written into a parameter instead of returned; make it return the result
-   and the verb ("returns X and Y") writes itself.
-6. A doc must also parse. A sentence compressed far enough turns
-   ungrammatical while every word in it is right, so it passes every rule
-   above. "Whose buckets the export reports them as." on `enum Hostnames`
-   is the type of it. Check every doc in the changeset, rewritten or not:
+   them by form: a stand-in main verb (gives, makes, handles, deals with,
+   matches, verifies) with the real contract in an appositive after a colon
+   ("gives block its state and its portal transactions: the candidates that…,
+   applied … on state"), and an adjective or participle with no referent in the
+   doc or signature ("a changed entry": changed from what? "applied on state":
+   what is?). The cause is usually that the function's result has no name,
+   because it is written into a parameter instead of returned; make it return
+   the result and the verb ("returns X and Y") writes itself.
+
+6. A doc must also parse. A sentence compressed far enough turns ungrammatical
+   while every word in it is right, so it passes every rule above. "Whose
+   buckets the export reports them as." on `enum Hostnames` is the type of it.
+   Check every doc in the changeset, rewritten or not:
+
    - **Grep for free relatives:**
-     `grep -nE '(//[/!]|#)\s*(Whose|What|Which|Where|When|How|Why)\b'`.
-     "What the puller asks for" or "Where a person's aw-server stands" is a
-     sound noun phrase: the thing, place or time that the clause
-     describes. A hit is a finding when the question word cannot head one.
-     "Whose X …" and "Which X …" almost never can, and they read as a
-     question with its question mark missing.
-   - **Match the question word to the value.** Name the kind of value the
-     item holds or returns (a hostname, a duration, a path). "Whose" points
-     to an owner, "when" to a time, "how long" to a duration, "where" to a
-     place or address. A mismatch, such as "whose" on a name, is a finding.
+     `grep -nE '(//[/!]|#)\s*(Whose|What|Which|Where|When|How|Why)\b'`. "What
+     the puller asks for" or "Where a person's aw-server stands" is a sound noun
+     phrase: the thing, place or time that the clause describes. A hit is a
+     finding when the question word cannot head one. "Whose X …" and "Which X …"
+     almost never can, and they read as a question with its question mark
+     missing.
+
+   - **Match the question word to the value.** Name the kind of value the item
+     holds or returns (a hostname, a duration, a path). "Whose" points to an
+     owner, "when" to a time, "how long" to a duration, "where" to a place or
+     address. A mismatch, such as "whose" on a name, is a finding.
+
    - **Read it complete.** Put the item in front of it: "`Hostnames`: whose
-     buckets the export reports them as." Every finding below is a
-     rewrite:
+     buckets the export reports them as." Every finding below is a rewrite:
+
      - it does not read as plain English;
      - a clause trails off with a preposition and a pronoun ("… them as");
      - a pronoun has two referents, or none.
 
-     A type or field gets a noun phrase ("The hostname each exported bucket
-     is reported under."), and a function gets a verb first.
-7. A doc must read as plain English on the first pass. A doc can parse and
-   still be compressed: every rule above is met, but the reader has to
-   unpack it like code. The user rejects this style outright as "AI slop".
-   They prefer a longer doc in simple sentences. This one passes steps 1–6
-   and fails here:
+     A type or field gets a noun phrase ("The hostname each exported bucket is
+     reported under."), and a function gets a verb first.
+
+7. A doc must read as plain English on the first pass. A doc can parse and still
+   be compressed: every rule above is met, but the reader has to unpack it like
+   code. The user rejects this style outright as "AI slop". They prefer a longer
+   doc in simple sentences. This one passes steps 1–6 and fails here:
 
    ```
    // Returns the base of a portal tx spending parent's portal output: the pending
@@ -490,75 +500,74 @@ always matches the body; matching is the smell. So for each documented item:
    // under it. Otherwise, the base is the confirmed tip and keeps no pending tx. ✓
    ```
 
-   Check every doc and every `//` comment in the changeset for these tells.
-   Each hit is a finding:
-   - **A colon or semicolon inside a sentence** that joins a second idea
-     onto the first ("Returns X: the Y that…", "…; false when…"). Make it two
-     sentences. A colon that introduces a list stays, and so does one that
-     lists the items its sentence announces, even two of them, separated by
-     commas: "two kinds of listed tx stay out: a tx in a block that the
-     portal applied, and a tx that a recent block conflicted". Splitting that
-     into "One is … The other is …" sentences reads worse, so never do it.
-   - **An appositive or a reduced clause standing in for a sentence**:
-     "…, the one it extends", "…, a prefix of the chain", "…, whose X…",
-     "…, keeping none". Write it as a sentence with a subject and a verb.
-   - **A parameter or field name used as a noun inside a clause**, so that
-     the sentence reads as broken English ("the pending portal tx parent
-     is", "the room tx leaves", "the weight out adds"). Put "that" or "the
-     given" in front of the name, or restructure the sentence.
-   - **A noun stack or a missing verb or article**: "a fee for the next
-     block within the ceiling", "more settled than", "of more varint bytes
-     than a zero's". Write the verb and the articles out.
-   - **"Returns an error if…"** for the error contract. The user's house
-     style is "Errors when…" ("Errors with ErrX when…", and "Errors on any
-     of these:" before a bulleted list of three or more conditions). It
-     overrides Google style here. Never rewrite an existing "Errors when…"
-     doc into the Google form.
+   Check every doc and every `//` comment in the changeset for these tells. Each
+   hit is a finding:
+
+   - **A colon or semicolon inside a sentence** that joins a second idea onto
+     the first ("Returns X: the Y that…", "…; false when…"). Make it two
+     sentences. A colon that introduces a list stays, and so does one that lists
+     the items its sentence announces, even two of them, separated by commas:
+     "two kinds of listed tx stay out: a tx in a block that the portal applied,
+     and a tx that a recent block conflicted". Splitting that into "One is … The
+     other is …" sentences reads worse, so never do it.
+   - **An appositive or a reduced clause standing in for a sentence**: "…, the
+     one it extends", "…, a prefix of the chain", "…, whose X…", "…, keeping
+     none". Write it as a sentence with a subject and a verb.
+   - **A parameter or field name used as a noun inside a clause**, so that the
+     sentence reads as broken English ("the pending portal tx parent is", "the
+     room tx leaves", "the weight out adds"). Put "that" or "the given" in front
+     of the name, or restructure the sentence.
+   - **A noun stack or a missing verb or article**: "a fee for the next block
+     within the ceiling", "more settled than", "of more varint bytes than a
+     zero's". Write the verb and the articles out.
+   - **"Returns an error if…"** for the error contract. The user's house style
+     is "Errors when…" ("Errors with ErrX when…", and "Errors on any of these:"
+     before a bulleted list of three or more conditions). It overrides Google
+     style here. Never rewrite an existing "Errors when…" doc into the Google
+     form.
    - **A trailing comment on a field or constant that is longer than a few
-     words.** Move it to its own line above the item and write it as
-     sentences.
+     words.** Move it to its own line above the item and write it as sentences.
 
    Grep the changeset's comment lines as a first pass. The read-aloud test
-   decides: a comment that a colleague would have to read twice is a
-   finding.
+   decides: a comment that a colleague would have to read twice is a finding.
 
    ```sh
    git diff HEAD -U0 | grep -nE '^\+.*//.*([a-z]: [a-z]|; |, (the one|a prefix|whose|keeping|leaving)\b|\bReturns an error\b)'
    ```
 
-   Neither the two-sentence target nor the two-to-three-line limit may be met
-   by compression. If the plain version is longer, keep the plain version. If
-   it is much longer, the item probably does too much (§3, the long-comment
-   rule).
+   Neither the two-sentence target nor the two-to-three-line limit may be met by
+   compression. If the plain version is longer, keep the plain version. If it is
+   much longer, the item probably does too much (§3, the long-comment rule).
 
-Write the fix in Google developer documentation style for API reference
-comments (https://developers.google.com/style/api-reference-comments):
-present tense, third person, a verb first — `Returns …` for a value, `Gets …`
-for a getter, `Checks whether …` for a boolean, `Sets …` / `Updates …` /
-`Deletes …` for an effect, `Creates …` for a constructor — and never "this
-method" or the method's own name. The one exception to Google style is the
-error contract: it reads "Errors when …", not "Returns an error if …".
-A parameter description starts with "The"
-or "A"; a boolean reads "True if …; false otherwise." A field is a brief noun
-phrase that never opens with the field's own name: `// pending is the committed
-snapshot…` above `pending *pendingSet` is the identifier read back, so the
-phrase starts at what the field holds (`// The committed snapshot of the
-mempool view…`), and a trailing `// Wraps since prevState.` on `wraps` is the
-same smell in one line. No declaration's doc opens with its own name —
-function, method, type, constant or field: the comment sits on the declaration,
-so the name is duplication however much Go's `Name verbs…` convention asks for
-it. Only a linter rule the repo enables (revive `exported`, stylecheck
-ST1020–ST1022) keeps it, as a §2 rule. And a field comment says why the field
-is there — who reads it, or what would go wrong without it — not only what it
-holds: `// The outputs paying a tail pkScript; a spend of one is a portal tx`
-narrates the set, `…: an input names only the outpoint it spends, so this is
-how the scan finds a key rotation` earns it. Survey each field comment for its
-why the way step 2 surveys a function doc for its effects; a field is the one
-declaration whose reason the signature cannot carry. A type's first sentence
-states its purpose without repeating its name.
+Write the fix in Google developer documentation style for API reference comments
+(https://developers.google.com/style/api-reference-comments): present tense,
+third person, a verb first — `Returns …` for a value, `Gets …` for a getter,
+`Checks whether …` for a boolean, `Sets …` / `Updates …` / `Deletes …` for an
+effect, `Creates …` for a constructor — and never "this method" or the method's
+own name. The one exception to Google style is the error contract: it reads
+"Errors when …", not "Returns an error if …". A parameter description starts
+with "The" or "A"; a boolean reads "True if …; false otherwise." A field is a
+brief noun phrase that never opens with the field's own name:
+`// pending is the committed snapshot…` above `pending *pendingSet` is the
+identifier read back, so the phrase starts at what the field holds
+(`// The committed snapshot of the mempool view…`), and a trailing
+`// Wraps since prevState.` on `wraps` is the same smell in one line. No
+declaration's doc opens with its own name — function, method, type, constant or
+field: the comment sits on the declaration, so the name is duplication however
+much Go's `Name verbs…` convention asks for it. Only a linter rule the repo
+enables (revive `exported`, stylecheck ST1020–ST1022) keeps it, as a §2 rule.
+And a field comment says why the field is there — who reads it, or what would go
+wrong without it — not only what it holds:
+`// The outputs paying a tail pkScript; a spend of one is a portal tx` narrates
+the set,
+`…: an input names only the outpoint it spends, so this is how the scan finds a key rotation`
+earns it. Survey each field comment for its why the way step 2 surveys a
+function doc for its effects; a field is the one declaration whose reason the
+signature cannot carry. A type's first sentence states its purpose without
+repeating its name.
 
-**Check doc openings mechanically, not by reading**: the eye skips a name it
-has just read on the line below, and the `Name verbs…` habit writes the smell
+**Check doc openings mechanically, not by reading**: the eye skips a name it has
+just read on the line below, and the `Name verbs…` habit writes the smell
 fluently. For every declaration with a doc or trailing comment, compare the
 comment's first word to the declared name, case-insensitively for fields, and
 rewrite every match. Exact: a `go/ast` walk over `FuncDecl`, `GenDecl` specs and
@@ -574,150 +583,148 @@ awk '/^[[:space:]]*\/\/ / { if (c=="") { c=$2; sub(/[:,.]$/, "", c) }; next }
 grep -nP '(?i)^\s+([A-Za-z_]\w*)\b[^/]*//\s*\1\b' $files          # trailing comment on the field line
 ```
 
-The field awk also fires on an implicit-iota entry of a `const (` block; that
-is a finding too. Everything the three commands print is a finding. Other
+The field awk also fires on an implicit-iota entry of a `const (` block; that is
+a finding too. Everything the three commands print is a finding. Other
 languages: the same comparison over functions and `struct`/`class` members
 (`/// foo: …` above `foo:` in Rust, a `#:` or attribute docstring in Python).
 Fix all of them in one pass; one left over teaches the next reader the habit.
 
-**An entity's doc states its place in the system, never its interface.** A
-type, trait or module doc says what the thing is the one way to, who reaches
-what through it, and what it keeps the rest from knowing: "The only interface for
+**An entity's doc states its place in the system, never its interface.** A type,
+trait or module doc says what the thing is the one way to, who reaches what
+through it, and what it keeps the rest from knowing: "The only interface for
 reading coverage and writing chunks. Because everything goes through it, only
-the store has to keep the rows and the coverage in agreement." It never lists its fields ("One run: the chain,
-its connections, its block estimator"), its methods ("adds one, finds one by
-reference, lists them, slices one") or its subcommands: those are the
-declaration read back, they say nothing about why the thing exists, and they
-go stale with every change to the interface — an encapsulation leak in prose.
-An actor is placed by what it serves and hides; a state or message type by
-who produces it and who consumes it for what; an interface by what an
-implementor is trusted with. Two lines, rarely three; a worked example
-belongs in the ADR or the module doc. Survey it separately: extract every
-doc attached to a `struct`, `enum`, `trait`, `type` or module and read each
-for a list of verbs or of members — the flow read walks straight past them.
+the store has to keep the rows and the coverage in agreement." It never lists
+its fields ("One run: the chain, its connections, its block estimator"), its
+methods ("adds one, finds one by reference, lists them, slices one") or its
+subcommands: those are the declaration read back, they say nothing about why the
+thing exists, and they go stale with every change to the interface — an
+encapsulation leak in prose. An actor is placed by what it serves and hides; a
+state or message type by who produces it and who consumes it for what; an
+interface by what an implementor is trusted with. Two lines, rarely three; a
+worked example belongs in the ADR or the module doc. Survey it separately:
+extract every doc attached to a `struct`, `enum`, `trait`, `type` or module and
+read each for a list of verbs or of members — the flow read walks straight past
+them.
 
-A doc comment is two sentences unless it earns a third: what comes out and
-what it does, then the errors a caller can cause. Its first clause says why
-the item is called, in the caller's terms, and a reader who finishes it still
-not knowing why the call exists has read a useless comment whatever else it
-lists ("adds every output of tx paying a tail pkScript to the tracked
-outpoints" tells the mechanism; "remembers tx's outputs to tail pkScripts so
-the scan can recognise a later spend by its input alone" tells the reason).
-One or two lines is the target; a doc that needs more to say why is
-describing a function that does too much, so refactor before rewording. Leave out what the types,
-defaults, or the type's own doc already say, and infrastructure failures (the
-database, the network), which every method has. If the rewrite is longer than
-the signature block below it, cut before shipping.
+A doc comment is two sentences unless it earns a third: what comes out and what
+it does, then the errors a caller can cause. Its first clause says why the item
+is called, in the caller's terms, and a reader who finishes it still not knowing
+why the call exists has read a useless comment whatever else it lists ("adds
+every output of tx paying a tail pkScript to the tracked outpoints" tells the
+mechanism; "remembers tx's outputs to tail pkScripts so the scan can recognise a
+later spend by its input alone" tells the reason). One or two lines is the
+target; a doc that needs more to say why is describing a function that does too
+much, so refactor before rewording. Leave out what the types, defaults, or the
+type's own doc already say, and infrastructure failures (the database, the
+network), which every method has. If the rewrite is longer than the signature
+block below it, cut before shipping.
 
 **A doc names a value by what it is at the signature.** A parameter is bare
 (`want`); a field is its path (`Query.need`); a method is its path
 (`Query::call`). Never the option or flag that fed the value (`--min-sources`
-for `Query.need`): that leaks another layer's vocabulary into this one, and
-the reader of this layer has no way to find it. And a bare name that is
-neither a parameter nor a sibling field reads as a missing or renamed
-argument, which is a bug report against the doc. Grep the changeset's doc
-lines for flag names — `grep -nE '//[/!].*\B--[a-z]'` — outside the module
-that parses them.
+for `Query.need`): that leaks another layer's vocabulary into this one, and the
+reader of this layer has no way to find it. And a bare name that is neither a
+parameter nor a sibling field reads as a missing or renamed argument, which is a
+bug report against the doc. Grep the changeset's doc lines for flag names —
+`grep -nE '//[/!].*\B--[a-z]'` — outside the module that parses them.
 
 **A doc stays at its own layer.** It states what the item is or does at its
 interface. Two other layers leak into it:
+
 - **from above, the callers':** who calls it ("as the service manager, the
-  puller's ssh key or a developer starts it"), or why a caller wants it ("for
-  a phone, whose own hostname is its model name");
+  puller's ssh key or a developer starts it"), or why a caller wants it ("for a
+  phone, whose own hostname is its model name");
 - **from below, the implementation's:** how the work gets done ("to stdout,
   read-only", "logging to the event log", "serves the database").
 
 One test finds both. Would the sentence stay true if the callers changed? Would
-it stay true if the implementation changed without changing what the item
-does? A sentence that fails either one belongs to that other layer. The
-caller's reason goes in the caller's doc or the ADR, and the mechanism goes in
-a `//` comment beside the code that does it. What is left is often one line:
+it stay true if the implementation changed without changing what the item does?
+A sentence that fails either one belongs to that other layer. The caller's
+reason goes in the caller's doc or the ADR, and the mechanism goes in a `//`
+comment beside the code that does it. What is left is often one line:
 `--hostname`, "Overrides every bucket's hostname"; `run`, "Runs as a console
 app". Help text (a clap doc, a `--help` line, a subcommand's about) is where
 this leaks most: it is written beside the code, and it ends up retelling the
 code. Survey every interface doc (subcommand, flag, public item, unit
 `Description=`) with the test, sentence by sentence. Naming who reads a value
-stays legitimate ("read by scripts/pocket_id.py"); retelling why they read it
-or what they do with it does not.
+stays legitimate ("read by scripts/pocket_id.py"); retelling why they read it or
+what they do with it does not.
 
-**One kind of mechanism passes the own-layer test.** Such a sentence describes
-a check that the function runs on its own result, and it uses the result's
-words, so it reads like part of the promise. Examples are "each record is
-checked against its source and dropped when it does not match", "every
-returned record matches its source" and "the input is not taken on faith". A
-doc that says what comes out ("Returns the records that match the filter")
-already promises valid records. How the function keeps that promise is its
-own business. Such a sentence only makes sense if the reader imagines a
-weaker implementation that skips the check. Test each sentence of a function
-doc with one question: would the caller act differently knowing this? The facts listed under "A doc earns its place" pass
-this test, and an ordering is one of them. Write an ordering as what the
-caller sees, not as the steps that produce it. Grep the changeset's doc lines for
-`checked|verified|matches|on faith` and test each hit.
+**One kind of mechanism passes the own-layer test.** Such a sentence describes a
+check that the function runs on its own result, and it uses the result's words,
+so it reads like part of the promise. Examples are "each record is checked
+against its source and dropped when it does not match", "every returned record
+matches its source" and "the input is not taken on faith". A doc that says what
+comes out ("Returns the records that match the filter") already promises valid
+records. How the function keeps that promise is its own business. Such a
+sentence only makes sense if the reader imagines a weaker implementation that
+skips the check. Test each sentence of a function doc with one question: would
+the caller act differently knowing this? The facts listed under "A doc earns its
+place" pass this test, and an ordering is one of them. Write an ordering as what
+the caller sees, not as the steps that produce it. Grep the changeset's doc
+lines for `checked|verified|matches|on faith` and test each hit.
 
-**A doc earns its place by a fact the code does not show.** Read each doc
-beside its item and ask what the reader learns beyond the signature. A
-constructor doc that names its parameters back ("Creates a runner over
-`store` and `sources`, paced for `cadence`" on `new(store, sources,
-cadence)`), a field doc that names its type back ("The source." on `source:
-SourceId`), a getter doc that names the method back ("Gets the label.") is a
-tautology: delete it, do not reword it — verb-first restatement is still
-restatement. The same goes for a doc on a method whose contract the language
-or a standard interface already fixes, such as a `Compare` that returns
--1, 0 or +1, or a `String`. Any rewording of such a doc either restates that
-contract or describes the mechanism. A clause that follows from the one before it is a
-tautology too ("it is never mutated; a change replaces it whole": the second
-is the first), and what earns the line is the reason for the first. A claim
-that every deterministic function makes ("the same on every run", "every
-process agrees on it") is one as well. Grep for `on every|agrees|every run`.
-When the caller relies on getting the same result for the same inputs,
-whatever order or source they came from, write "in a canonical order". What stays is a unit, an ordering, a None or
-panic condition,
-an inclusive bound, where a value comes from, or who consumes it. Survey it
-by listing every doc of a sentence or less and every constructor doc next to
-its declaration; tautology lives in the short ones. Restating what sits in
-another file counts too: a field doc that lists the fields of its type
-("Fetching: chunk size, requests in flight, finality" on `fetch:
-FetchTuning`), a method doc that lists what its return type holds — that is
-duplication, and it drifts the first time the other file changes. Exceptions that stay
-when plain: user-facing help text (clap), columns a doc-capturing table macro
-requires, and associated types of a trait. No missing-docs lint means an
-undocumented item costs nothing.
+**A doc earns its place by a fact the code does not show.** Read each doc beside
+its item and ask what the reader learns beyond the signature. A constructor doc
+that names its parameters back ("Creates a runner over `store` and `sources`,
+paced for `cadence`" on `new(store, sources, cadence)`), a field doc that names
+its type back ("The source." on `source: SourceId`), a getter doc that names the
+method back ("Gets the label.") is a tautology: delete it, do not reword it —
+verb-first restatement is still restatement. The same goes for a doc on a method
+whose contract the language or a standard interface already fixes, such as a
+`Compare` that returns -1, 0 or +1, or a `String`. Any rewording of such a doc
+either restates that contract or describes the mechanism. A clause that follows
+from the one before it is a tautology too ("it is never mutated; a change
+replaces it whole": the second is the first), and what earns the line is the
+reason for the first. A claim that every deterministic function makes ("the same
+on every run", "every process agrees on it") is one as well. Grep for
+`on every|agrees|every run`. When the caller relies on getting the same result
+for the same inputs, whatever order or source they came from, write "in a
+canonical order". What stays is a unit, an ordering, a None or panic condition,
+an inclusive bound, where a value comes from, or who consumes it. Survey it by
+listing every doc of a sentence or less and every constructor doc next to its
+declaration; tautology lives in the short ones. Restating what sits in another
+file counts too: a field doc that lists the fields of its type ("Fetching: chunk
+size, requests in flight, finality" on `fetch: FetchTuning`), a method doc that
+lists what its return type holds — that is duplication, and it drifts the first
+time the other file changes. Exceptions that stay when plain: user-facing help
+text (clap), columns a doc-capturing table macro requires, and associated types
+of a trait. No missing-docs lint means an undocumented item costs nothing.
 
-**Every noun in a doc names its referent.** A project uses one word for
-several things — "request" for a JSON-RPC request, a planner's request and a
-fetcher's ask; "call" for a contract call and an RPC method; "logs" for EVM
-logs and diagnostics; "lists" for chain lists and token lists; "chunk" for a
-log range, a halver's unit and a hypertable's — and a doc that says the bare
-word makes the reader guess. Say which: "JSON-RPC requests in flight",
-"reports on stderr", "the configured token lists". List the project's
-overloaded nouns once, grep the changeset's doc lines for each, and rewrite
-every hit that does not disambiguate. The same sweep catches a stale name
-(a type renamed, a mechanism removed) and a claim the code no longer makes
-(an exemption, a replacement, a fallback); check each against the code, not
-against memory. An identifier is a noun too: a method or field whose name is
-also a word — `commit`, `retry`, `start`, `next`, `loop` — written bare in
-prose ("and commit recomputes it") reads as the word, so it carries its
-qualifier (`pendingUpdate.commit`, `blockStream.retry`) wherever it is not
-the doc's own subject. Grep the changeset's comment lines for the project's
-word-named identifiers and qualify every hit that means the identifier. And a
-verb with a settled technical meaning — commit, publish, flush, lock, seal,
-sign — applied to an operation that does none of it ("commit the pending set",
-for a state that is neither persisted nor bound to anything; "publish", when
-nobody gains access) misleads the same way, and the misuse usually starts at a
-method name: rename the operation, and the prose follows. Before proposing the
-new name, say in one sentence what the operation does and pick the plainest
-verb for that ("apply", for an update that takes effect). Include such verbs in
-the overloaded-noun list.
+**Every noun in a doc names its referent.** A project uses one word for several
+things — "request" for a JSON-RPC request, a planner's request and a fetcher's
+ask; "call" for a contract call and an RPC method; "logs" for EVM logs and
+diagnostics; "lists" for chain lists and token lists; "chunk" for a log range, a
+halver's unit and a hypertable's — and a doc that says the bare word makes the
+reader guess. Say which: "JSON-RPC requests in flight", "reports on stderr",
+"the configured token lists". List the project's overloaded nouns once, grep the
+changeset's doc lines for each, and rewrite every hit that does not
+disambiguate. The same sweep catches a stale name (a type renamed, a mechanism
+removed) and a claim the code no longer makes (an exemption, a replacement, a
+fallback); check each against the code, not against memory. An identifier is a
+noun too: a method or field whose name is also a word — `commit`, `retry`,
+`start`, `next`, `loop` — written bare in prose ("and commit recomputes it")
+reads as the word, so it carries its qualifier (`pendingUpdate.commit`,
+`blockStream.retry`) wherever it is not the doc's own subject. Grep the
+changeset's comment lines for the project's word-named identifiers and qualify
+every hit that means the identifier. And a verb with a settled technical meaning
+— commit, publish, flush, lock, seal, sign — applied to an operation that does
+none of it ("commit the pending set", for a state that is neither persisted nor
+bound to anything; "publish", when nobody gains access) misleads the same way,
+and the misuse usually starts at a method name: rename the operation, and the
+prose follows. Before proposing the new name, say in one sentence what the
+operation does and pick the plainest verb for that ("apply", for an update that
+takes effect). Include such verbs in the overloaded-noun list.
 
-**A normal comment is two to three lines**, doc or not. Longer is not a
-style slip to trim; it is a smell with one of two causes, and the fix goes to
-the cause, not the prose: (a) the thing commented is not structured well — it
-does several jobs, its parameters need explaining one by one, its edge cases
-outnumber its purpose — so the comment is carrying what the code's shape
-should; or (b) the comment describes the wrong thing — the body's steps, the
-mechanism, the history, the caller — instead of the contract. Shorten by
-fixing (a) or (b); a comment cut in half that still narrates is still the
-smell. The report names which cause it was.
+**A normal comment is two to three lines**, doc or not. Longer is not a style
+slip to trim; it is a smell with one of two causes, and the fix goes to the
+cause, not the prose: (a) the thing commented is not structured well — it does
+several jobs, its parameters need explaining one by one, its edge cases
+outnumber its purpose — so the comment is carrying what the code's shape should;
+or (b) the comment describes the wrong thing — the body's steps, the mechanism,
+the history, the caller — instead of the contract. Shorten by fixing (a) or (b);
+a comment cut in half that still narrates is still the smell. The report names
+which cause it was.
 
 ```
 /// The registered chain `chain_ref` names, registering it from the
@@ -744,7 +751,7 @@ smell. The report names which cause it was.
 ## 4. The catalog
 
 | Smell | Tell | Usual fix |
-|---|---|---|
+| -- | -- | -- |
 | **Duplication** | Same shape twice non-trivially, or three times at all; two sites you'd have to edit together | Extract the shared thing. Merge only what changes *for the same reason* — coincidental resemblance stays apart. |
 | **Unnamed tuple** | `return (a, b)`, positional bag, dict with implicit keys, `result[0]` at call sites | Named record / dataclass / struct / NamedTuple |
 | **Boolean blindness** | `f(true, false)` unreadable at the call site; a bool param that only picks a branch | Enum, or two named functions. Kill the flag param. |
@@ -782,7 +789,8 @@ smell. The report names which cause it was.
 | **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence (a colon that lists the items its sentence announces is fine), an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Returns an error if…" instead of the house "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Errors when…" for the error contract, a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order that the caller does not rely on; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
-Not exhaustive. If it reads badly and you can say why in one sentence, it counts.
+Not exhaustive. If it reads badly and you can say why in one sentence, it
+counts.
 
 ## 5. Triage
 
@@ -790,19 +798,23 @@ Every finding lands in exactly one bucket.
 
 **FIX** — do it now, no asking. Mechanical, behaviour-preserving, one obviously
 correct answer, blast radius you can see and verify: extract a function, name a
-tuple, replace a bool param with an enum, collapse a duplicate, introduce the type
-a data clump was already implying, delete dead flexibility, extract inline
-generic machinery into the repo's existing utility module (the new file there
-is part of the fix, not a reason to ask).
+tuple, replace a bool param with an enum, collapse a duplicate, introduce the
+type a data clump was already implying, delete dead flexibility, extract inline
+generic machinery into the repo's existing utility module (the new file there is
+part of the fix, not a reason to ask).
 
 **ASK** — one batched round of questions (`AskUserQuestion`), never a drip feed.
 Ask when:
-- it changes a public/exported/published API, or anything with callers you can't enumerate
-- the fix requires inventing a domain concept whose meaning isn't derivable from the code
+
+- it changes a public/exported/published API, or anything with callers you can't
+  enumerate
+- the fix requires inventing a domain concept whose meaning isn't derivable from
+  the code
 - two or more designs are genuinely defensible with different tradeoffs
 - it needs a new file/module, or spans package boundaries
 - the correct fix contradicts a written style rule
-- the fix is large enough that the user might reasonably prefer a follow-up commit
+- the fix is large enough that the user might reasonably prefer a follow-up
+  commit
 
 Present each as: what's wrong → the options → which you'd pick. Don't ask open
 questions you can answer yourself.
@@ -825,17 +837,17 @@ them enough to mention. Before fixing it:
 
 1. Sweep the whole changeset for every sibling of that kind. `grep` for the
    shape, not the identifier: other `(A, B)` returns, other `&[&str]` fields,
-   other magic-string branches. Hand the sweep to a fresh agent (§3.0) that
-   gets the kind, not the instance. It also re-runs, over the files the smell
-   is in, the generic-machinery table and the literal and expression greps:
-   a pointed smell usually has neighbours of another kind.
+   other magic-string branches. Hand the sweep to a fresh agent (§3.0) that gets
+   the kind, not the instance. It also re-runs, over the files the smell is in,
+   the generic-machinery table and the literal and expression greps: a pointed
+   smell usually has neighbours of another kind.
 2. Fix the class in one pass.
 3. Report the sweep — how many you found, where — so the count answers "did you
    get them all?" before it is asked.
 
 Fixing only what was pointed at guarantees another round, and teaches the user
-that pointing is how this gets done. For a doc, rewording only the doc that
-the user cited counts as fixing only what was pointed at.
+that pointing is how this gets done. For a doc, rewording only the doc that the
+user cited counts as fixing only what was pointed at.
 
 When the pointed-at smell is one a previous run of this skill should have
 caught, the report also names, before the fix, which survey step would have
@@ -844,20 +856,22 @@ will repeat.
 
 ## 6. Fixing outside the changeset
 
-Allowed and often required — the smell's *cause* frequently sits in code the diff
-didn't touch: the other copy of the duplicated block, the shared helper the new
-call site now needs, the type that should have existed before the clump appeared,
-the function whose signature the new caller made unwieldy.
+Allowed and often required — the smell's *cause* frequently sits in code the
+diff didn't touch: the other copy of the duplicated block, the shared helper the
+new call site now needs, the type that should have existed before the clump
+appeared, the function whose signature the new caller made unwieldy.
 
 Bounded by:
+
 - **Only where the fix belongs.** Following the root cause outward: yes. Editing
-  unrelated smells you passed on the way: no, they're not in scope — mention them
-  in the report if they're bad.
-- **Update every caller.** Grep before you change a signature; leave nothing broken.
+  unrelated smells you passed on the way: no, they're not in scope — mention
+  them in the report if they're bad.
+- **Update every caller.** Grep before you change a signature; leave nothing
+  broken.
 - **Refactors stay pure.** No behaviour changes riding along in a rename commit.
-- **Verify.** Run the project's tests/typecheck/lint if they exist. If they don't,
-  leave one runnable assert-level check behind for any non-trivial logic you
-  restructured. Report honestly when something fails.
+- **Verify.** Run the project's tests/typecheck/lint if they exist. If they
+  don't, leave one runnable assert-level check behind for any non-trivial logic
+  you restructured. Report honestly when something fails.
 - **Pin before you move.** A fix that touches a URL, a path, an encoding, a
   parser, a default, or who may do what is where a refactor changes behaviour
   without anyone noticing. Examples: a relative redirect that now resolves
@@ -869,8 +883,8 @@ Bounded by:
 
 ## 7. Keeping a smell on purpose
 
-Legitimate when the smell is imposed from outside or the cure costs more than the
-disease, and the reason must be one of these — the list is exhaustive, not
+Legitimate when the smell is imposed from outside or the cure costs more than
+the disease, and the reason must be one of these — the list is exhaustive, not
 illustrative: a framework-dictated signature, a serialization shape you don't
 own, generated code, a measured hot path, an FFI boundary, a deliberate mirror
 of an external spec, or a written rule from §2 that mandates it.
@@ -888,16 +902,16 @@ reasons, however reasonable they sound in the moment:
   and the catalog has no size threshold
 - "renaming would churn the diff" — churn is the cost of the fix, not a reason
   against it
-- "this file's diff is one line" — a touched file is in the changeset whole (§3);
-  a mechanical class is fixed everywhere it lives, and a commit split isolates
-  the churn
+- "this file's diff is one line" — a touched file is in the changeset whole
+  (§3); a mechanical class is fixed everywhere it lives, and a commit split
+  isolates the churn
 
 If you find yourself writing a justification longer than the fix, the fix was
 smaller than the argument against it. Just do it.
 
 Never "it's fine" or "no time". Leave a comment in the file's comment syntax —
-**a Keep that exists only in the report is not a Keep, it is a silent skip**, and
-the comment is what makes it reviewable by the next person:
+**a Keep that exists only in the report is not a Keep, it is a silent skip**,
+and the comment is what makes it reviewable by the next person:
 
 ```
 # smell: 7-arg constructor — kept, mirrors the upstream SDK signature 1:1.
@@ -922,16 +936,16 @@ Noticed  path:line  out-of-scope smell, untouched
 The Survey line is not optional and its numbers come from the pass, not from
 memory: a run that skipped a step cannot fill it honestly, and a reader can hold
 the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
-*looked at* proves nothing by itself; the count with a missing effect or exit
-is what a skipped step cannot fake, and the same goes for the count of
-functions mixing roles and of shared context columns. Each number is the sum
-of what the survey agents returned (§3.0), counted from their inventory lines.
-A number with no lines behind it means the step did not run, and so does a
-batch whose agent failed or skipped a file. Then the run is incomplete. Say
-so at the top of the report, name the steps and the files that were missed,
-and do not present the fixes as the result of a full pass. Every rewritten doc comment appears
-verbatim under `Rewrote`: the user reviews them in one place, and a rewrite
-that reads badly in the report reads badly in the code.
+*looked at* proves nothing by itself; the count with a missing effect or exit is
+what a skipped step cannot fake, and the same goes for the count of functions
+mixing roles and of shared context columns. Each number is the sum of what the
+survey agents returned (§3.0), counted from their inventory lines. A number with
+no lines behind it means the step did not run, and so does a batch whose agent
+failed or skipped a file. Then the run is incomplete. Say so at the top of the
+report, name the steps and the files that were missed, and do not present the
+fixes as the result of a full pass. Every rewritten doc comment appears verbatim
+under `Rewrote`: the user reviews them in one place, and a rewrite that reads
+badly in the report reads badly in the code.
 
 Then the verification result (tests/typecheck: pass/fail/absent) in one line. No
 essays. If the explanation is longer than the diff, the diff was wrong.

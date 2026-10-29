@@ -13,26 +13,27 @@ values threaded through methods, unparsed input, split protocols, repeated
 derivations, concept mixing, primitive obsession, speculative generality,
 generic machinery (caches, retries, bounded parallel maps) written inline in
 domain code, locks that outgrew what they guard, one fact stated in two
-comments, and comments that narrate the code instead of stating its contract
-or do not parse as English, docs compressed into shorthand that has to be read
+comments, and comments that narrate the code instead of stating its contract or
+do not parse as English, docs compressed into shorthand that has to be read
 twice, and interface docs that retell their callers or their implementation.
 
 Functions that grew a second job get their own pass, because reading hunk by
 hunk never sees them: every changed function is taken apart line by line and
-each block tagged with one role — step, detail, decision, effect, assembly.
-Two roles written inline is a finding (named steps with builder chains wedged
-between them, a policy written inside the code that acts on it, a loop that
-both selects and mutates), and so is the opposite: a function whose whole body
-is one call to a callee only it calls.
+each block tagged with one role — step, detail, decision, effect, assembly. Two
+roles written inline is a finding (named steps with builder chains wedged
+between them, a policy written inside the code that acts on it, a loop that both
+selects and mutates), and so is the opposite: a function whose whole body is one
+call to a callee only it calls.
 
 Free functions that should have been methods get caught across siblings rather
 than one at a time: for every file, unsmell tables each function against the
 parameters it takes, naming columns by what the value is. A store, client,
-config or callback that two or more functions take besides their real input is
-a missing receiver — the shared values become fields of one type, the
-functions its methods, and the caller builds it once.
+config or callback that two or more functions take besides their real input is a
+missing receiver — the shared values become fields of one type, the functions
+its methods, and the caller builds it once.
 
 Structure that no single function shows gets passes of its own:
+
 - **Placement.** Each constant, check and derivation is matched to the type
   whose invariant it serves, so a session's lifetime written in the auth code
   moves onto the session.
@@ -42,16 +43,16 @@ Structure that no single function shows gets passes of its own:
   request paths and headers, database rows, API bodies) is checked for being
   parsed into a type where it enters.
 - **Repeats.** Three greps find a literal that a writer and a reader must both
-  spell the same way, an expression computed in two places, and a fact stated
-  in two comments.
+  spell the same way, an expression computed in two places, and a fact stated in
+  two comments.
 
 The agent that wrote the code is the worst one to survey it, because it
-remembers why each line is there. So the survey runs in fresh subagents, one
-per batch of a few related files, all in parallel, plus one that looks across
-their inventories for what no single batch can see. The main agent triages and fixes,
-and a last fresh agent re-checks the code the fixes touched. The report's
-counts come from the agents' inventory lines, so a skipped pass or file shows
-up as an incomplete run rather than as numbers.
+remembers why each line is there. So the survey runs in fresh subagents, one per
+batch of a few related files, all in parallel, plus one that looks across their
+inventories for what no single batch can see. The main agent triages and fixes,
+and a last fresh agent re-checks the code the fixes touched. The report's counts
+come from the agents' inventory lines, so a skipped pass or file shows up as an
+incomplete run rather than as numbers.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
@@ -64,13 +65,13 @@ finding. Findings get triaged three ways:
   including when the real fix lives outside the changeset (the other copy of the
   duplicated block, the type the data clump was implying).
 - **Asked** when the design is genuinely a judgement call — public API changes,
-  new modules, competing defensible options. One batched round of questions, with
-  a recommendation, not a drip feed.
+  new modules, competing defensible options. One batched round of questions,
+  with a recommendation, not a drip feed.
 - **Kept** in the rare case where the smell is imposed from outside (framework
   signature, external spec, hot path) — with a comment *in the file* naming the
-  reason and the trigger that ends it. That list of reasons is exhaustive:
-  "only one call site", "it's obvious here" and "it's small" are not on it, and
-  a Keep that appears only in the report is a silent skip rather than a Keep.
+  reason and the trigger that ends it. That list of reasons is exhaustive: "only
+  one call site", "it's obvious here" and "it's small" are not on it, and a Keep
+  that appears only in the report is a silent skip rather than a Keep.
 
 Comments get a pass of their own, because both of the other reads walk straight
 past them. A doc that narrates the body, restates the signature, or reads the
@@ -81,15 +82,15 @@ much. So the fix goes to whichever is actually wrong, the comment or the thing
 it sits above.
 
 The survey covers the whole changeset every time; only the *fixing* is
-proportional to the diff. Anything surveyed and not fixed shows up as **Noticed**
-rather than going quiet. And when you point at a smell it missed, that names a
-kind, not a line — it sweeps the changeset for every sibling before fixing, and
-tells you the count.
+proportional to the diff. Anything surveyed and not fixed shows up as
+**Noticed** rather than going quiet. And when you point at a smell it missed,
+that names a kind, not a line — it sweeps the changeset for every sibling before
+fixing, and tells you the count.
 
 Style comes from written rules only: `CLAUDE.md`, `CONTRIBUTING.md`, linter and
 formatter configs. It deliberately does **not** imitate the surrounding code —
-"the rest of the file does it this way" is not a justification if the rest of the
-file is smelly.
+"the rest of the file does it this way" is not a justification if the rest of
+the file is smelly.
 
 ## Install
 
@@ -127,7 +128,8 @@ repo) so the second one sees the new version.
 ```
 
 Arguments are free text, not flags — they narrow the scope, filter the catalog,
-or shift the fix/ask balance. See §1 of [SKILL.md](skills/unsmell/SKILL.md) for the full set.
+or shift the fix/ask balance. See §1 of [SKILL.md](skills/unsmell/SKILL.md) for
+the full set.
 
 ## Not this
 
