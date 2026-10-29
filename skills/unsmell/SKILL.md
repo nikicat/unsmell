@@ -421,7 +421,7 @@ documented item:
 
    - the effects: every write, network call, spawn, delete, or state change
      (grep the body for
-     `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_| record_|store_|remove_`);
+     `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_|record_|store_|remove_`);
    - the exits: every `bail!`, `ensure!`, `?` with a context, or early return a
      caller could cause (grep for `bail!|ensure!|context\(`);
    - the sibling: another method whose difference from this one is one of those
@@ -439,7 +439,7 @@ documented item:
 
 4. Narration has a vocabulary: sequence and branching words, which a body has
    and a contract does not. Grep every doc line in the changeset for them —
-   `grep -nE '//[/!].*\b(then|first when|on a miss|in the order|after that| before that|once |, or,)\b'`
+   `grep -nE '//[/!].*\b(then|first when|on a miss|in the order|after that|before that|once |, or,)\b'`
    — and treat each hit as a finding until it is shown to state what comes out
    rather than how.
 

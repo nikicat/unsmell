@@ -104,6 +104,9 @@ In Claude Code (the repo is its own single-plugin marketplace):
 For local development: `claude --plugin-dir /path/to/unsmell` (single session),
 or `/plugin marketplace add /path/to/unsmell` (tracks your working tree).
 
+Before committing, run `pre-commit install` once. The hook wraps the markdown at
+80 columns, and CI fails on a file it would change.
+
 `/unsmell` appears in the skill list after a restart.
 
 ## Update

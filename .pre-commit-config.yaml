@@ -1,0 +1,9 @@
+repos:
+  - repo: https://github.com/hukkin/mdformat
+    rev: 1.0.0
+    hooks:
+      - id: mdformat
+        args: [--wrap=80, --number, --compact-tables]
+        additional_dependencies:
+          - mdformat-gfm==1.0.0
+          - mdformat-frontmatter==2.2.0
