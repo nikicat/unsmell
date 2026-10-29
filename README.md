@@ -59,7 +59,7 @@ is a second pass that ignores the prose entirely: every field, parameter, return
 and element type gets written down next to what the value actually *is*. Where
 that sentence says more than the type does — `id: u64` for "the id tying a
 response to its request", `&[&str]` for "paths relative to `$HOME`" — that's a
-finding. Findings get triaged three ways:
+finding. Every finding ends in one of five buckets:
 
 - **Fixed** when there's one obviously correct, behaviour-preserving answer —
   including when the real fix lives outside the changeset (the other copy of the
@@ -72,6 +72,12 @@ finding. Findings get triaged three ways:
   reason and the trigger that ends it. That list of reasons is exhaustive: "only
   one call site", "it's obvious here" and "it's small" are not on it, and a Keep
   that appears only in the report is a silent skip rather than a Keep.
+- **Planned** when the smell is real but this run does not fix it — out of
+  scope, too large for the commit, or waiting on a decision. It goes into the
+  project's own TODO or issue tracker, with enough detail to act on without this
+  conversation.
+- **Discarded** when the finding does not hold, with a one-line reason you can
+  overrule.
 
 Comments get a pass of their own, because both of the other reads walk straight
 past them. A doc that narrates the body, restates the signature, or reads the
@@ -82,10 +88,11 @@ much. So the fix goes to whichever is actually wrong, the comment or the thing
 it sits above.
 
 The survey covers the whole changeset every time; only the *fixing* is
-proportional to the diff. Anything surveyed and not fixed shows up as
-**Noticed** rather than going quiet. And when you point at a smell it missed,
-that names a kind, not a line — it sweeps the changeset for every sibling before
-fixing, and tells you the count.
+proportional to the diff. Anything surveyed and not fixed is planned in the
+project's own TODO or tracker, or discarded with a reason, rather than going
+quiet. And when you point at a smell it missed, that names a kind, not a line —
+it sweeps the changeset for every sibling before fixing, and tells you the
+count.
 
 Style comes from written rules only: `CLAUDE.md`, `CONTRIBUTING.md`, linter and
 formatter configs. It deliberately does **not** imitate the surrounding code —
