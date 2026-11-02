@@ -18,11 +18,13 @@ read it as intent and apply it before anything else. Common shapes:
 | `only src/parser.rs`, `just the auth module`, `*.py` | Restrict the changeset (§3) to those paths. Still read them whole. |
 | `only changeset-local fixes`, `don't touch other files` | §6 is off. A smell whose fix lives outside the diff becomes ASK or PLAN, never an edit. |
 | `only duplication`, `just the long functions`, `skip naming` | Run the named rows of §4 only. |
-| `report only`, `dry run`, `don't fix anything` | Everything becomes a report line. Zero edits, zero questions. |
+| `report only`, `dry run`, `don't fix anything` | Everything becomes a report line. Zero edits, zero questions. The run still writes its files (§3.0), with the decisions it would have made, and stops before the editors. |
+| `patches only`, `don't merge` | Run §3.0 up to the patches (step 5) and stop: nothing is merged into the working tree, nothing is re-checked, and no question is asked. The report lists each task with its patch. |
 | `fix everything`, `don't ask`, `just do it` | ASK collapses into FIX: pick the option you'd have recommended, apply it, and say what you chose and what the alternative was. |
 | `ask first`, `check with me` | FIX collapses into ASK: propose, don't apply. |
 | `the whole file`, `this module`, `the repo` | Scope becomes what they named instead of the changeset. Warn if it's huge, then do it. |
 | `aggressive` / `light touch` | Move the bar for what's worth fixing, not the catalog. |
+| `threshold 6`, `bar 3` | Set the value threshold of §5.0 for this run. |
 
 Combine freely — `/unsmell only src/db.rs, duplication only, report only` is
 three constraints. If an argument contradicts a written style guide (§2), the
@@ -66,7 +68,7 @@ If `git diff HEAD` is empty but the index isn't, fall back to
 what they named. If there is no changeset at all, say so and stop — don't invent
 one.
 
-### 3.0 Who runs the survey
+### 3.0 Who runs the survey, and the files each step leaves
 
 The agent that wrote the code is the worst one to survey it. It remembers why
 each line is there, and those reasons hide the smells. It also tires on a big
@@ -74,40 +76,176 @@ changeset: it narrows the survey to the code it thinks of as new, and it writes
 inventories from memory. So the survey runs in fresh subagents, and the main
 agent runs everything else.
 
-1. **The main agent splits the changeset into batches.** A batch is a few
-   related files that one agent can read whole: about five, or about 1,500
-   lines. A file goes in the same batch as its tests, and a moved file goes with
-   the place it moved from. Every file of the changeset is in exactly one batch,
-   tests and moved files included. Nothing counts as "only moved" or "only
-   edited".
+Each step writes its result to a file in the run directory,
+`$(git rev-parse --git-dir)/unsmell/<run>/`, where `<run>` is the start time as
+`YYYYMMDD-HHMMSS`. The files are the run's record: the user can review what was
+found and decided before looking at any edit, and the next step reads the file,
+not a summary in an agent's reply. They live outside the working tree, so they
+never become part of the next run's changeset.
+
+1. **The main agent splits the changeset into batches** and writes them to
+   `batches.yaml`, one entry per batch: its id (`b1`, `b2`, …) and its paths. A
+   batch is a few related files that one agent can read whole: about five, or
+   about 1,500 lines. A file goes in the same batch as its tests, and a moved
+   file goes with the place it moved from. Every file of the changeset is in
+   exactly one batch, tests and moved files included. Nothing counts as "only
+   moved" or "only edited". The one exception is the plan file, such as
+   `TODO.md`, which is not surveyed (§5, PLAN).
+
 2. **One survey agent per batch, all in parallel.** Each is a fresh agent, never
    a fork: a fork inherits the main agent's context, and that context is exactly
-   what blinds it. Its prompt gives the batch's paths, the style ground truth
-   from §2, any arguments from §1, and an instruction to read this skill's §3
-   and §4 and to run every §3 step on the batch. It reports only:
-   - each finding as `path:line`, the catalog row, and one sentence;
-   - its inventory lines, each starting with `path:line`, for the declarations,
-     the repeated literals, the repeated expressions and the facts in comments;
-   - the files of its batch that it read whole. It names a file it could not
-     read, and why. It edits nothing.
-3. **One cross-file agent.** It is also fresh. It gets the union of the
-   inventories, not the files, and the changeset's file list. It looks only for
-   what no single batch can see:
+   what blinds it. Its prompt gives the run directory, the batch's id and paths,
+   the style ground truth from §2, any arguments from §1, and an instruction to
+   read this skill's §3 to §5 and to run every §3 step on the batch. It edits no
+   code. It writes two files:
+
+   - `inventory/<batch>.md`, its inventory lines, each starting with
+     `path:line`: the declarations, the parameter tables, the roles, the inputs
+     at the edge, the repeated literals and expressions, and the facts in
+     comments;
+   - `findings/<batch>.yaml`, in the form below: the files it read whole, the
+     ones it could not read and why, and its findings.
+
+3. **One cross-file agent.** It is also fresh. It gets the inventory files, not
+   the code, and the changeset's file list. It looks only for what no single
+   batch can see:
+
    - a literal that two batches spell (a split protocol);
    - a derivation written in two batches;
    - a fact stated in two batches' comments;
    - a value that two batches' functions take as a parameter (a missing
-     receiver). It reports findings in the same form.
-4. **The main agent triages and fixes**, by §5 to §7, because only it knows what
-   the user has already decided or rejected in this conversation. It reads each
-   finding's lines from disk before it acts on it. A survey agent can be wrong,
-   and that is a reason to check the finding, not to drop it.
-5. **One fresh re-check agent.** It gets the files that the fixes touched and
-   the list of fixes. It runs §3 on them, because the fixes are the newest code
-   and the least read. Its findings go back to step 4, once.
+     receiver).
 
-A changeset of one or two small files may skip the orchestration. The main agent
-then still runs every step, and it says so in the report.
+   It writes `findings/cross.yaml`, in the same form. A finding that a batch
+   already reported within its own files is still listed, with the batch
+   finding's id under `same`.
+
+4. **The main agent triages** every finding by §5 to §7 and writes
+   `decisions.yaml`. It triages, rather than a subagent, because only it knows
+   what the user has already decided or rejected in this conversation. It reads
+   each finding's lines from disk before it decides. A survey agent can be
+   wrong, and that is a reason to check the finding, not to drop it. Every
+   finding but a discarded one gets a `task`. Findings whose `reach` overlaps,
+   or that `same` links, share one task: one fix makes the final shape that all
+   of them ask for. When that code has a second defensible shape that goes
+   further, and only the first is a FIX, the second is its own task stacked on
+   the first (`after`): its patch starts from the first task's result and holds
+   only what the second shape adds. Two tasks never each make part of one fix,
+   and an alternative never leaves out the docs and tests that the first task
+   fixed.
+
+5. **One editor agent per task, all in parallel, each in its own worktree.**
+   Each is fresh. The worktree starts from a snapshot of the working tree, so it
+   holds the whole changeset, staged, unstaged and untracked, and the user's
+   index is never touched:
+
+   ```sh
+   run=$(git rev-parse --git-dir)/unsmell/<run>
+   tree=$(GIT_INDEX_FILE=$run/index sh -c 'git read-tree HEAD && git add -A && git write-tree')
+   base=$(git commit-tree "$tree" -p HEAD -m "unsmell base")   # once per run
+   git worktree add --detach "$run/worktrees/<task>" "$base"   # once per task
+   ```
+
+   **The build check** is the project's fastest command that fails on code that
+   does not compile or type-check: `cargo check`, `go build ./...`,
+   `tsc --noEmit`, a Python import or `compileall`. An editor never runs the
+   test suite, a linter, or a build in each feature set: a dozen editors that
+   each rebuild the project in parallel cost more than the fixes. The editors of
+   one run share one build directory, such as `CARGO_TARGET_DIR=$run/target`, so
+   that dependencies build once. The full check runs once, on the merged code
+   (step 6).
+
+   A stacked task waits for the task it is `after`. Its worktree starts from a
+   commit of that task's patch on `$base`, and its patch is the diff from that
+   commit.
+
+   The editor's prompt gives the worktree path, the task's findings and decision
+   entries, the style ground truth from §2, the user's decisions in this
+   conversation that bear on the task, and an instruction to read this skill's
+   §5 and §6. It edits only inside its worktree, makes the fix in the final
+   shape the findings name, and runs the build check below. Before it finishes,
+   it reads its own diff against the catalog (§4), because nothing else will
+   until the re-check. A fix that adds a smell is not finished: a library call
+   written out at every site where a named helper stood is duplication, a value
+   that a new function would return typed is fetched and parsed inline, or the
+   root cause that the findings name is left half done. When it is done, the
+   main agent saves the patch and removes the worktree:
+
+   ```sh
+   git -C "$run/worktrees/<task>" add -A
+   git -C "$run/worktrees/<task>" diff --cached "$base" > "$run/fixes/<task>.patch"
+   git worktree remove --force "$run/worktrees/<task>"
+   ```
+
+   Tasks whose decision is not FIX get a patch too: it shows the user what an
+   ASK proposes, and what a PLAN or a SKIP would have cost. An editor that finds
+   the task cannot be done as described says so, and the main agent records that
+   in the task's decision entries instead of a patch.
+
+6. **The main agent merges the FIX patches** into the working tree, one task at
+   a time, with `git apply`. A patch that no longer applies, because an earlier
+   one changed its lines, is redone by hand on the merged code, to the same
+   final shape. The other patches stay in the run directory. Then the main agent
+   runs the project's full check on the merged code once: its tests and linters.
+   A failure is fixed in the task whose patch caused it.
+
+7. **A fresh re-check agent, until one finds nothing.** It gets the run
+   directory, the files that the merged fixes touched, and the FIX entries of
+   `decisions.yaml`. It runs §3 on those files, because the fixes are the newest
+   code and the least read, and it writes `findings/recheck-<n>.yaml`. Its
+   findings go back to step 4, and the fixes that come out of them go through
+   steps 5 and 6 and get a new re-check agent. Stop when a re-check returns no
+   finding that the run would fix, or after three re-checks; then every finding
+   still open is planned (§5). A fix that the next run would refactor again was
+   not finished, and the re-check is where it gets finished.
+
+A findings file:
+
+```yaml
+read: [seb.py, test_seb.py]       # the files read whole
+unread: []                        # {path, why} for each file that could not be read
+findings:
+  - id: b1-3                      # the file's name, then a number
+    at: [seb.py:305-311]          # the lines the finding is about
+    reach: [seb.py:285-327]       # the lines its fix would edit, as far as can be seen
+    row: missing receiver         # the catalog row (§4)
+    claim: session() and sync() both take bank, and main calls one after the other
+    fix: both become methods of Sync(bank, ledger, start), built once in main
+    decision: FIX                 # proposed, by §5: FIX, ASK, KEEP, PLAN, SKIP or DISCARD
+    score: 7                      # proposed, by §5.0
+    reason: the full tell, since sync passes bank straight down
+    same: []                      # ids of findings about the same code (cross-file, re-check)
+```
+
+`fix` names the final shape of the code, not a first step towards it. A finding
+whose fix only becomes right after another fix is not finished; name the shape
+both reach. A `claim` that rests on what the changeset under review did says so
+and names where: "the changeset removed `nameHasOwner(frontConn, …)` at
+`prompter.go:87`", never "this change". A reviewer reads each patch alone, with
+the changeset beside it, and "this change" names neither. `decision` and `score`
+are the survey agent's proposal. The main agent's `decisions.yaml` has one entry
+per finding of every findings file:
+
+```yaml
+- id: b1-3
+  decision: FIX                   # final, by §5
+  score: 7
+  reason: the full tell; the user named no other shape
+  task: t2                        # all but DISCARD: findings with one task get one patch
+  after: [t1]                     # a stacked task only: the tasks its patch starts from
+```
+
+Every file is YAML in block style, as above, and must parse. Quote a value that
+holds `: `, `#`, `{`, `}`, `[` or `]`. Where the main agent overrules a
+proposal, its `reason` says why. A finding with no entry is open work, and the
+report names it (§8).
+
+A changeset of one file, under about 100 changed lines, may skip the
+orchestration. The main agent then surveys and edits itself, and still writes
+every file and every patch, with `b1` as its one batch. It says so in the
+report. Nothing else skips it. Time, cost or a budget is not a reason: a run
+that cannot afford the survey says so at the top of its report and is incomplete
+(§8).
 
 The steps below are what each survey agent runs on its batch.
 
@@ -161,11 +299,11 @@ narrowing usually arrives in an edit made for another reason, such as a rename
 or a lint fix, so nobody re-reads what surrounds the field. This is the
 pass-through rule (§3, the role pass) applied to state.
 
-**Write every inventory down, one line per item, in a scratch file.** That
-covers this one, the parameter tables, the role list and each pass below. An
-inventory kept in your head comes out as a plausible count and a list of the
-items you happened to notice. Without the file, a skipped step and a done one
-look the same. The Survey numbers in the report are counted from these files
+**Write every inventory down, one line per item, in the batch's inventory file**
+(§3.0). That covers this one, the parameter tables, the role list and each pass
+below. An inventory kept in your head comes out as a plausible count and a list
+of the items you happened to notice. Without the file, a skipped step and a done
+one look the same. The Survey numbers in the report are counted from these files
 (§8).
 
 **Then group the functions by the parameters they share.** A free function reads
@@ -245,7 +383,8 @@ is any of these:
   has not been given.
 
 Parse into the type at the edge, and keep the raw form only where it is passed
-on unchanged.
+on unchanged. When the edge needs validation, versioning or a schema that a
+library provides, the fix is that library (§5, after the ORM paragraph).
 
 **Then look for one name, one expression or one fact in two places.** Three
 greps over the changeset:
@@ -419,9 +558,16 @@ documented item:
 
 2. Only then read the body, and list three things from it, not from the doc:
 
-   - the effects: every write, network call, spawn, delete, or state change
-     (grep the body for
-     `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_|record_|store_|remove_`);
+   - the effects: every write, network call, spawn, delete, or state change that
+     is the function's own outcome, the thing its caller calls it for (grep the
+     body for
+     `INSERT|UPDATE|DELETE|reqwest|spawn|create_|add_|record_|store_|remove_`).
+     An effect that is only the means to that outcome is an implementation
+     detail, and so is everything a callee does. `session()` returns a session
+     ready to use, loaded or created; that it prompts at the terminal, reads
+     stdin or writes a file is how, and its doc does not say so. A caller's doc
+     never repeats a callee's effects: listing them mixes two layers in one
+     comment, and cutting them later as duplicates is the reversal it causes;
    - the exits: every `bail!`, `ensure!`, `?` with a context, or early return a
      caller could cause (grep for `bail!|ensure!|context\(`);
    - the sibling: another method whose difference from this one is one of those
@@ -501,7 +647,8 @@ documented item:
    ```
 
    Check every doc and every `//` comment in the changeset for these tells. Each
-   hit is a finding:
+   hit is a candidate, and the read-aloud test below decides whether it is a
+   finding:
 
    - **A colon or semicolon inside a sentence** that joins a second idea onto
      the first ("Returns X: the Y that…", "…; false when…"). Make it two
@@ -537,7 +684,20 @@ documented item:
 
    Neither the two-sentence target nor the two-to-three-line limit may be met by
    compression. If the plain version is longer, keep the plain version. If it is
-   much longer, the item probably does too much (§3, the long-comment rule).
+   much longer, the item probably does too much (the long-comment rule below).
+
+8. A long comment is a symptom, not the smell. The same holds for a comment that
+   a fix wants to lengthen. A comment grows long for one of two reasons, and
+   each is a finding about the code it describes:
+
+   - The item mixes concerns, so its doc has to describe several jobs. Split the
+     item (§4, concept mixing), so that each part needs only a short doc.
+   - The comment explains an invariant that the code could express: a type, a
+     named constant or function, a check at the edge, a database constraint.
+     Express it in the code, and drop the sentences that the code now says.
+
+   Rewording or reflowing such a comment is not the fix, and it scores 0–2
+   (§5.0). The comment shrinks as a result of the code change.
 
 Write the fix in Google developer documentation style for API reference comments
 (https://developers.google.com/style/api-reference-comments): present tense,
@@ -796,12 +956,95 @@ counts.
 
 Every finding lands in exactly one bucket.
 
+### 5.0 Score each change before it is made
+
+Score every finding that would lead to an edit, docs included, from 0 to 10 by
+the value its fix adds, and make the fix only when the score reaches the
+threshold. The threshold is 5 unless the arguments set another (§1).
+
+| Score | What the fix does |
+| -- | -- |
+| 9–10 | fixes a bug, or a doc or name that states something false |
+| 7–8 | removes a structural smell with a catalog tell met in full: a duplicated rule, a missing receiver, unparsed input, a misplaced rule, a hidden effect |
+| 5–6 | narrows a type, removes dead code, states a missing outcome or error in a doc; removes or shortens a comment that repeats the code, narrates history or states a fact twice |
+| 3–4 | a doc fact that is true but adds little |
+| 0–2 | rewording a correct doc or message, renaming a name that is not wrong, reshaping code that has no smell; a rewrite that makes a comment longer without correcting something false in it |
+
+A catalog smell whose tell is met in full scores at least 5, however small the
+instance: a conversion written twice, a hand-rolled range merge, a dead constant
+kept alive by a lint suppression. Size counts only through the churn rule below.
+A comment fix that adds the item's implementation details scores 0, whatever it
+corrects; it states the fact the reader lacks and stops.
+
+Subtract 2 when the fix churns more than about 30 lines for a local gain, or
+reworks code that a fix earlier in this run wrote, unless that code was wrong. A
+finding under the threshold is a SKIP, reported with its score (§8), so that a
+user can lower the threshold. It is not planned: an entry in the plan is work
+someone should do.
+
 **FIX** — do it now, no asking. Mechanical, behaviour-preserving, one obviously
 correct answer, blast radius you can see and verify: extract a function, name a
 tuple, replace a bool param with an enum, collapse a duplicate, introduce the
 type a data clump was already implying, delete dead flexibility, extract inline
 generic machinery into the repo's existing utility module (the new file there is
 part of the fix, not a reason to ask).
+
+A smell fix may change behaviour a little when that buys a clearly better
+design: an error message reworded, a check moved to the edge so that it runs
+earlier, an internal default made explicit. The report names each such change
+under `Behaviour`. A change that someone outside the changeset can notice is an
+ASK, however much it helps: a public or exported API, a stored schema or a
+serialized format, a command-line interface, or anything with callers you cannot
+enumerate. A bug fix may change behaviour, and the report lists it as a bug fix,
+with what changed.
+
+A bug is code that does something wrong today: it loses or corrupts data, fails
+silently, or breaks its own contract. Parsing raw input into a domain type at
+the edge is a smell fix, even though the type now rejects what it cannot hold
+(§3, the edge pass). Replacing a generic error with a more specific one, without
+any new type behind it, is a feature: a wrapper that turns `KeyError` into
+`BankError`, or a new error class for the same failure. It is not a bug fix and
+not a smell fix, and it is planned (§5, PLAN). So a doc that leaves out an exit
+is fixed by documenting what the code does now, not by changing what it does.
+
+A name or a doc is a finding only when it is wrong: it says something false or
+less than the code does, gives one thing two names, states a fact twice, or
+leaves out an effect or an error. Effects and errors count only within the
+item's abstraction level: the one domain its caller works in. Every function
+spends CPU time and allocates memory, and no doc says so; a module doc of a
+command-line tool names what the user meets, not the API calls made to get it.
+When an item has no single level, or mixes several, that is a finding about the
+code (§4, mixed altitude or concept mixing), and it is fixed before the doc. A
+doc rewritten first describes the mix, and it is wrong again after the split. A
+correct name or doc is not a finding because another wording reads better, or
+because a neighbour spells it differently; rewording it only gives the next run
+something new to reword. A doc says what the item is or does for its caller, not
+how it is used or how it works: `owned` is "whether the bridge holds the name",
+not when it is set and who reads it. A doc of a state that is transitional, such
+as a column that is NULL on rows written before a migration, says that it is
+transitional. A type is different: narrowing it to what the value can be (`str`
+to `Literal["GET", "POST"]`, a list that is never changed to a tuple) is a fix.
+
+A query, a schema or a wire format written out in full is not a smell because
+its column or field names appear in it more than once. Do not factor it piece by
+piece: a constant for the column list, statements built with `format!` or string
+joins, a values array that must stay in the column order, generated
+placeholders. Each step looks like removing duplication, and a hundred of them
+make a home-grown ORM or serializer, which is worse than the strings were. When
+the repetition is a real problem (several statements that must agree on a
+schema), the fix is a library that does this job, an ORM, a query builder or a
+derive, and adopting one is an ASK or a PLAN, never an incremental FIX.
+
+The same holds for any mechanism that an ecosystem library already provides:
+schema versioning and migrations, a settings or environment parser with
+validation, a schema for an input body. When the fix for a finding would write a
+small version of one by hand, the fix is the library instead. Name it in the
+finding (pydantic-settings, Alembic, serde, zod), and propose it as an ASK or a
+PLAN. A hand-written version is not a FIX.
+
+A fix is finished or not made. It leaves no residue: no local that only renames
+another (`params = query`), no two names for one value, no half of the old shape
+beside the new one. The re-check (§3.0) treats residue as a finding.
 
 **ASK** — one batched round of questions (`AskUserQuestion`), never a drip feed.
 Ask when:
@@ -831,6 +1074,18 @@ Group the entries of one run under one heading that names the run. A smell that
 appears only in the report is not planned: the report scrolls away, and the
 smell goes with it.
 
+An entry already in the plan is a decision that someone has made: the smell is
+known and its fix waits. A later run does not act on it unless its arguments
+name it (§1); `fix everything` covers this run's findings, not the plan. A
+finding that matches a planned entry is discarded as already planned, and an
+entry that a fix in this run makes obsolete is updated or removed. The plan file
+is not surveyed, even when the changeset touches it: the run adds its own
+entries and edits only the entries its fixes change. Rewording, merging or
+correcting other entries is work the plan's owner did not ask for, and each run
+would redo it.
+
+**SKIP** — the finding holds, but its fix scores under the threshold (§5.0).
+
 **DISCARD** — the finding does not hold. The code does not do what the finding
 says, a fix earlier in the run already removed it, it duplicates another
 finding, or the user already decided that question in this conversation. Each
@@ -845,13 +1100,22 @@ but it does not excuse a partial look either. Only then decide volume: if the
 list runs long, fix the top few and plan *every* survivor. A finding you never
 wrote down is a miss you will be told about later.
 
+**Read whole files, fix the changed lines.** The changed lines are what
+`git diff HEAD` adds or changes, plus every line of an untracked file. A smell
+on them is fixed, together with its root cause wherever that lives (§6). A smell
+on other lines of a touched file, which is not the cause of a smell on changed
+lines, is planned (§5), not fixed. Otherwise each fix outside the diff becomes
+changed lines for the next run, the next run surveys its whole file, and the
+scope grows every run instead of settling. When the user names a scope (§1),
+that scope is the changed lines.
+
 **Every finding ends in one of these buckets.** That covers the survey agents'
 findings, the cross-file agent's, the re-check's, and everything a subagent that
 fixed code reports as skipped, left over, out of scope or "noticed". There is no
 "noticed" end state: a leftover is fixed, asked, kept, planned or discarded
 before the run reports. An ASK that the user leaves unanswered becomes a PLAN
-entry that records the options. Before the report, walk the union of every
-agent's report and tick each finding off against its bucket. One that fits no
+entry that records the options. Before the report, check that every finding in
+the findings files has its entry in `decisions.yaml` (§3.0). One that fits no
 bucket is the run's open work, not its result.
 
 ### 5.1 A smell you are pointed at is a class, not an instance
@@ -927,9 +1191,10 @@ reasons, however reasonable they sound in the moment:
   and the catalog has no size threshold
 - "renaming would churn the diff" — churn is the cost of the fix, not a reason
   against it
-- "this file's diff is one line" — a touched file is in the changeset whole
-  (§3); a mechanical class is fixed everywhere it lives, and a commit split
-  isolates the churn
+- "this file's diff is one line" — every changed line is in scope however few
+  there are, and a mechanical class on them is fixed in all of them; a commit
+  split isolates the churn. A smell on the file's unchanged lines is planned
+  (§5), not kept
 
 If you find yourself writing a justification longer than the fix, the fix was
 smaller than the argument against it. Just do it.
@@ -953,10 +1218,13 @@ Code first, then at most:
 Survey   <n> files read whole · <n> declarations inventoried · <g> locks inventoried, <o> oversized · <n> parameter tables, <c> shared context columns · <m> misplaced rules · <q> request-scoped values threaded · <i> inputs at the edge, <u> unparsed · <l> repeated literals, <x> repeated expressions, <k> facts stated twice · <n> functions split by role, <r> mixing roles, <p> pass-throughs · <n> doc items checked, <e> with an effect or exit missing, <s> leaking mechanism
 Rewrote  path:line  the rewritten doc comment, quoted verbatim
 Fixed    path:line  smell → what you did
+Bug      path:line  bug → the fix, and the behaviour that changed
+Behaviour path:line  smell fix → the small behaviour it changed, and why it pays
 Asked    path:line  smell → the question (answers pending)
 Kept     path:line  smell → why, and the trigger
 Planned  path:line  smell → where the plan entry is (file and heading, or issue)
 Discarded path:line  finding → why it does not hold
+Skipped  path:line  finding → its score, under the threshold
 ```
 
 The Survey line is not optional and its numbers come from the pass, not from
@@ -965,7 +1233,7 @@ the doc count against `grep -cE '//[/!]'` over the changeset. The count of items
 *looked at* proves nothing by itself; the count with a missing effect or exit is
 what a skipped step cannot fake, and the same goes for the count of functions
 mixing roles and of shared context columns. Each number is the sum of what the
-survey agents returned (§3.0), counted from their inventory lines. A number with
+survey agents returned (§3.0), counted from their inventory files. A number with
 no lines behind it means the step did not run, and so does a batch whose agent
 failed or skipped a file. Then the run is incomplete. Say so at the top of the
 report, name the steps and the files that were missed, and do not present the
@@ -973,9 +1241,11 @@ fixes as the result of a full pass. Every rewritten doc comment appears verbatim
 under `Rewrote`: the user reviews them in one place, and a rewrite that reads
 badly in the report reads badly in the code.
 
-The `Fixed`, `Asked`, `Kept`, `Planned` and `Discarded` lines together account
-for every finding of the run (§5). The report counts them against the findings
-that the agents returned, and names any finding that is still open.
+The `Fixed`, `Asked`, `Kept`, `Planned`, `Discarded` and `Skipped` lines
+together account for every finding of the run (§5). The report counts the
+entries of `decisions.yaml` against the findings files, names any finding that
+is still open, and ends with the run directory, so that the user can review the
+findings and decisions there.
 
 Then the verification result (tests/typecheck: pass/fail/absent) in one line. No
 essays. If the explanation is longer than the diff, the diff was wrong.
