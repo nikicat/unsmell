@@ -49,10 +49,20 @@ Structure that no single function shows gets passes of its own:
 The agent that wrote the code is the worst one to survey it, because it
 remembers why each line is there. So the survey runs in fresh subagents, one per
 batch of a few related files, all in parallel, plus one that looks across their
-inventories for what no single batch can see. The main agent triages and fixes,
-and a last fresh agent re-checks the code the fixes touched. The report's counts
-come from the agents' inventory lines, so a skipped pass or file shows up as an
-incomplete run rather than as numbers.
+inventories for what no single batch can see. The main agent triages, and each
+change gets its own fresh editor in its own git worktree, all in parallel, so
+your working tree and index stay untouched until you accept something. Every
+step writes its result to a file under `.git/unsmell/<run>/` — batches,
+inventories, findings, decisions, one patch per change — so you can read what
+was found and decided before looking at any edit.
+
+You then review the changes one at a time, highest value first, in a single
+review worktree where `git diff` shows exactly the change under review: accept,
+reject, plan it with a note on the direction, or leave it for later. After the
+last verdict the project's full check runs once, and fresh re-check agents
+survey the code the accepted fixes touched until one finds nothing (at most
+three rounds). The report's counts come from the agents' inventory lines, so a
+skipped pass or file shows up as an incomplete run rather than as numbers.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return
@@ -65,8 +75,8 @@ finding. Every finding ends in one of five buckets:
   including when the real fix lives outside the changeset (the other copy of the
   duplicated block, the type the data clump was implying).
 - **Asked** when the design is genuinely a judgement call — public API changes,
-  new modules, competing defensible options. One batched round of questions,
-  with a recommendation, not a drip feed.
+  new modules, competing defensible options. The editor still writes the
+  recommended option as a patch, so the question is about real code.
 - **Kept** in the rare case where the smell is imposed from outside (framework
   signature, external spec, hot path) — with a comment *in the file* naming the
   reason and the trigger that ends it. That list of reasons is exhaustive: "only
@@ -134,6 +144,7 @@ repo) so the second one sees the new version.
 /unsmell only changeset-local fixes
 /unsmell duplication only, report only
 /unsmell the whole auth module, aggressive
+/unsmell patches only
 /unsmell just do it
 ```
 
