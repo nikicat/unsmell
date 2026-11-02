@@ -1,0 +1,26 @@
+diff --git a/evals/test_run.py b/evals/test_run.py
+index f3c1cd5..d39b4f9 100755
+--- a/evals/test_run.py
++++ b/evals/test_run.py
+@@ -10,13 +10,14 @@ def test_reversal(root):
+     repo = root / "repo"
+     repo.mkdir()
+     git(repo, "init", "-q")
+-    f = repo / "a.py"
+-    f.write_text("x = compute_once()\n")
+-    t0 = snapshot(repo)
+-    f.write_text("x = compute_twice()\n")
+-    t1 = snapshot(repo)
+-    f.write_text("x = compute_once()\n")
+-    t2 = snapshot(repo)
++
++    def write(text):
++        (repo / "a.py").write_text(text)
++        return snapshot(repo)
++
++    t0 = write("x = compute_once()\n")
++    t1 = write("x = compute_twice()\n")
++    t2 = write("x = compute_once()\n")
+     first, second = Delta.between(repo, t0, t1), Delta.between(repo, t1, t2)
+     assert first.reversals([]) == 0
+     assert second.reversals([first]) == 1, second

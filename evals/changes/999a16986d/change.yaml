@@ -1,0 +1,57 @@
+id: 999a16986d
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-8
+  at:
+  - src/evm/cache/event_signature_cache.rs:15
+  reach:
+  - src/evm/cache/event_signature_cache.rs:15
+  row: tautological comment
+  claim: 'The struct doc added by the changeset, "A single resolved row from `event_signatures`.", is
+    the declaration read back; it does not say who produces or consumes the row.
+
+    '
+  fix: /// One cached event-signature resolution, as get_event_signature returns it.
+  decision: SKIP
+  score: 2
+  reason: the doc is correct; rewording only
+  same: []
+  triage:
+    id: b1-8
+    decision: SKIP
+    score: 2
+    reason: correct doc; rewording only
+    task: t7
+- id: b1-9
+  at:
+  - src/evm/cache/event_signature_cache.rs:1-8
+  reach:
+  - src/evm/cache/event_signature_cache.rs:1-8
+  row: duplicated knowledge
+  claim: 'The module doc still spells the stored row as a tuple `(signature, topic0, abi)` (:5) after
+    the changeset named it EventSignatureRow, and "zero-network" lookups are also stated at src/signatures.rs:18
+    and src/evm/cache.rs:246.
+
+    '
+  fix: replace the tuple with a link to [`EventSignatureRow`]; keep the zero-network fact only on the
+    resolver (src/signatures.rs:18)
+  decision: SKIP
+  score: 3
+  reason: unchanged lines, not false; small gain
+  same: []
+  triage:
+    id: b1-9
+    decision: SKIP
+    score: 3
+    reason: unchanged lines; the tuple spelling is stale but still clear
+    task: t7
+check: ok

@@ -1,0 +1,50 @@
+id: dcbae14237
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-10
+  at:
+  - src/evm/history.rs:532-536
+  - src/evm/history.rs:573-584
+  - src/evm/history.rs:392-397
+  reach:
+  - src/evm/history.rs:70-96
+  - src/evm/history.rs:136
+  - src/evm/history.rs:251
+  - src/evm/history.rs:392-416
+  - src/evm/history.rs:532-619
+  row: missing receiver
+  claim: provider and store travel together as parameters of ensure_block_header_via and build_fetcher.
+    Two closures (iter :395 and build_fetcher :582) capture them once and hand both to every header call
+    (:406, :599, :607), and with_options (:136) and update_tip_to (:251) do the same. The log_timestamp
+    helper from b2-1 would be a third free function taking the same pair.
+  fix: '`struct BlockHeaders<P> { provider: P, store: Arc<LogCache> }` with methods `header(block)` (the
+    body of ensure_block_header_via) and `log_timestamp(&log)`. EvmLogHistory and the fetcher closure
+    each hold one, and the closures clone it instead of the pair.'
+  decision: PLAN
+  score: 6
+  reason: Real shared context, but mostly on unchanged lines (about 40 lines of churn). It could be stacked
+    after b2-1 if the main agent judges the missing receiver to be the cause of the new rule having no
+    home.
+  same:
+  - b2-1
+  triage:
+    id: b2-10
+    decision: PLAN
+    score: 6
+    reason: a further shape on top of t1 (BlockHeaders receiver) mostly on unchanged lines; its patch
+      is stacked on t1 to show the cost
+    task: t5
+    after:
+    - t1
+after:
+- a0daaeb9ba
+check: ok

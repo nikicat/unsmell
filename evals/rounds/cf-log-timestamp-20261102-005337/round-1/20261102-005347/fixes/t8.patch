@@ -1,0 +1,141 @@
+diff --git a/src/bin/chainfold/util.rs b/src/bin/chainfold/util.rs
+index f632f13..dd4b965 100644
+--- a/src/bin/chainfold/util.rs
++++ b/src/bin/chainfold/util.rs
+@@ -46,7 +46,7 @@ pub async fn resolve_range(
+                 start.block + 1,
+                 end.block + 1
+             );
+-            let end_inclusive = EvmPosition::new(end.block.saturating_add(1), u32::MAX);
++            let end_inclusive = EvmPosition::end_of_block(end.block.saturating_add(1));
+             Ok((start, end_inclusive))
+         }
+         (None, None, Some(from_block)) => Ok(block_range(from_block, args.num_blocks)),
+@@ -60,7 +60,7 @@ fn block_range(from_block: u64, num_blocks: u64) -> (EvmPosition, EvmPosition) {
+     let start = if from_block == 0 {
+         EvmPosition::earliest()
+     } else {
+-        EvmPosition::new(from_block - 1, u32::MAX)
++        EvmPosition::end_of_block(from_block - 1)
+     };
+-    (start, EvmPosition::new(to_block, u32::MAX))
++    (start, EvmPosition::end_of_block(to_block))
+ }
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..26b8687 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -241,7 +241,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+     }
+ 
+     /// Internal: bump the latest tip store to `block_number`. The position
+-    /// records the *end-of-block* cut (`log_index = u32::MAX`) so a `Hist`
++    /// records the *end-of-block* cut ([`EvmPosition::end_of_block`]) so a `Hist`
+     /// with this end iterates every log up to and including the last one
+     /// in that block.
+     async fn update_tip_to(&self, block_number: u64) -> Result<(), HistoryError> {
+@@ -249,7 +249,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+         // live elsewhere — but we touch the cache so later iter() calls
+         // for the tip block don't have to round-trip.
+         let _ = ensure_block_header_via(&self.provider, &self.store, block_number).await?;
+-        let pos = EvmPosition::new(block_number, u32::MAX);
++        let pos = EvmPosition::end_of_block(block_number);
+         let prev = self.latest_store.get().block;
+         let _ = self.latest_tx.send(pos);
+         if block_number != prev {
+@@ -471,7 +471,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistStoreBackend<Evm
+         if block == 0 {
+             Ok(EvmPosition::earliest())
+         } else {
+-            Ok(EvmPosition::new(block - 1, u32::MAX))
++            Ok(EvmPosition::end_of_block(block - 1))
+         }
+     }
+ 
+@@ -712,7 +712,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        let end = EvmPosition::new(200, u32::MAX);
++        let end = EvmPosition::end_of_block(200);
+         let hist = Hist::new(backend, EvmPosition::earliest(), end);
+ 
+         let items = collect(hist).await;
+@@ -727,7 +727,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        let end = EvmPosition::new(200, u32::MAX);
++        let end = EvmPosition::end_of_block(200);
+         let hist = Hist::new(backend, EvmPosition::earliest(), end);
+ 
+         // Split past end ⇒ head = full, tail = empty.
+@@ -766,7 +766,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        let end = EvmPosition::new(200, u32::MAX);
++        let end = EvmPosition::end_of_block(200);
+         let hist = Hist::new(backend, EvmPosition::earliest(), end);
+         let items = collect(hist).await;
+         // block 100 header inserted with GENESIS_TS + 1200
+@@ -799,8 +799,8 @@ mod tests {
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let hist = Hist::new(
+             backend,
+-            EvmPosition::new(149, u32::MAX),
+-            EvmPosition::new(150, u32::MAX),
++            EvmPosition::end_of_block(149),
++            EvmPosition::end_of_block(150),
+         );
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 1);
+@@ -823,8 +823,7 @@ mod tests {
+         // anchor block 200 @ GENESIS_TS + 2400; block_time = 12
+         // 100 blocks before anchor → block 100 → time_pos returns cut "just before 100"
+         let pos = hs.time_pos(GENESIS_TS + 1200).await.unwrap();
+-        assert_eq!(pos.block, 99);
+-        assert_eq!(pos.log_index, u32::MAX);
++        assert_eq!(pos, EvmPosition::end_of_block(99));
+     }
+ 
+     #[tokio::test]
+@@ -832,11 +831,11 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         // Bootstrap latest_store by simulating a tip update.
+-        let _ = history.latest_tx.send(EvmPosition::new(200, u32::MAX));
++        let _ = history.latest_tx.send(EvmPosition::end_of_block(200));
+         let hs = history.hist_store();
+         let hist = hs.next().await;
+         assert_eq!(*hist.start(), EvmPosition::earliest());
+-        assert_eq!(*hist.end(), EvmPosition::new(200, u32::MAX));
++        assert_eq!(*hist.end(), EvmPosition::end_of_block(200));
+     }
+ 
+     /// `chain_id` stays on `EvmLogHistory`, never on positions.
+@@ -905,7 +904,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        let end = EvmPosition::new(200, u32::MAX);
++        let end = EvmPosition::end_of_block(200);
+         let hist = Hist::new(backend, EvmPosition::earliest(), end);
+ 
+         // Install the counter only around the walk — make_history's setup RPCs
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 84ec6cc..0cf040c 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -48,6 +48,11 @@ impl EvmPosition {
+         Self { block, log_index }
+     }
+ 
++    /// The cut after every log of `block`.
++    pub const fn end_of_block(block: u64) -> Self {
++        Self::new(block, u32::MAX)
++    }
++
+     /// Lower-bound sentinel: strictly less than every real log position.
+     pub const fn earliest() -> Self {
+         Self {

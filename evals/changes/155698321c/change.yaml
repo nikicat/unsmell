@@ -1,0 +1,38 @@
+id: 155698321c
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-14
+  at:
+  - internal/notification/desktop.go:26-575
+  - internal/notification/desktop_test.go:20-952
+  reach:
+  - internal/notification/desktop.go:26-575
+  - internal/notification/desktop_test.go:20-952
+  row: tautological comment
+  claim: The mechanical doc-opening check prints 27 unchanged declarations whose doc opens with their
+    own name (Notifier, Approver, Action, DBusNotifier, NewDBusNotifier, connect, reconnect, Actions,
+    Stop, Notify, NotifyPersistent, Close, delayGroup, Schedule, Cancel, Handler, NewHandler, ListenActions,
+    OnEvent, notificationMeta, formatDurationShort, commitSubject, field cancelledRequests; tests mockNotifier,
+    mockApprover, startTestDBus, newTestDBusNotifier), plus tautological trailing comments at desktop.go:187-189.
+  fix: Drop the leading name from each doc so it starts at the verb or noun phrase; delete the // summary
+    and // body trailing comments.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines; one pass over the file in a later run.
+  same: []
+  triage:
+    id: b1-14
+    decision: PLAN
+    score: 5
+    reason: unchanged lines
+    task: t9
+check: ok

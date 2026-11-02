@@ -1,0 +1,33 @@
+id: cf-log-timestamp-20261102-023034-1-t8
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t8
+judge: null
+labels: []
+findings:
+- id: b2-9
+  at:
+  - src/evm/history.rs:603-605
+  reach:
+  - src/evm/history.rs:782-808
+  row: untested change
+  claim: No test covers the prefetch skip that the changeset added in build_fetcher. The new test seeds
+    the cache directly, so the fetcher never runs.
+  fix: After b2-1 the prefetch and iter share log_timestamp, so the iter test covers the rule. A fetcher
+    test, with a mocked eth_getLogs reply that carries blockTimestamp and no get_block_by_number reply,
+    would cover the warm-up itself.
+  decision: SKIP
+  score: 4
+  reason: Coverage gap rather than a smell. b2-1 removes most of the risk.
+  same:
+  - b2-1
+  triage:
+    id: b2-9
+    decision: SKIP
+    score: 4
+    reason: after t1 the prefetch and iter share log_timestamp, so the iter test covers the rule; no patch
+      made, the fetcher test needs a mocked eth_getLogs reply
+    task: t8
+check: ok

@@ -1,0 +1,193 @@
+read:
+  - inventory/b1.md
+  - inventory/b2.md
+unread: []
+findings:
+  - id: cross-1
+    at:
+      - evals/run.py:143-144
+      - evals/run.py:155
+      - evals/changes.py:252-257
+      - evals/changes.py:353-355
+    reach:
+      - evals/run.py:94-119
+      - evals/run.py:142-155
+      - evals/changes.py:250-257
+      - evals/changes.py:334-363
+    row: repeated derivation
+    claim: >-
+      Both batches locate a fixture, parse its fixture.toml into a raw dict
+      with tomllib, read spec["check"] and run the check with
+      subprocess.run(check, shell=True, cwd=repo). run.py:143-144 and :155 do
+      it once, and changes.py does it twice (252-257 in worktree, 353-355 in
+      check). Each spells "fixture.toml" and the "check" key itself, and
+      changes.py also spells the EVALS / "fixtures" / name path.
+    fix: >-
+      A Fixture dataclass in run.py with Fixture.load(dir) (and a lookup by
+      name under the fixtures directory), the check as a field, an origin that
+      is either Commit(source, commit) or Trees(head, base or None),
+      materialize(workdir) and run_check(repo, env). evaluate, worktree and
+      check all go through it; no other site names fixture.toml or its keys.
+    decision: FIX
+    score: 8
+    reason: one input parsed three times across two modules, past its edge, by key
+    same: [b1-1, b2-10, b1-14]
+  - id: cross-2
+    at:
+      - evals/run.py:122-139
+      - evals/changes.py:76-87
+    reach:
+      - evals/run.py:122-139
+      - evals/changes.py:76-87
+      - evals/changes.py:197-225
+    row: duplication
+    claim: >-
+      The headless claude call is written in both batches. run.py:123-129 and
+      changes.py:77-81 both build `claude -p --output-format json
+      --no-session-persistence`, both set the env as os.environ |
+      {"CLAUDE_CONFIG_DIR": str(CONFIG)}, and both decode stdout and read
+      total_cost_usd (run.py:137, changes.py:84). changes.claude raises on a
+      failed call; run_skill ignores the exit status and is_error and returns
+      0.0, so a failed round passes as converged. changes.claude returns an
+      unnamed (verdict, cost) tuple.
+    fix: >-
+      One claude(prompt, *flags, cwd=None) function in run.py that sets the
+      config dir, runs the call, errors when claude exits non-zero, the reply
+      has is_error or stdout is not JSON, and returns a Reply(result,
+      structured, cost_usd) dataclass. run_skill and the judge in changes.py
+      call it; evaluate records a failed round as not converged.
+    decision: FIX
+    score: 9
+    reason: one call shape in two modules that must agree, and the copy in run.py hides failures as success
+    same: [b1-3, b1-4, b2-19]
+  - id: cross-3
+    at:
+      - evals/run.py:132-134
+      - evals/run.py:145-152
+      - evals/run.py:156-158
+      - evals/run.py:171
+      - evals/changes.py:103-121
+    reach:
+      - evals/run.py:100
+      - evals/run.py:122-188
+      - evals/changes.py:101-151
+    row: split protocol
+    claim: >-
+      run.py writes a run directory (repo/, skill.sha256, round-N.json, the
+      round-N/ record directory derived from log.with_suffix(""), and
+      report.json with keys fixture, workdir, rounds, round, cost_usd, ...),
+      and changes.py:103-121 reads it back, spelling "repo", "skill.sha256",
+      f"round-{n}.json", "round-{n}" and "report.json" again and reading
+      report["fixture"], report["rounds"], r["round"] and .get("result") by
+      key. Nothing ties the writer's names and keys to the reader's.
+    fix: >-
+      A RunDir dataclass in run.py that owns the layout (repo, skill_hash,
+      report, round_log(n), round_record(n)), and Round and Report dataclasses
+      with Report.save(path) and Report.load(path). run.py writes through them,
+      changes.extract reads through them, and a round-trip test covers
+      Report.
+    decision: FIX
+    score: 7
+    reason: file names and dict keys that a writer in one module and a reader in another must spell alike
+    same: [b1-2, b1-5, b2-9]
+  - id: cross-4
+    at:
+      - evals/run.py:150
+      - evals/run.py:160-161
+      - evals/changes.py:118
+    reach:
+      - evals/run.py:149-161
+      - evals/changes.py:115-121
+    row: split protocol
+    claim: >-
+      The round ref name f"refs/rounds/{n}" is written by evaluate at
+      run.py:150 and :160 and read by changes.py:118, each spelling it.
+      README.md:17-18 states the same name.
+    fix: >-
+      round_ref(n) beside the run layout of cross-3 (a RunDir method or module
+      function in run.py), with record_round(repo, n, tree) writing the commit
+      and ref. evaluate calls record_round for round 0 and each round;
+      changes.py reads through round_ref.
+    decision: FIX
+    score: 6
+    reason: one literal written in one module and read in another, plus a derivation written twice in the writer
+    same: [b1-6, b1-5]
+  - id: cross-5
+    at:
+      - evals/run.py:60-67
+      - evals/changes.py:71-72
+      - evals/changes.py:162
+      - evals/changes.py:375-376
+    reach:
+      - evals/run.py:57-68
+      - evals/changes.py:69-73
+      - evals/changes.py:158-164
+      - evals/changes.py:374-376
+    row: repeated derivation
+    claim: >-
+      The changed lines of a diff are picked out in both batches: by prefix
+      in Delta.between (run.py:63, headers detected by prefix), and three
+      times in changes.py (l[:1] in "+-" at 72 and 162 with the +++/---
+      headers kept, startswith("+") minus "+++" at 375-376 with them
+      dropped). The four sites disagree on headers, and run.py's version also
+      mistakes a "++"/"--" content line for a header.
+    fix: >-
+      One diff-reading helper in run.py (unidiff.PatchSet, or a stateful
+      parser that only treats lines before a file's first @@ as headers) that
+      yields changed lines as Line(path, text). Delta.between, change_id,
+      tokens and list_changes all use it.
+    decision: ASK
+    score: 6
+    reason: a derivation in two modules that disagree; the shared parser's form (a new dependency or a hand-written one) is b1-8's open question
+    same: [b2-23, b1-8, b1-24]
+  - id: cross-6
+    at:
+      - evals/README.md:61-72
+      - evals/changes.py:18-25
+      - evals/changes.py:50
+      - evals/changes.py:70
+    reach:
+      - evals/README.md:61-72
+      - evals/changes.py:6-26
+      - evals/changes.py:69-73
+    row: duplicated knowledge
+    claim: >-
+      What a change is, its labels, how its id is made and why rounds/<run>/
+      is kept are stated in README.md:61-72 and again in the changes.py
+      module doc (18-25) and change_id's doc (70). The README copy is false:
+      it calls change.patch "one hunk of one round" where changes.py stores
+      the patch of one task, lists the labels as good, bad and neutral where
+      LABELS also has unsure, and gives a label "a category" that change.yaml
+      has no field for.
+    fix: >-
+      README owns the layout and is corrected to one task of one round per
+      change, the four labels and no category. The changes.py module doc says
+      what the tool is for and points to the README; change_id's doc keeps
+      only its own contract (what the id hashes).
+    decision: FIX
+    score: 9
+    reason: one fact in three places across two batches, and one copy states something false
+    same: [b1-11, b2-29]
+  - id: cross-7
+    at:
+      - evals/README.md:85-87
+      - evals/changes.py:244-248
+    reach:
+      - evals/README.md:85-87
+      - evals/changes.py:243-248
+    row: duplicated knowledge
+    claim: >-
+      The review repo's layout is stated in README.md:85-87 and in
+      worktree's doc at changes.py:244-248. The README says the earlier
+      rounds are commits; the code stages them on top of the fixture's base.
+      The doc's own copy says the repo is "always the same directory", which
+      check's root=CACHE/"check" makes false.
+    fix: >-
+      worktree's doc (renamed review_repo, per b2-16) owns the layout and
+      states it correctly: HEAD is the fixture's base, the index holds the
+      changeset and the earlier rounds, the working tree adds the change. The
+      README states it once in the same terms, or points to the tool's help.
+    decision: FIX
+    score: 9
+    reason: one fact in two batches, both copies false in a different way
+    same: [b2-16]

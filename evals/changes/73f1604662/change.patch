@@ -1,0 +1,119 @@
+diff --git a/internal/proxy/forward.go b/internal/proxy/forward.go
+index 17e85ab..6adba54 100644
+--- a/internal/proxy/forward.go
++++ b/internal/proxy/forward.go
+@@ -65,10 +65,8 @@ func (f callForwarder) forwardVoid(msg dbus.Message) *dbus.Error {
+ 	return err
+ }
+ 
+-// nameHasOwner reports whether name currently has an owner on conn. An
+-// activatable-but-not-running name reports false — which is what lets the
+-// prompter bridge claim org.gnome.keyring.SystemPrompter on the backend bus
+-// before the display-less gcr-prompter fallback would be activated.
++// Checks whether name currently has an owner on conn. A name that is
++// activatable but not running has none. Returns false when the query fails.
+ func nameHasOwner(conn *dbus.Conn, name string) bool {
+ 	var has bool
+ 	if err := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, name).Store(&has); err != nil {
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index dff6533..f87f883 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -20,30 +20,11 @@ const (
+ 	prompterCallbackInterface = "org.gnome.keyring.internal.Prompter.Callback"
+ )
+ 
+-// prompterBridge reconnects the backend gnome-keyring to the user's real unlock
+-// prompter across the private-bus boundary the takeover creates.
+-//
+-// The dispatcher runs the backend gnome-keyring on a private bus so it can
+-// mediate the Secret Service. But gnome-keyring reaches its unlock prompter
+-// over that *same* bus, and the only SystemPrompter reachable there is the
+-// display-less gcr-prompter fallback (D-Bus-activated, no WAYLAND_DISPLAY) —
+-// so it can never draw a dialog and any unlock hangs forever. The bridge owns
+-// org.gnome.keyring.SystemPrompter on the backend bus (pre-empting that
+-// fallback) and forwards the prompter conversation to gnome-shell's real
+-// prompter on the front (session) bus, so the normal GNOME unlock dialog
+-// appears. The exchange payload (carrying the DH-encrypted password) is
+-// forwarded verbatim, end-to-end between gnome-keyring and gnome-shell — the
+-// dispatcher never sees the plaintext.
+-//
+-// The protocol is two-directional, so the bridge is too:
+-//   - Prompter (BeginPrompting/PerformPrompt/StopPrompting): the bridge
+-//     receives these from gnome-keyring on the backend bus and forwards them
+-//     to gnome-shell on the front bus.
+-//   - Callback (PromptReady): gnome-shell calls this back on the callback
+-//     object path. Because the bridge issued the call, gnome-shell addresses
+-//     the bridge's front connection, so the bridge exports a callback proxy
+-//     there and forwards PromptReady to gnome-keyring's real callback object
+-//     on the backend bus.
++// The only route from the backend gnome-keyring to the user's unlock dialog.
++// It owns the system prompter name on the backend bus, so D-Bus never starts
++// the gcr-prompter fallback there. That fallback would draw its own dialog
++// instead of gnome-shell's. The bridge relays the prompter conversation to
++// gnome-shell on the front bus without reading it.
+ type prompterBridge struct {
+ 	frontConn   *dbus.Conn    // session bus: gnome-shell owns the real prompter
+ 	backendConn *dbus.Conn    // private bus: backend gnome-keyring lives here
+@@ -161,16 +142,19 @@ func (b *prompterBridge) close() {
+ 	}
+ }
+ 
+-// prompterCallback is the front-bus proxy for a gnome-keyring callback object.
+-// gnome-shell calls PromptReady here; we forward it to gnome-keyring's real
+-// callback on the backend bus.
++// --- Prompter.Callback interface (received from gnome-shell on the front bus) ---
++//
++// gnome-shell sends PromptReady and PromptDone to the bridge's front
++// connection, because the bridge made the Prompter calls. Each callback proxy
++// forwards them to gnome-keyring's real callback object on the backend bus.
++
++// Front-bus stand-in for one gnome-keyring callback object.
+ type prompterCallback struct {
+ 	toKeyring callForwarder
+ 	logger    *logging.Logger
+ }
+ 
+-// PromptReady relays the prompter's reply (including the exchange payload with
+-// the encrypted password) back to gnome-keyring, verbatim.
++// Relays the prompter's reply back to gnome-keyring.
+ func (c *prompterCallback) PromptReady(msg dbus.Message, reply string, properties map[string]dbus.Variant, exchange string) *dbus.Error {
+ 	return c.toKeyring.forwardVoid(msg)
+ }
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index d785890..e5161ee 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -57,13 +57,9 @@ func (m *mockKeyringCallback) PromptDone(msg dbus.Message) *dbus.Error {
+ 	return nil
+ }
+ 
+-// TestPrompterBridge is the regression for the locked-keyring hang: the backend
+-// gnome-keyring reaches its unlock prompter over the private bus, where the
+-// only SystemPrompter is the display-less gcr-prompter fallback, so unlock
+-// hangs forever. The bridge must claim SystemPrompter on the backend bus and
+-// relay the whole two-way protocol to the real prompter (gnome-shell) on the
+-// front bus. This test drives both directions: keyring→shell (Begin/Perform/
+-// Stop) and shell→keyring (PromptReady/PromptDone).
++// Drives both directions of the prompter protocol through the bridge:
++// keyring to shell (Begin/Perform/Stop) and shell to keyring
++// (PromptReady/PromptDone).
+ func TestPrompterBridge(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 
+diff --git a/internal/proxy/proxy.go b/internal/proxy/proxy.go
+index 95f63b0..6e17720 100644
+--- a/internal/proxy/proxy.go
++++ b/internal/proxy/proxy.go
+@@ -161,10 +161,7 @@ func (p *Proxy) ConnectWith(frontConn, backendConn *dbus.Conn) error {
+ 		return fmt.Errorf("start signal forwarder: %w", err)
+ 	}
+ 
+-	// Bridge the backend keyring's unlock prompter to the session prompter
+-	// (gnome-shell), so a locked-collection unlock renders a real dialog
+-	// instead of hanging on the display-less fallback. No-op when the
+-	// topology doesn't need it (returns nil, nil).
++	// No-op when the topology doesn't need the bridge (returns nil, nil).
+ 	p.prompter, err = newPrompterBridge(p.frontConn, p.backendConn, p.logger)
+ 	if err != nil {
+ 		p.Close()

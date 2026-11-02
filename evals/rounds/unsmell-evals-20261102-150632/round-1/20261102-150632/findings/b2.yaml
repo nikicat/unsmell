@@ -1,0 +1,603 @@
+read:
+- evals/changes.py
+unread: []
+findings:
+- id: b2-1
+  at:
+  - evals/changes.py:132-150
+  - evals/changes.py:155
+  - evals/changes.py:170-173
+  - evals/changes.py:192-201
+  - evals/changes.py:228-230
+  - evals/changes.py:237
+  - evals/changes.py:250
+  - evals/changes.py:298-323
+  - evals/changes.py:343-358
+  - evals/changes.py:368-378
+  - evals/changes.py:386-388
+  - evals/changes.py:424-444
+  reach:
+  - evals/changes.py:44-451
+  row: unparsed input
+  claim: change.yaml is loaded into a bare dict and read by key in every function (meta['seen'][0]['round'],
+    meta['labels'][-1]['label'], f['triage']['decision']); the load and dump of CHANGES / id / 'change.yaml'
+    is spelled 5 and 6 times, and first = meta['seen'][0] three times. summary, ancestors and tokens are
+    free functions that only read one change.
+  fix: 'A Change dataclass (id, fixture, seen: list[Sighting], judge, labels: list[Label], findings, after,
+    check) with Change.load(id), save(), dir, patch, has_patch, first, user_labels, newest_label, decisions,
+    summary(), tokens() and ancestors(); all_changes() returns list[Change]. The YAML format stays as
+    it is.'
+  decision: ASK
+  score: 8
+  reason: the full unparsed-input tell over the whole file; the fix rewrites most of it, so the user may
+    want it as its own commit
+  same:
+  - b2-2
+  - b2-3
+  - b2-4
+- id: b2-2
+  at:
+  - evals/changes.py:173
+  - evals/changes.py:314
+  - evals/changes.py:370
+  - evals/changes.py:409
+  - evals/changes.py:424
+  reach:
+  - evals/changes.py:173
+  - evals/changes.py:314
+  - evals/changes.py:370
+  - evals/changes.py:409
+  - evals/changes.py:424
+  - evals/changes.py:441-443
+  row: split protocol
+  claim: The author kind 'user' is written as the --by default at 409 and read as l['by'].startswith('user')
+    at 173, 314, 370 and 424; a writer and four readers must spell it alike.
+  fix: A Label dataclass (label, by, finding, note, date) with a by_user property, and Change.user_labels;
+    the four readers use it and the default comes from one constant.
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, four readers'
+  same:
+  - b2-1
+- id: b2-3
+  at:
+  - evals/changes.py:281
+  - evals/changes.py:310
+  - evals/changes.py:425
+  reach:
+  - evals/changes.py:128-129
+  - evals/changes.py:281
+  - evals/changes.py:310
+  - evals/changes.py:424-425
+  row: repeated derivation
+  claim: Whether a change has a patch is derived three times as (CHANGES / id / 'change.patch').read_text().strip(),
+    and once more as patch.strip() in extract.
+  fix: Change.has_patch (property), used by worktree, show and next.
+  decision: FIX
+  score: 6
+  reason: a derivation written three times
+  same:
+  - b2-1
+- id: b2-4
+  at:
+  - evals/changes.py:192
+  - evals/changes.py:200-201
+  - evals/changes.py:229
+  - evals/changes.py:372
+  - evals/changes.py:387
+  reach:
+  - evals/changes.py:192
+  - evals/changes.py:200-201
+  - evals/changes.py:228-230
+  - evals/changes.py:372
+  - evals/changes.py:387-388
+  row: repeated derivation
+  claim: The newest label (labels[-1]['label']) is derived at 192, 200-201 and 387, and the set of a change's
+    decisions (sorted({f['triage']['decision'] ...}) joined by '/') at 229 and 372.
+  fix: Change.newest_label and Change.decisions, used everywhere.
+  decision: FIX
+  score: 6
+  reason: two derivations written twice and three times
+  same:
+  - b2-1
+- id: b2-5
+  at:
+  - evals/changes.py:158-164
+  - evals/changes.py:175-177
+  - evals/changes.py:182-186
+  reach:
+  - evals/changes.py:158-186
+  row: repeated derivation
+  claim: The Jaccard share of two changes' tokens is written twice (175 and 183-185). prior also calls
+    tokens(m['id']) twice per candidate, and tokens reads both files from disk on every call, so judge
+    reads every labelled change's files once per change it judges.
+  fix: One similarity(a, b) function over cached token sets (functools.cache on tokens, or Change.tokens
+    as a cached_property), used by prior and neighbours.
+  decision: FIX
+  score: 7
+  reason: a derivation written twice, with repeated I/O
+  same:
+  - b2-6
+  - b2-27
+- id: b2-6
+  at:
+  - evals/changes.py:162-163
+  reach:
+  - evals/changes.py:162-163
+  row: bug
+  claim: tokens joins the changed lines and then appends the claims with no separator, so the last word
+    of the patch and the first word of the first claim fuse into one token (for example 'foo' + 'session'
+    becomes 'foosession').
+  fix: Join the patch text and the claims with a newline or space between them.
+  decision: FIX
+  score: 9
+  reason: a bug, though its effect on similarity is small
+  same:
+  - b2-5
+- id: b2-7
+  at:
+  - evals/changes.py:180-186
+  - evals/changes.py:192-193
+  - evals/changes.py:202
+  reach:
+  - evals/changes.py:180-186
+  - evals/changes.py:192-193
+  row: bug
+  claim: judge ID re-judges a change that already has a label, and neighbours does not exclude the change
+    itself, so its own label is shown to the judge as the first, most similar example (overlap 1.0). prior
+    excludes meta['id'] and the change's own runs; neighbours excludes neither.
+  fix: neighbours (or judge's labelled list) leaves out the change being judged, and the changes from
+    the same runs, as prior does.
+  decision: FIX
+  score: 9
+  reason: the answer leaks into the prompt, so a re-judge measures nothing
+  same:
+  - b2-5
+- id: b2-8
+  at:
+  - evals/changes.py:106-120
+  - evals/changes.py:208
+  - evals/changes.py:251-252
+  - evals/changes.py:263
+  - evals/changes.py:329
+  reach:
+  - evals/changes.py:101-120
+  - evals/changes.py:208
+  - evals/changes.py:250-265
+  - evals/changes.py:329
+  row: split protocol
+  claim: The layout of rounds/<run>/ (meta.yaml with its fixture key, round-N.patch, round-N.md) is written
+    by extract and read by worktree, judge and show, each spelling the file names and keys again.
+  fix: A Rounds dataclass (run, fixture, skill, count) with save/load of meta.yaml and patch(n) and report(n)
+    paths; extract writes through it and the readers read through it.
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, three readers'
+  same:
+  - b2-13
+  - b2-15
+- id: b2-9
+  at:
+  - evals/changes.py:105
+  - evals/changes.py:115-119
+  reach:
+  - evals/changes.py:105-119
+  - evals/run.py:122-171
+  row: split protocol
+  claim: 'report.json, round-N.json and skill.sha256 are written by run.py (evaluate, run_skill) and read
+    here by key: report[''fixture''], report[''rounds''], r[''round''], .get(''result''). Nothing ties
+    the writer''s keys to the reader''s.'
+  fix: 'A Report dataclass in run.py (fixture, workdir, rounds: list[Round], converged, oscillated) with
+    save() and load(path), used by evaluate and extract.'
+  decision: ASK
+  score: 7
+  reason: the fix spans run.py and changes.py and changes how run.py builds its report
+  same: []
+- id: b2-10
+  at:
+  - evals/changes.py:252
+  - evals/changes.py:257
+  - evals/changes.py:353-354
+  reach:
+  - evals/changes.py:250-257
+  - evals/changes.py:353-354
+  - evals/run.py:94-119
+  - evals/run.py:142-146
+  row: repeated derivation
+  claim: 'The fixture is located (EVALS / ''fixtures'' / name) and its fixture.toml parsed at 252-257
+    and again at 353-354, and run.py:143 parses it a third time. worktree takes the fixture name from
+    rounds/<run>/meta.yaml, check takes it from change.yaml: two sources for one fact.'
+  fix: A Fixture dataclass in run.py (path, spec, check) with Fixture.load(path); materialize takes a
+    Fixture; changes.py derives it from one source.
+  decision: FIX
+  score: 7
+  reason: derivation written three times across two files
+  same: []
+- id: b2-11
+  at:
+  - evals/changes.py:89-98
+  - evals/changes.py:125
+  - evals/changes.py:143-149
+  reach:
+  - evals/changes.py:89-98
+  - evals/changes.py:125-150
+  row: unparsed input
+  claim: 'decisions.yaml''s after is a string or a list (the skill writes ''after: t1''), and it is parsed
+    at its use in extract (146), not where tasks() reads the file. tasks() yields unnamed (task, members)
+    tuples, and extract keeps an unnamed (cid, after) tuple per task.'
+  fix: 'tasks() returns list[Task], a dataclass (name, findings, after: list[str]) that parses after once;
+    extract maps task name to change id.'
+  decision: FIX
+  score: 7
+  reason: raw input passed past its first reader, plus two unnamed tuples
+  same:
+  - b2-12
+  - b2-13
+- id: b2-12
+  at:
+  - evals/changes.py:90-91
+  reach:
+  - evals/changes.py:89-91
+  row: misleading doc
+  claim: 'tasks'' doc says it yields (task, findings, decisions), but it yields 2-tuples: the task name
+    and its findings, each joined with its decision under ''triage''.'
+  fix: With Task from b2-11, the doc reads "Returns the tasks of one skill run directory (SKILL.md §3.0).
+    Each finding carries its decision entry under triage."
+  decision: FIX
+  score: 9
+  reason: the doc states something false
+  same:
+  - b2-11
+- id: b2-13
+  at:
+  - evals/changes.py:101-151
+  reach:
+  - evals/changes.py:101-151
+  - evals/changes.py:415
+  row: mixed altitude
+  claim: extract writes a round's files, copies the record, computes each change id, loads or initialises
+    change.yaml, records a sighting and writes it, then links stacked changes, all inline in two nested
+    loops. It returns ids with duplicates, which main dedups with set() at 415.
+  fix: 'extract orders named steps: Rounds.save (b2-8), a record_change(record, task) that returns the
+    Change after recording its sighting (Change.seen_in), and link_stacked(tasks). It returns a set of
+    ids.'
+  decision: FIX
+  score: 6
+  reason: steps and details mixed in a 50-line function with a loop that computes and writes
+  same:
+  - b2-8
+  - b2-11
+  - b2-14
+- id: b2-14
+  at:
+  - evals/changes.py:102
+  reach:
+  - evals/changes.py:102
+  row: missing effect in doc
+  claim: 'extract''s doc says it stores the rounds, but its main outcome is the change dataset: it creates
+    or updates changes/<id>/change.yaml and change.patch.'
+  fix: '"Adds the changes of one run to the dataset and stores its rounds. Returns the ids of the changes
+    it saw."'
+  decision: FIX
+  score: 5
+  reason: states a missing outcome
+  same:
+  - b2-13
+- id: b2-15
+  at:
+  - evals/changes.py:243-283
+  reach:
+  - evals/changes.py:243-283
+  row: mixed altitude
+  claim: worktree builds the rounds in a scratch repo (250-265), syncs the review repo to it (266-277)
+    and stacks the parent patches and the change on top (278-282), each as inline git detail. root=None
+    then root = root or REVIEW.
+  fix: 'Three named helpers: build_rounds(change, build) returning the scratch repo, sync(repo, built),
+    stage(change, repo). root defaults to REVIEW in the signature.'
+  decision: FIX
+  score: 6
+  reason: a 40-line function whose steps are separated by blocks of detail
+  same:
+  - b2-16
+- id: b2-16
+  at:
+  - evals/changes.py:243-248
+  reach:
+  - evals/changes.py:243-248
+  - evals/README.md:85-87
+  row: misleading doc
+  claim: worktree's doc says the repo is 'always the same directory', but check passes root=CACHE/'check'.
+    It leaves out the effect a caller must know, that uncommitted edits in the review repo are discarded
+    (reset --hard, clean -fdx), and the exit check relies on, CalledProcessError when a patch does not
+    apply. It narrates mechanism ('built in a scratch repo and fetched into it') and joins ideas with
+    a colon. The name says worktree, but no git worktree is involved. README.md:85 states the same layout
+    and says the earlier rounds are commits; the code stages them on base.
+  fix: 'Rename to review_repo(change, root=REVIEW). Doc: "Returns a repo under root that shows the change
+    as the skill saw it. HEAD is the fixture''s base, the index holds the changeset under review and the
+    earlier rounds, and the working tree adds the change. Uncommitted edits in that repo are discarded.
+    Errors with CalledProcessError when a patch does not apply." README states the same once, correctly.'
+  decision: FIX
+  score: 9
+  reason: the doc states something false and leaves out an effect and an exit
+  same:
+  - b2-15
+- id: b2-17
+  at:
+  - evals/changes.py:292-297
+  - evals/changes.py:429
+  - evals/changes.py:432
+  reach:
+  - evals/changes.py:286-297
+  - evals/changes.py:429
+  - evals/changes.py:432
+  row: boolean blindness
+  claim: show(meta, rebuild) uses the bool only to pick whether to select the change first (worktree plus
+    writing CURRENT); main passes rebuild=bool(a.id). The doc says 'unless it is already there', which
+    is the caller's promise, and leaves out that it makes the change current. REVIEW / 'repo' at 297 derives
+    the review repo again (worktree builds it as root / 'repo').
+  fix: 'Two functions: select(change) builds the review repo and writes CURRENT, show(change) only prints.
+    next and show ID call both, show alone calls show. A REVIEW_REPO constant names the path once.'
+  decision: FIX
+  score: 6
+  reason: a bool param that only picks a branch, and a doc missing an effect
+  same: []
+- id: b2-18
+  at:
+  - evals/changes.py:50-53
+  - evals/changes.py:194-196
+  - evals/changes.py:205-206
+  - evals/changes.py:331
+  - evals/changes.py:405-406
+  - evals/changes.py:435
+  reach:
+  - evals/changes.py:50-54
+  - evals/changes.py:194-206
+  - evals/changes.py:299-331
+  - evals/changes.py:405-406
+  - evals/changes.py:434-435
+  row: split protocol
+  claim: The label kinds are spelled in LABELS, again as COLORS keys, in the judge prompt (good, bad,
+    neutral, with no unsure), in show's hint at 331 and in the label usage strings. COLORS also spells
+    SKILL.md's decision kinds. The judge schema allows 'unsure' while the prompt offers three labels.
+  fix: A Label StrEnum with a color property, and a Decision StrEnum with its color; argparse choices,
+    the schema, the prompt and the hint are built from Label. The schema and prompt agree on which labels
+    the judge may give.
+  decision: FIX
+  score: 6
+  reason: a literal set spelled in five places
+  same:
+  - b2-30
+- id: b2-19
+  at:
+  - evals/changes.py:76-86
+  reach:
+  - evals/changes.py:76-86
+  - evals/run.py:122-139
+  row: repeated derivation
+  claim: 'claude() builds the headless claude command and its env (os.environ | {''CLAUDE_CONFIG_DIR'':
+    str(CONFIG)}) and parses total_cost_usd, as run.py''s run_skill does at 123-137. It returns an unnamed
+    (verdict, cost) tuple, and its doc leaves out the RuntimeError it raises.'
+  fix: run.py exports one headless(args, ...) helper that returns a Reply(result, structured, cost) dataclass;
+    both callers use it. The doc gains "Errors with RuntimeError when the call fails or the reply has
+    no result."
+  decision: FIX
+  score: 6
+  reason: a derivation written in two files, an unnamed return and a missing exit
+  same: []
+- id: b2-20
+  at:
+  - evals/changes.py:189-225
+  reach:
+  - evals/changes.py:189-225
+  row: mixed altitude
+  claim: judge selects the labelled and to-do changes inline, builds the schema inline, and its closure
+    one() builds a 9-line prompt inline, calls claude, writes the verdict and prints. one() captures model,
+    schema, labelled and skill and passes model and schema straight to claude on every call.
+  fix: A Judge dataclass (model, skill, labelled) with prompt(change) and label(change) methods; judge
+    builds it once and maps label over the to-do changes.
+  decision: FIX
+  score: 6
+  reason: steps and details mixed, and context captured by a closure and passed down
+  same:
+  - b2-7
+- id: b2-21
+  at:
+  - evals/changes.py:343-344
+  - evals/changes.py:348
+  - evals/changes.py:356
+  - evals/changes.py:378
+  - evals/changes.py:193
+  reach:
+  - evals/changes.py:193
+  - evals/changes.py:334-363
+  - evals/changes.py:378
+  row: computing loop with effects
+  claim: check's loop picks the changes to check (given ids, else those without a check) with an inline
+    condition and then builds, runs and writes in the same body; judge picks its to-do changes with the
+    same rule at 193. The status is the strings 'ok', 'fail' and 'no-apply', written at 348 and 356 and
+    read at 378.
+  fix: A pending(changes, ids, done) selection used by both; check loops over its result. A CheckStatus
+    StrEnum for the status.
+  decision: FIX
+  score: 5
+  reason: a selection repeated in two functions and mixed with effects
+  same: []
+- id: b2-22
+  at:
+  - evals/changes.py:335-338
+  reach:
+  - evals/changes.py:335-338
+  row: wrong-layer doc
+  claim: 'check''s doc gives mechanism (''outside the review repo'', ''sharing one Rust target directory'')
+    and the caller''s reason (patches-only runs merge nothing), and leaves out what a caller needs: no
+    ids means every change not yet checked, and a failure leaves check.log.'
+  fix: '"Runs each fixture''s check on the changes in ids, or on every change not yet checked, and records
+    ok, fail or no-apply in change.yaml. A failure leaves its output in check.log."'
+  decision: FIX
+  score: 5
+  reason: doc leaves out an outcome and leaks mechanism
+  same:
+  - b2-21
+- id: b2-23
+  at:
+  - evals/changes.py:71-72
+  - evals/changes.py:162
+  - evals/changes.py:375-376
+  reach:
+  - evals/changes.py:69-73
+  - evals/changes.py:158-164
+  - evals/changes.py:374-376
+  - evals/run.py:60-63
+  row: repeated derivation
+  claim: The changed lines of a patch are filtered three times here (l[:1] in '+-' at 72 and 162, with
+    +++/--- headers kept, and startswith('+') minus '+++' at 375-376, with them dropped) and again in
+    run.py:63.
+  fix: One changed_lines(patch) helper (in run.py, which already parses diffs) that yields the changed
+    lines without headers, with the file names separate where change_id needs them.
+  decision: FIX
+  score: 5
+  reason: a derivation written four times, with inconsistent header handling
+  same: []
+- id: b2-24
+  at:
+  - evals/changes.py:233-240
+  reach:
+  - evals/changes.py:233-240
+  row: inline generic machinery
+  claim: ancestors hand-rolls a dependency traversal with a list as its visited set (O(n²) membership)
+    and no cycle guard.
+  fix: graphlib.TopologicalSorter over the after-links, or a recursion that dedups with dict.fromkeys.
+  decision: FIX
+  score: 5
+  reason: the traversal row of the table
+  same: []
+- id: b2-25
+  at:
+  - evals/changes.py:384-389
+  reach:
+  - evals/changes.py:381-390
+  row: inline generic machinery
+  claim: score counts labels by hand with counts.get(label, 0) + 1.
+  fix: collections.Counter over the changes of the run, with the label choice named (Change.score_label).
+  decision: FIX
+  score: 5
+  reason: a hand-built counter
+  same: []
+- id: b2-26
+  at:
+  - evals/changes.py:413-447
+  reach:
+  - evals/changes.py:393-447
+  row: concept mixing
+  claim: main dispatches on a.cmd with an if-chain, and the bodies of next and label are written inline
+    (with their selection, validation and writes), while the other commands are functions. label parses
+    '[ID] LABEL' by hand and writes the result back onto the argparse namespace (a.id, a.label).
+  fix: next_change() and add_label(id, label, finding, note, by) functions; dispatch through set_defaults(func=...)
+    or match; label's argument split happens in one parse function that returns (id, Label).
+  decision: FIX
+  score: 6
+  reason: inline command bodies beside named ones, and unparsed argv
+  same:
+  - b2-18
+  - b2-30
+- id: b2-27
+  at:
+  - evals/changes.py:167-177
+  reach:
+  - evals/changes.py:167-177
+  - evals/changes.py:312-313
+  row: unnamed return
+  claim: prior returns (change, share) by reversing a (share, change) tuple with best[::-1]; the caller
+    unpacks it positionally. The doc joins its None case with a semicolon, and 0.33 is an unnamed threshold.
+  fix: Return a Match(change, share) NamedTuple or None; name the threshold; the doc says "Returns None
+    when no labelled change shares a third of its words." as its own sentence.
+  decision: FIX
+  score: 5
+  reason: unnamed tuple at a call site
+  same:
+  - b2-5
+- id: b2-28
+  at:
+  - evals/changes.py:367
+  reach:
+  - evals/changes.py:367
+  row: interface read back
+  claim: 'list_changes'' doc lists the printed columns and already misses one: the check status at 378.'
+  fix: '"Prints one line per change, ordered by fixture, round and task."'
+  decision: FIX
+  score: 5
+  reason: the doc says less than the code and lists the output's fields
+  same: []
+- id: b2-29
+  at:
+  - evals/changes.py:18-25
+  reach:
+  - evals/changes.py:18-25
+  - evals/changes.py:70
+  - evals/README.md:63-72
+  row: duplicated knowledge
+  claim: 'The module doc explains that the id hashes the changed lines so a later run lands in the same
+    directory, which change_id''s doc and README.md:68-70 state again, and why rounds/<run>/ is kept,
+    which README.md:71-72 states again. README contradicts the code: it calls change.patch ''one hunk
+    of one round'' (the code stores one task) and says a label carries ''a category'' (no such field).'
+  fix: The module doc says what the tool is for in two lines and points to README; README owns the layout
+    and is corrected to one task per change and no category; change_id keeps its own contract.
+  decision: FIX
+  score: 6
+  reason: one fact in three places, one copy already false
+  same:
+  - b2-30
+- id: b2-30
+  at:
+  - evals/changes.py:8-16
+  reach:
+  - evals/changes.py:8-16
+  - evals/changes.py:394-410
+  row: duplicated knowledge
+  claim: The Usage block in the module doc is a hand-written copy of the argparse subparsers; argparse
+    prints it as the description, so --help shows the commands twice, and the label usage line is spelled
+    in four places (15, 331, 405, 435).
+  fix: Give each subparser help= and drop the Usage block; the label usage comes from argparse.
+  decision: FIX
+  score: 6
+  reason: one interface stated twice
+  same:
+  - b2-18
+  - b2-26
+  - b2-29
+- id: b2-31
+  at:
+  - evals/changes.py:51
+  - evals/changes.py:70
+  - evals/changes.py:258
+  - evals/changes.py:278
+  reach:
+  - evals/changes.py:51
+  - evals/changes.py:70
+  - evals/changes.py:258
+  - evals/changes.py:278
+  row: compressed doc
+  claim: 'Comments join a second idea with a colon or semicolon (''ANSI SGR codes for show''s output;
+    NO_COLOR or a pipe turns them off'', ''HEAD is the fixture''s base: round-0 minus ...'', change_id''s
+    ''Returns the id of a patch: a hash of ...''), and 278 is a long trailing comment.'
+  fix: Split each into plain sentences on its own line; the NO_COLOR sentence moves to TTY.
+  decision: SKIP
+  score: 3
+  reason: rewording correct comments
+  same: []
+- id: b2-32
+  at:
+  - evals/changes.py:48
+  - evals/changes.py:159
+  reach:
+  - evals/changes.py:48
+  - evals/changes.py:159
+  row: wrong-layer doc
+  claim: CURRENT's comment names its callers ('which show and label use when given none') and tokens'
+    doc gives the caller's reason ('for comparing changes') in a noun phrase instead of a verb.
+  fix: '"The id of the change in the review repo." and "Returns the words of a change''s changed lines
+    and of its findings'' claims."'
+  decision: SKIP
+  score: 3
+  reason: a true doc fact that adds little
+  same: []

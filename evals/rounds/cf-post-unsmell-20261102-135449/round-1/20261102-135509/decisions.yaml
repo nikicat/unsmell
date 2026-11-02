@@ -1,0 +1,70 @@
+- id: b1-1
+  decision: ASK
+  score: 7
+  reason: "two designs, both touch pub API. Recommend option B (From impls beside the row in the lib): keeps Topic in the cache layer, which option A would undo"
+  task: t2
+  after: [t1]
+- id: b1-2
+  decision: FIX
+  score: 7
+  reason: the changeset already changed this signature; only callers are the adapter and tests
+  task: t1
+- id: b1-3
+  decision: FIX
+  score: 7
+  reason: "FromSql/ToSql for Topic beside the existing ChainId/FilterHash impls in cache.rs; behaviour: a malformed topic0 blob errors instead of reading as a miss"
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 5
+  reason: one conversion written three times on changed lines
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 5
+  reason: doc opening with its field name, on a changed line
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 5
+  reason: doc says less than the code about what None means
+  task: t1
+- id: b1-7
+  decision: PLAN
+  score: 5
+  reason: unchanged lines spanning the signatures trait outside the batch
+  task: t3
+  after: [t1]
+- id: b1-8
+  decision: PLAN
+  score: 5
+  reason: unchanged lines, not the cause of a changed-line smell
+  task: t4
+  after: [t1]
+- id: b1-9
+  decision: PLAN
+  score: 5
+  reason: unchanged lines; name says less than the body
+  task: t5
+  after: [t1]
+- id: b1-10
+  decision: SKIP
+  score: 4
+  reason: unchanged lines, nothing false
+  task: t7
+- id: b1-11
+  decision: PLAN
+  score: 5
+  reason: dead pub API on unchanged lines; removal waits on the owner
+  task: t6
+- id: b1-12
+  decision: SKIP
+  score: 3
+  reason: rewording correct docs on unchanged lines; shares t6 with b1-11 since the open doc goes with it
+  task: t6
+- id: b1-13
+  decision: SKIP
+  score: 3
+  reason: test fixture repetition, low value
+  task: t8
+  after: [t1]

@@ -1,0 +1,30 @@
+id: dengi-seb-20261102-023034-1-t11
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t11
+judge: null
+labels: []
+findings:
+- id: b1-19
+  at:
+  - seb.py:36-42
+  reach:
+  - seb.py:36-42
+  row: concept mixing
+  claim: psu_headers holds the TTY policy and the network lookup of the public IP inline in one body.
+  fix: Leave it as is. The policy is the function's whole purpose, and a one-line predicate would only
+    add a hop.
+  decision: SKIP
+  score: 2
+  reason: Two roles inline in five lines, and splitting them adds nothing a reader needs.
+  same:
+  - b1-9
+  triage:
+    id: b1-19
+    decision: SKIP
+    score: 2
+    reason: the proposed fix is no change, so it has no patch
+    task: t11
+check: ok

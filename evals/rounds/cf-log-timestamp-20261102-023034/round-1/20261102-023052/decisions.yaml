@@ -1,0 +1,182 @@
+# Run argument "patches only": every task gets a patch in fixes/, none is merged.
+- id: b2-1
+  decision: FIX
+  score: 7
+  reason: the timestamp rule is written at three sites (history.rs:404, :522, :603) that must agree, and nothing links them
+  task: t1
+- id: b2-2
+  decision: FIX
+  score: 7
+  reason: timestamp 0 as an "unknown" sentinel collides with a real genesis timestamp (history.rs:88-89); passing the resolved timestamp in removes it
+  task: t1
+- id: b2-3
+  decision: FIX
+  score: 5
+  reason: the prefetch loop's skip disappears into log_timestamp, so it is the same fix as b2-1
+  task: t1
+- id: b2-4
+  decision: FIX
+  score: 6
+  reason: one fact in five comments; the log_timestamp doc becomes its owner
+  task: t1
+- id: b2-5
+  decision: FIX
+  score: 5
+  reason: the comments that carry the caller's layer are the copies b2-4 removes
+  task: t1
+- id: cross-1
+  decision: FIX
+  score: 6
+  reason: the cross-batch view of b2-4 and b1-1; one task so the fact gets exactly one owner
+  task: t1
+- id: b1-1
+  decision: FIX
+  score: 6
+  reason: the migration comment describes history.rs and is slightly false (a cache miss fetches from the provider); it must shrink in the same task that gives the fact its owner
+  task: t1
+- id: b2-7
+  decision: FIX
+  score: 5
+  reason: the new test rebuilds warm_cache's anchor headers inline
+  task: t1
+- id: b2-8
+  decision: FIX
+  score: 5
+  reason: the new test doc is four compressed lines that restate the rule log_timestamp owns
+  task: t1
+- id: b2-17
+  decision: PLAN
+  score: 5
+  reason: warm_cache's unused tuple half is on unchanged lines; t1 may touch warm_cache but not its signature
+  task: tp
+- id: b1-2
+  decision: FIX
+  score: 6
+  reason: the changeset added row.get(11), extending a positional schema dependency on two SELECT lists; reading by name removes it without touching the SQL
+  task: t3
+- id: b1-3
+  decision: ASK
+  score: 6
+  reason: whether CACHE_VERSION should bump is a decision about existing users' cache files; patch shows the doc reword (option A), not asked because of "patches only"
+  task: t4
+- id: b2-10
+  decision: PLAN
+  score: 6
+  reason: a further shape on top of t1 (BlockHeaders receiver) mostly on unchanged lines; its patch is stacked on t1 to show the cost
+  task: t5
+  after: [t1]
+- id: b1-4
+  decision: SKIP
+  score: 3
+  reason: trailing comment in a test repeats make_test_log's default; under the threshold
+  task: t6
+- id: b2-16
+  decision: FIX
+  score: 5
+  reason: overrules SKIP 4; t1's log_timestamp doc points to ensure_block_header_via for its errors, so that doc must state them
+  task: t1
+- id: b2-9
+  decision: SKIP
+  score: 4
+  reason: after t1 the prefetch and iter share log_timestamp, so the iter test covers the rule; no patch made, the fetcher test needs a mocked eth_getLogs reply
+  task: t8
+- id: b1-15
+  decision: SKIP
+  score: 4
+  reason: the select-then-insert split is subsumed by the mined-log PLAN entry (b1-5); no separate patch
+  task: tp
+- id: b2-18
+  decision: SKIP
+  score: 4
+  reason: module doc on unchanged lines reads its parts back; small gain, no patch
+  task: t9
+- id: b1-5
+  decision: PLAN
+  score: 6
+  reason: a mined-log type parsed at the edge spans both modules and unchanged lines
+  task: tp
+- id: b2-6
+  decision: PLAN
+  score: 5
+  reason: same root cause as b1-5
+  task: tp
+- id: cross-2
+  decision: PLAN
+  score: 5
+  reason: the cross-batch view of b1-5 and b2-6; one plan entry
+  task: tp
+- id: b1-6
+  decision: PLAN
+  score: 5
+  reason: unchanged method signatures across LogCache
+  task: tp
+- id: b1-7
+  decision: PLAN
+  score: 5
+  reason: newtypes across unchanged signatures
+  task: tp
+- id: cross-3
+  decision: PLAN
+  score: 5
+  reason: same entry as b1-7 (insert_block_header takes a BlockHeader)
+  task: tp
+- id: b1-8
+  decision: PLAN
+  score: 5
+  reason: range types on unchanged code
+  task: tp
+- id: b1-9
+  decision: PLAN
+  score: 5
+  reason: a SQL view is a schema change; out of scope
+  task: tp
+- id: b1-10
+  decision: PLAN
+  score: 5
+  reason: unchanged doc duplication
+  task: tp
+- id: b1-11
+  decision: PLAN
+  score: 5
+  reason: unchanged entity docs
+  task: tp
+- id: b1-12
+  decision: PLAN
+  score: 5
+  reason: unchanged duplication
+  task: tp
+- id: b1-13
+  decision: PLAN
+  score: 5
+  reason: unchanged doc
+  task: tp
+- id: b1-14
+  decision: PLAN
+  score: 5
+  reason: unchanged code
+  task: tp
+- id: b2-11
+  decision: PLAN
+  score: 5
+  reason: unchanged duplication
+  task: tp
+- id: b2-12
+  decision: PLAN
+  score: 5
+  reason: unchanged duplication; same entry as b2-13
+  task: tp
+- id: b2-13
+  decision: PLAN
+  score: 5
+  reason: LogFilter type on unchanged code
+  task: tp
+- id: b2-14
+  decision: PLAN
+  score: 5
+  reason: about 20 sites repo-wide, mostly outside the changeset
+  task: tp
+- id: b2-15
+  decision: PLAN
+  score: 5
+  reason: dead code on unchanged lines
+  task: tp

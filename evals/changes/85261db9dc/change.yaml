@@ -1,0 +1,44 @@
+id: 85261db9dc
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261101-210501
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: bad
+  by: user
+  date: '2026-11-01'
+- label: unsure
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  reach:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  row: misleading name
+  claim: Two places in TestPrompterBridge describe the front-bus guard that this change removed (HEAD
+    prompter.go:87, `nameHasOwner(frontConn, ...)`), so both are now false. One is the comment "present
+    before the proxy starts (so the bridge's guard sees it and activates)". The other is the assertion
+    message "bridge should activate when the front bus has a prompter and the backend does not". The bridge
+    now activates whether or not a front prompter exists.
+  fix: Change :75-76 to "gnome-shell's prompter on the front bus, present before the proxy starts." Change
+    :98 to "bridge should activate when the backend bus has no prompter."
+  decision: FIX
+  score: 9
+  reason: These comments state something false. The lines are unchanged, but this change made them false
+    by removing the guard they describe, so they are its residue (§3, re-check what serves a removed thing).
+    Under a strict §5 scope reading they would be PLAN.
+  same: []
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 9
+    reason: false text about the guard this change removed; the change made it false, so it is the change's
+      residue
+    task: t3
+check: ok

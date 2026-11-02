@@ -1,0 +1,89 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 4f3704b..91f7fc8 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -2,9 +2,9 @@
+ //! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+ //! file for event-signature caching.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow, Topic};
++use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -27,13 +27,7 @@ impl SignatureCache for SqliteSignatureCache {
+     ) -> Result<Option<ResolvedEvent>, SignatureError> {
+         self.cache
+             .get_event_signature(ChainId::new(chain_id), &Address::from(address), event_name)
+-            .map(|opt| {
+-                opt.map(|row| ResolvedEvent {
+-                    signature: row.signature,
+-                    topic0: row.topic0.b256().into(),
+-                    abi_json: row.abi_json,
+-                })
+-            })
++            .map(|opt| opt.map(ResolvedEvent::from))
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+ 
+@@ -49,11 +43,7 @@ impl SignatureCache for SqliteSignatureCache {
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+-                &EventSignatureRow {
+-                    signature: entry.signature.clone(),
+-                    topic0: Topic::from(B256::from(entry.topic0)),
+-                    abi_json: entry.abi_json.clone(),
+-                },
++                &EventSignatureRow::from(entry),
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index 14f806c..fb21328 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -7,11 +7,12 @@
+ //! `SignatureCache`) to avoid colliding with the
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+-use alloy::primitives::Address;
++use alloy::primitives::{Address, B256};
+ use rusqlite::OptionalExtension;
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
++use crate::signatures::ResolvedEvent;
+ 
+ /// A single resolved row from `event_signatures`.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -25,6 +26,26 @@ pub struct EventSignatureRow {
+     pub abi_json: Option<String>,
+ }
+ 
++impl From<EventSignatureRow> for ResolvedEvent {
++    fn from(row: EventSignatureRow) -> Self {
++        Self {
++            signature: row.signature,
++            topic0: row.topic0.b256().into(),
++            abi_json: row.abi_json,
++        }
++    }
++}
++
++impl From<&ResolvedEvent> for EventSignatureRow {
++    fn from(event: &ResolvedEvent) -> Self {
++        Self {
++            signature: event.signature.clone(),
++            topic0: Topic::new(B256::new(event.topic0)),
++            abi_json: event.abi_json.clone(),
++        }
++    }
++}
++
+ /// Durable SQLite-backed event-signature cache.
+ pub struct EventSignatureCache {
+     conn: SharedConn,

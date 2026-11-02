@@ -1,0 +1,95 @@
+diff --git a/internal/proxy/forward.go b/internal/proxy/forward.go
+index 17e85ab..92d5af5 100644
+--- a/internal/proxy/forward.go
++++ b/internal/proxy/forward.go
+@@ -65,10 +65,8 @@ func (f callForwarder) forwardVoid(msg dbus.Message) *dbus.Error {
+ 	return err
+ }
+ 
+-// nameHasOwner reports whether name currently has an owner on conn. An
+-// activatable-but-not-running name reports false — which is what lets the
+-// prompter bridge claim org.gnome.keyring.SystemPrompter on the backend bus
+-// before the display-less gcr-prompter fallback would be activated.
++// Checks whether name currently has an owner on conn. A name that is
++// activatable but not running reports false, and so does a failed query.
+ func nameHasOwner(conn *dbus.Conn, name string) bool {
+ 	var has bool
+ 	if err := conn.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, name).Store(&has); err != nil {
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 1b789df..0eec47d 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -20,30 +20,13 @@ const (
+ 	prompterCallbackInterface = "org.gnome.keyring.internal.Prompter.Callback"
+ )
+ 
+-// prompterBridge reconnects the backend gnome-keyring to the user's real unlock
+-// prompter across the private-bus boundary the takeover creates.
+-//
+-// The dispatcher runs the backend gnome-keyring on a private bus so it can
+-// mediate the Secret Service. But gnome-keyring reaches its unlock prompter
+-// over that *same* bus, and the only SystemPrompter reachable there is the
+-// display-less gcr-prompter fallback (D-Bus-activated, no WAYLAND_DISPLAY) —
+-// so it can never draw a dialog and any unlock hangs forever. The bridge owns
+-// org.gnome.keyring.SystemPrompter on the backend bus (pre-empting that
+-// fallback) and forwards the prompter conversation to gnome-shell's real
+-// prompter on the front (session) bus, so the normal GNOME unlock dialog
+-// appears. The exchange payload (carrying the DH-encrypted password) is
+-// forwarded verbatim, end-to-end between gnome-keyring and gnome-shell — the
++// The only path from the backend gnome-keyring to the GNOME unlock dialog. The
++// backend reaches its unlock prompter over the private bus. Without the bridge,
++// the D-Bus-activated gcr-prompter fallback answers there and draws its own
++// dialog instead of the GNOME one. Holding org.gnome.keyring.SystemPrompter on
++// the backend bus from startup keeps that fallback out. The exchange payload,
++// which carries the DH-encrypted password, passes through verbatim, so the
+ // dispatcher never sees the plaintext.
+-//
+-// The protocol is two-directional, so the bridge is too:
+-//   - Prompter (BeginPrompting/PerformPrompt/StopPrompting): the bridge
+-//     receives these from gnome-keyring on the backend bus and forwards them
+-//     to gnome-shell on the front bus.
+-//   - Callback (PromptReady): gnome-shell calls this back on the callback
+-//     object path. Because the bridge issued the call, gnome-shell addresses
+-//     the bridge's front connection, so the bridge exports a callback proxy
+-//     there and forwards PromptReady to gnome-keyring's real callback object
+-//     on the backend bus.
+ type prompterBridge struct {
+ 	frontConn   *dbus.Conn // session bus: gnome-shell owns the real prompter
+ 	backendConn *dbus.Conn // private bus: backend gnome-keyring lives here
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index 8ca0844..f0d95fc 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -57,13 +57,8 @@ func (m *mockKeyringCallback) PromptDone(msg dbus.Message) *dbus.Error {
+ 	return nil
+ }
+ 
+-// TestPrompterBridge is the regression for the locked-keyring hang: the backend
+-// gnome-keyring reaches its unlock prompter over the private bus, where the
+-// only SystemPrompter is the display-less gcr-prompter fallback, so unlock
+-// hangs forever. The bridge must claim SystemPrompter on the backend bus and
+-// relay the whole two-way protocol to the real prompter (gnome-shell) on the
+-// front bus. This test drives both directions: keyring→shell (Begin/Perform/
+-// Stop) and shell→keyring (PromptReady/PromptDone).
++// Checks that the bridge relays prompter calls from the backend keyring to
++// gnome-shell, and callbacks from gnome-shell back to the keyring.
+ func TestPrompterBridge(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 
+diff --git a/internal/proxy/proxy.go b/internal/proxy/proxy.go
+index 95f63b0..4a68bdf 100644
+--- a/internal/proxy/proxy.go
++++ b/internal/proxy/proxy.go
+@@ -161,10 +161,8 @@ func (p *Proxy) ConnectWith(frontConn, backendConn *dbus.Conn) error {
+ 		return fmt.Errorf("start signal forwarder: %w", err)
+ 	}
+ 
+-	// Bridge the backend keyring's unlock prompter to the session prompter
+-	// (gnome-shell), so a locked-collection unlock renders a real dialog
+-	// instead of hanging on the display-less fallback. No-op when the
+-	// topology doesn't need it (returns nil, nil).
++	// Bridge the backend keyring's unlock prompter to gnome-shell's. A nil
++	// bridge means this topology needs none.
+ 	p.prompter, err = newPrompterBridge(p.frontConn, p.backendConn, p.logger)
+ 	if err != nil {
+ 		p.Close()

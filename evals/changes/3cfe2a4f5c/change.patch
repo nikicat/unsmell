@@ -1,0 +1,236 @@
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index b63a84b..66daaa6 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -15,6 +15,7 @@ import (
+ // it owns org.gnome.keyring.SystemPrompter and records the calls the bridge
+ // forwards to it. It can also drive the reverse Callback.
+ type mockShellPrompter struct {
++	conn    *dbus.Conn // front-bus connection that owns the name
+ 	begin   chan promptCall
+ 	perform chan promptCall
+ 	stop    chan promptCall
+@@ -65,43 +66,19 @@ func (m *mockKeyringCallback) PromptDone(msg dbus.Message) *dbus.Error {
+ // front bus. This test drives both directions: keyring→shell (Begin/Perform/
+ // Stop) and shell→keyring (PromptReady/PromptDone).
+ func TestPrompterBridge(t *testing.T) {
+-	tmpDir := t.TempDir()
+-
+-	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
+-	t.Cleanup(func() { backendCmd.Process.Kill(); backendCmd.Wait() })
+-	frontCmd, frontAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "front.sock"))
+-	t.Cleanup(func() { frontCmd.Process.Kill(); frontCmd.Wait() })
++	buses := startBridgeBuses(t)
+ 
+ 	// gnome-shell's prompter on the front bus, present before the proxy starts
+ 	// (so the bridge's guard sees it and activates).
+-	shellConn, err := dbus.Connect(frontAddr)
+-	require.NoError(t, err)
+-	t.Cleanup(func() { shellConn.Close() })
+-	shell := &mockShellPrompter{
+-		begin:   make(chan promptCall, 1),
+-		perform: make(chan promptCall, 1),
+-		stop:    make(chan promptCall, 1),
+-	}
+-	require.NoError(t, shellConn.Export(shell, systemPrompterPath, prompterInterface))
+-	reply, err := shellConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+-	require.NoError(t, err)
+-	require.Equal(t, dbus.RequestNameReplyPrimaryOwner, reply)
++	shell := startMockShell(t, buses.front)
+ 
+ 	// The proxy (and thus the bridge) between the two buses.
+-	proxyBackendConn, err := dbus.Connect(backendAddr)
+-	require.NoError(t, err)
+-	proxyFrontConn, err := dbus.Connect(frontAddr)
+-	require.NoError(t, err)
+-	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
+-	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
+-	t.Cleanup(func() { p.Close() })
++	p := connectProxy(t, buses)
+ 	require.NotNil(t, p.prompter, "bridge should activate when the front bus has a prompter and the backend does not")
+ 
+ 	// The backend gnome-keyring: a connection that exports a callback object
+ 	// and calls the SystemPrompter (now the bridge) on the backend bus.
+-	keyringConn, err := dbus.Connect(backendAddr)
+-	require.NoError(t, err)
+-	t.Cleanup(func() { keyringConn.Close() })
++	keyringConn := connectBus(t, buses.backend)
+ 	cb := &mockKeyringCallback{ready: make(chan string, 2), done: make(chan struct{})}
+ 	const callbackPath = dbus.ObjectPath("/org/gnome/keyring/Prompt/test")
+ 	require.NoError(t, keyringConn.Export(cb, callbackPath, prompterCallbackInterface))
+@@ -110,34 +87,30 @@ func TestPrompterBridge(t *testing.T) {
+ 
+ 	// keyring -> (bridge) -> shell: BeginPrompting.
+ 	require.NoError(t, prompter.Call(prompterInterface+".BeginPrompting", 0, callbackPath).Err)
+-	begin := recvCall(t, shell.begin, "BeginPrompting")
++	begin := recvWithin(t, shell.begin, "BeginPrompting to reach the shell prompter")
+ 	assert.Equal(t, callbackPath, begin.callback)
+ 
+ 	// shell -> (bridge) -> keyring: PromptReady on the callback the bridge
+ 	// exported on the front bus (addressed to the bridge's front conn, the
+ 	// sender of BeginPrompting).
+-	bridgeFront := shellConn.Object(begin.sender, callbackPath)
++	bridgeFront := shell.conn.Object(begin.sender, callbackPath)
+ 	require.NoError(t, bridgeFront.Call(prompterCallbackInterface+".PromptReady", 0, "", map[string]dbus.Variant{}, "exchange-a").Err)
+-	assert.Equal(t, "", recvReply(t, cb.ready), "empty ready reply must reach the keyring callback")
++	assert.Equal(t, "", recvWithin(t, cb.ready, "PromptReady to reach the keyring callback"), "empty ready reply must reach the keyring callback")
+ 
+ 	// keyring -> shell: PerformPrompt (verbatim, exchange included).
+ 	require.NoError(t, prompter.Call(prompterInterface+".PerformPrompt", 0,
+ 		callbackPath, "password", map[string]dbus.Variant{}, "exchange-b").Err)
+-	assert.Equal(t, callbackPath, recvCall(t, shell.perform, "PerformPrompt").callback)
++	assert.Equal(t, callbackPath, recvWithin(t, shell.perform, "PerformPrompt to reach the shell prompter").callback)
+ 
+ 	// shell -> keyring: the user's answer, then PromptDone.
+ 	require.NoError(t, bridgeFront.Call(prompterCallbackInterface+".PromptReady", 0, "yes", map[string]dbus.Variant{}, "exchange-c").Err)
+-	assert.Equal(t, "yes", recvReply(t, cb.ready))
++	assert.Equal(t, "yes", recvWithin(t, cb.ready, "PromptReady to reach the keyring callback"))
+ 	require.NoError(t, bridgeFront.Call(prompterCallbackInterface+".PromptDone", 0).Err)
+-	select {
+-	case <-cb.done:
+-	case <-time.After(5 * time.Second):
+-		t.Fatal("PromptDone was not forwarded to the keyring callback")
+-	}
++	recvWithin(t, cb.done, "PromptDone to reach the keyring callback")
+ 
+ 	// keyring -> shell: StopPrompting ends the exchange.
+ 	require.NoError(t, prompter.Call(prompterInterface+".StopPrompting", 0, callbackPath).Err)
+-	assert.Equal(t, callbackPath, recvCall(t, shell.stop, "StopPrompting").callback)
++	assert.Equal(t, callbackPath, recvWithin(t, shell.stop, "StopPrompting to reach the shell prompter").callback)
+ }
+ 
+ // TestPrompterBridgeClaimsBackendBeforePrompter is the relogin regression: the
+@@ -149,69 +122,94 @@ func TestPrompterBridge(t *testing.T) {
+ // graphical session) can never win that window. Forwarding to the real prompter
+ // is resolved by name at prompt time, so it doesn't need gnome-shell present yet.
+ func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
+-	tmpDir := t.TempDir()
+-	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
+-	t.Cleanup(func() { backendCmd.Process.Kill(); backendCmd.Wait() })
+-	frontCmd, frontAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "front.sock"))
+-	t.Cleanup(func() { frontCmd.Process.Kill(); frontCmd.Wait() })
++	buses := startBridgeBuses(t)
+ 
+ 	// Connect the proxy with NO front prompter present yet.
+-	proxyBackendConn, err := dbus.Connect(backendAddr)
+-	require.NoError(t, err)
+-	proxyFrontConn, err := dbus.Connect(frontAddr)
+-	require.NoError(t, err)
+-	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
+-	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
+-	t.Cleanup(func() { p.Close() })
++	p := connectProxy(t, buses)
+ 
+ 	// It must own the backend name straight away — before any front prompter —
+ 	// so the gcr-prompter fallback has no window to claim it.
+ 	require.NotNil(t, p.prompter, "bridge must be created in the local-takeover topology")
+-	assert.True(t, nameHasOwner(proxyBackendConn, systemPrompterName),
++	assert.True(t, nameHasOwner(p.backendConn, systemPrompterName),
+ 		"bridge must claim the backend name at startup, before a front prompter exists")
+ 
+ 	// gnome-shell's prompter appears on the front bus (as after a relogin).
+-	shellConn, err := dbus.Connect(frontAddr)
++	shell := startMockShell(t, buses.front)
++
++	// Forwarding must work end-to-end once the front prompter is up — resolved
++	// by name at call time, no re-arming needed.
++	keyringConn := connectBus(t, buses.backend)
++	prompter := keyringConn.Object(systemPrompterName, dbus.ObjectPath(systemPrompterPath))
++	require.NoError(t, prompter.Call(prompterInterface+".BeginPrompting", 0, dbus.ObjectPath("/org/gnome/keyring/Prompt/x")).Err)
++	recvWithin(t, shell.begin, "BeginPrompting to reach the shell prompter")
++}
++
++// bridgeBuses holds the addresses of the two test buses the bridge sits between.
++type bridgeBuses struct {
++	backend string // private bus of the backend gnome-keyring
++	front   string // session bus where gnome-shell's prompter lives
++}
++
++// startBridgeBuses starts a backend and a front dbus-daemon, stopped at test end.
++func startBridgeBuses(t *testing.T) bridgeBuses {
++	t.Helper()
++	tmpDir := t.TempDir()
++	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
++	t.Cleanup(func() { backendCmd.Process.Kill(); backendCmd.Wait() })
++	frontCmd, frontAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "front.sock"))
++	t.Cleanup(func() { frontCmd.Process.Kill(); frontCmd.Wait() })
++	return bridgeBuses{backend: backendAddr, front: frontAddr}
++}
++
++// connectBus opens a connection to addr, closed at test end.
++func connectBus(t *testing.T, addr string) *dbus.Conn {
++	t.Helper()
++	conn, err := dbus.Connect(addr)
+ 	require.NoError(t, err)
+-	t.Cleanup(func() { shellConn.Close() })
++	t.Cleanup(func() { conn.Close() })
++	return conn
++}
++
++// startMockShell registers a mockShellPrompter as the primary owner of
++// SystemPrompter on the front bus.
++func startMockShell(t *testing.T, frontAddr string) *mockShellPrompter {
++	t.Helper()
+ 	shell := &mockShellPrompter{
++		conn:    connectBus(t, frontAddr),
+ 		begin:   make(chan promptCall, 1),
+ 		perform: make(chan promptCall, 1),
+ 		stop:    make(chan promptCall, 1),
+ 	}
+-	require.NoError(t, shellConn.Export(shell, systemPrompterPath, prompterInterface))
+-	reply, err := shellConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
++	require.NoError(t, shell.conn.Export(shell, systemPrompterPath, prompterInterface))
++	reply, err := shell.conn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+ 	require.NoError(t, err)
+ 	require.Equal(t, dbus.RequestNameReplyPrimaryOwner, reply)
+-
+-	// Forwarding must work end-to-end once the front prompter is up — resolved
+-	// by name at call time, no re-arming needed.
+-	keyringConn, err := dbus.Connect(backendAddr)
+-	require.NoError(t, err)
+-	t.Cleanup(func() { keyringConn.Close() })
+-	prompter := keyringConn.Object(systemPrompterName, dbus.ObjectPath(systemPrompterPath))
+-	require.NoError(t, prompter.Call(prompterInterface+".BeginPrompting", 0, dbus.ObjectPath("/org/gnome/keyring/Prompt/x")).Err)
+-	recvCall(t, shell.begin, "BeginPrompting")
++	return shell
+ }
+ 
+-func recvCall(t *testing.T, ch chan promptCall, what string) promptCall {
++// connectProxy connects a proxy between the two buses, closed at test end.
++func connectProxy(t *testing.T, buses bridgeBuses) *Proxy {
+ 	t.Helper()
+-	select {
+-	case c := <-ch:
+-		return c
+-	case <-time.After(5 * time.Second):
+-		t.Fatalf("timed out waiting for %s to reach the shell prompter", what)
+-		return promptCall{}
+-	}
++	proxyBackendConn, err := dbus.Connect(buses.backend)
++	require.NoError(t, err)
++	proxyFrontConn, err := dbus.Connect(buses.front)
++	require.NoError(t, err)
++	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
++	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
++	t.Cleanup(func() { p.Close() })
++	return p
+ }
+ 
+-func recvReply(t *testing.T, ch chan string) string {
++// recvWithin receives from ch, failing the test after 5 seconds. what names
++// the awaited event for the failure message.
++func recvWithin[T any](t *testing.T, ch <-chan T, what string) T {
+ 	t.Helper()
+ 	select {
+-	case r := <-ch:
+-		return r
++	case v := <-ch:
++		return v
+ 	case <-time.After(5 * time.Second):
+-		t.Fatal("timed out waiting for PromptReady to reach the keyring callback")
+-		return ""
++		t.Fatalf("timed out waiting for %s", what)
++		var zero T
++		return zero
+ 	}
+ }

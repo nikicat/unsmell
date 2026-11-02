@@ -1,0 +1,100 @@
+id: dengi-seb-20261102-005337-1-t10
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t10
+judge: null
+labels: []
+findings:
+- id: b1-17
+  at:
+  - seb.py:5
+  reach:
+  - seb.py:2-6
+  row: compressed doc
+  claim: 'The module docstring joins two ideas with a semicolon: "Upserts booked transactions into dengi.db;
+    without date_from, resumes from the last stored day."'
+  fix: '"Stores booked transactions in dengi.db. Without date_from, it resumes from the last day stored
+    for each account."'
+  decision: SKIP
+  score: 3
+  reason: The doc is correct, so this is only a rewording.
+  same: []
+  triage:
+    id: b1-17
+    decision: SKIP
+    score: 3
+    reason: correct doc
+    rewording: null
+    task: t10
+- id: b1-18
+  at:
+  - seb.py:37-38
+  reach:
+  - seb.py:37-38
+  row: compressed doc
+  claim: The psu_headers docstring opens "Mark the request…", but the function marks nothing; it returns
+    headers. A colon joins a second idea (:38), and "~4/day" is a noun stack.
+  fix: '"Returns the PSU headers, which tell the bank that the user is present. This lifts the bank''s
+    cap of about four unattended requests a day. Returns no headers when stdin is not a terminal, because
+    an unattended run must not claim that the user is there."'
+  decision: SKIP
+  score: 4
+  reason: The outcome is implied but not stated, so this is mostly a rewording.
+  same:
+  - b1-10
+  triage:
+    id: b1-18
+    decision: SKIP
+    score: 4
+    reason: rewording of a correct doc
+    task: t10
+- id: b1-19
+  at:
+  - seb.py:22
+  - seb.py:54
+  reach:
+  - seb.py:22
+  - seb.py:54
+  row: compressed doc
+  claim: Two trailing comments. "# must match one registered on the app" (:22) is a "must" precondition,
+    and "one" has no clear referent. "# PSD2 max; bank may cap lower" (:54) joins two ideas with a semicolon.
+  fix: Comments on their own lines above the code. "The redirect URL must be one of the URLs registered
+    for the app in Enable Banking." "PSD2 allows at most 180 days. The bank may grant less, so the session's
+    own valid_until is what counts."
+  decision: SKIP
+  score: 3
+  reason: Correct comments, so this is a rewording.
+  same:
+  - b1-2
+  triage:
+    id: b1-19
+    decision: SKIP
+    score: 3
+    reason: rewording
+    task: t10
+- id: b1-20
+  at:
+  - schema.sql:3
+  - schema.sql:16
+  reach:
+  - schema.sql:3
+  - schema.sql:16
+  row: compressed doc
+  claim: Long trailing comments on columns. :3 joins two ideas with a semicolon, and :16 is an appositive
+    ("JSON array text, fine for LIKE").
+  fix: 'Comments on their own lines above the columns, written as sentences. For :16: "The JSON array
+    as text. LIKE can search it as it is."'
+  decision: SKIP
+  score: 3
+  reason: Correct comments, so this is a rewording.
+  same:
+  - b1-15
+  triage:
+    id: b1-20
+    decision: SKIP
+    score: 3
+    reason: rewording
+    task: t10
+check: ok

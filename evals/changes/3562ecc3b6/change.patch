@@ -1,0 +1,65 @@
+diff --git a/evals/README.md b/evals/README.md
+index e8764a0..e338478 100644
+--- a/evals/README.md
++++ b/evals/README.md
+@@ -13,9 +13,10 @@ evals/run.py ~/src/unsmell-holdout/*   # the held-out set, to verify only
+ ```
+ 
+ Each fixture runs in a throwaway git repo under `~/.cache/unsmell-eval/runs/`.
+-Every round invokes `/unsmell:unsmell fix everything` headless, with the skill
+-loaded from this checkout. The round trees are kept as `refs/rounds/N` in that
+-repo, so `git diff refs/rounds/1 refs/rounds/2` shows what round 2 changed.
++Each round invokes `/unsmell:unsmell` headless with the text of `--args`, which
++is `fix everything` by default, and loads the skill from this checkout. The
++round trees are kept as `refs/rounds/N` in that repo, so
++`git diff refs/rounds/1 refs/rounds/2` shows what round 2 changed.
+ 
+ The runs use their own Claude config in `~/.cache/unsmell-eval/config`. It has
+ no CLAUDE.md, hooks or plugins, so that only the skill steers the result. Link
+@@ -63,13 +64,16 @@ fixture, so that the ruling stays settled.
+ Convergence alone does not say whether a change was worth making, so every
+ change that a run makes goes into a labelled dataset:
+ 
+-- `changes/<id>/change.patch` is one hunk of one round, and `change.yaml` beside
+-  it says where it was seen, what the judge proposed, and the labels: `good`,
+-  `bad` or `neutral`, with a category and a note. The id hashes the changed
+-  lines, so a later run that makes the same change lands in the same directory
+-  and keeps its label.
+-- `rounds/<run>/` holds each round's full patch and report, so that the tree a
+-  change was made on can be rebuilt from its fixture.
++- `changes/<id>/change.patch` is the patch of one task of one round, a task as
++  in §3.0 of `skills/unsmell/SKILL.md`. `change.yaml` beside it says where it
++  was seen, the findings and decisions the patch was made for, what the judge
++  proposed, and the labels. A label is `good`, `bad`, `neutral` or `unsure`
++  (looked at, but cannot judge), optionally with the finding it is about and a
++  note. A later run that makes the same change gets the same id, so it lands in
++  the same directory and keeps its labels.
++- `rounds/<run>/` holds each round's full patch and report and the skill's run
++  files, so that the tree a change was made on can be rebuilt from its fixture
++  without the run directory.
+ 
+ The loop:
+ 
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..1257c0c 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -15,14 +15,10 @@ Usage:
+   evals/changes.py label [ID] LABEL [-f FINDING] [-n NOTE]   no ID: the current change
+   evals/changes.py score RUN_DIR...     count a run's changes by label
+ 
+-A change is one task of one skill run (§3.0 of SKILL.md): its findings, the
+-decision on them and the patch an editor made for it, stored as
+-evals/changes/<id>/change.patch beside change.yaml, which holds where it came
+-from, the findings with their decisions, the judge's proposal and the labels. The
+-id hashes the patch's changed lines, so a later run that makes the same change
+-lands in the same directory. evals/rounds/<run>/ keeps the
+-full patch and the report of every round, so that a review worktree can be rebuilt
+-from the fixture without the run directory.
++The tool tells whether the changes a run made were worth making. It splits
++runs into changes, has a model propose a label for each, opens each one in
++context for a person to label, and scores runs by those labels. The layout of
++the stored dataset is in evals/README.md.
+ """
+ import argparse
+ import hashlib

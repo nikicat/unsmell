@@ -1,0 +1,35 @@
+id: b2dcbac163
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - internal/notification/desktop.go:161-173
+  - internal/notification/desktop.go:208-220
+  - internal/notification/desktop.go:224-236
+  reach:
+  - internal/notification/desktop.go:159-245
+  row: duplication
+  claim: The retry-once-after-reconnect on dbus.ErrClosed is written three times (Notify, NotifyPersistent,
+    Close).
+  fix: One method n.withReconnect(op func() error) error holding the lock, the ErrClosed check, the reconnect
+    and the retry; the three callers pass their call.
+  decision: PLAN
+  score: 7
+  reason: Unchanged lines, not touched by the changeset.
+  same: []
+  triage:
+    id: b1-10
+    decision: PLAN
+    score: 7
+    reason: unchanged lines
+    task: t5
+check: ok

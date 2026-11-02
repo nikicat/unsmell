@@ -1,0 +1,98 @@
+diff --git a/schema.sql b/schema.sql
+index 488144d..9bc627b 100644
+--- a/schema.sql
++++ b/schema.sql
+@@ -1,5 +1,5 @@
+ CREATE TABLE IF NOT EXISTS txn (
+-    iban            TEXT NOT NULL,
++    account         TEXT NOT NULL,  -- the IBAN, or the bank's identification hash when the account has none
+     entry_reference TEXT NOT NULL,  -- unique per account at SEB; booked only, pending has none
+     raw             TEXT NOT NULL CHECK (json_valid(raw)),
+ 
+@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS txn (
+                                             raw ->> '$.bank_transaction_code.code',
+                                             raw ->> '$.bank_transaction_code.sub_code')),
+ 
+-    PRIMARY KEY (iban, entry_reference)
++    PRIMARY KEY (account, entry_reference)
+ ) STRICT;
+ 
+-CREATE INDEX IF NOT EXISTS txn_date ON txn (iban, booking_date);
++CREATE INDEX IF NOT EXISTS txn_date ON txn (account, booking_date);
+diff --git a/seb.py b/seb.py
+index 3c4369b..8371303 100644
+--- a/seb.py
++++ b/seb.py
+@@ -118,7 +118,7 @@ class EnableBanking:
+ 
+ @dataclass(frozen=True)
+ class Ledger:
+-    """The stored transactions of each account, keyed by IBAN and entry reference."""
++    """The stored transactions of each account, keyed by account (see account_key) and entry reference."""
+ 
+     db: sqlite3.Connection
+ 
+@@ -129,24 +129,24 @@ class Ledger:
+         db.executescript(Path(__file__).with_name("schema.sql").read_text())
+         return cls(db)
+ 
+-    def last_booking_date(self, iban: str) -> date | None:
+-        (day,) = self.db.execute("SELECT max(booking_date) FROM txn WHERE iban = ?", (iban,)).fetchone()
++    def last_booking_date(self, account: str) -> date | None:
++        (day,) = self.db.execute("SELECT max(booking_date) FROM txn WHERE account = ?", (account,)).fetchone()
+         return date.fromisoformat(day) if day else None
+ 
+-    def count(self, iban: str) -> int:
+-        (count,) = self.db.execute("SELECT count(*) FROM txn WHERE iban = ?", (iban,)).fetchone()
++    def count(self, account: str) -> int:
++        (count,) = self.db.execute("SELECT count(*) FROM txn WHERE account = ?", (account,)).fetchone()
+         return count
+ 
+-    def upsert(self, iban: str, txs: Iterable[dict]) -> None:
++    def upsert(self, account: str, txs: Iterable[dict]) -> None:
+         """Stores the given transactions of the account.
+ 
+         A transaction that is already stored under its entry reference is updated, not added again.
+         """
+         with self.db:
+             self.db.executemany(
+-                "INSERT INTO txn (iban, entry_reference, raw) VALUES (?, ?, ?)"
++                "INSERT INTO txn (account, entry_reference, raw) VALUES (?, ?, ?)"
+                 " ON CONFLICT DO UPDATE SET raw = excluded.raw WHERE raw IS NOT excluded.raw",
+-                [(iban, t["entry_reference"], json.dumps(t, ensure_ascii=False)) for t in txs])
++                [(account, t["entry_reference"], json.dumps(t, ensure_ascii=False)) for t in txs])
+ 
+ 
+ def progress(txs: Iterable[dict], label: str) -> Iterator[dict]:
+@@ -164,17 +164,26 @@ def parse_args() -> argparse.Namespace:
+     return parser.parse_args()
+ 
+ 
++def account_key(acc: dict) -> str:
++    """Returns the key the ledger stores an account's transactions under.
++
++    It is the IBAN, or the bank's identification hash when the account has none;
++    never the uid, which is valid only for the session it came from.
++    """
++    return acc.get("account_id", {}).get("iban") or acc["identification_hash"]
++
++
+ def main():
+     args = parse_args()
+     client = EnableBanking(APP_ID, KEY_PATH.read_bytes(), psu_headers())
+     ledger = Ledger.open(Path("dengi.db"))
+     for acc in client.session()["accounts"]:
+-        iban = acc.get("account_id", {}).get("iban") or acc["uid"]
+-        date_from = args.date_from or ledger.last_booking_date(iban)
++        account = account_key(acc)
++        date_from = args.date_from or ledger.last_booking_date(account)
+         txs = [t for t in progress(client.transactions(acc["uid"], date_from), acc["uid"]) if t["status"] == "BOOK"]
+-        before = ledger.count(iban)
+-        ledger.upsert(iban, txs)
+-        print(f"{iban}: {len(txs)} booked fetched since {date_from}, {ledger.count(iban) - before} new")
++        before = ledger.count(account)
++        ledger.upsert(account, txs)
++        print(f"{account}: {len(txs)} booked fetched since {date_from}, {ledger.count(account) - before} new")
+ 
+ 
+ if __name__ == "__main__":

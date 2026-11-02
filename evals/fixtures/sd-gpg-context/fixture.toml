@@ -1,0 +1,5 @@
+# Go, 13 files: a feature across several packages. Large enough that the skill
+# must run its full survey, with subagents and the cross-file pass.
+source = "~/src/secrets-dispatcher"
+commit = "8f28378"
+check = "go build ./... && go vet ./..."

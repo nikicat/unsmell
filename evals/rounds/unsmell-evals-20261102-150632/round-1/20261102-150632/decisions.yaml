@@ -1,0 +1,382 @@
+- id: b1-8
+  decision: FIX
+  score: 9
+  reason: a bug in the reversal measure. Fixing the existing parser to track headers by state is not a
+    new hand-written mechanism, so no dependency question is needed (patches only, no questions)
+  task: t1
+- id: b1-9
+  decision: FIX
+  score: 5
+  reason: an inline rule with no name and a compressed comment that explains something else
+  task: t1
+- id: b1-10
+  decision: FIX
+  score: 5
+  reason: the fix stays inside Delta (one private union helper), so evaluate keeps its list of deltas
+  task: t1
+- id: b1-24
+  decision: FIX
+  score: 5
+  reason: a collection whose element type says nothing
+  task: t1
+- id: b2-23
+  decision: FIX
+  score: 5
+  reason: a derivation written four times, with inconsistent header handling
+  task: t1
+- id: cross-5
+  decision: FIX
+  score: 6
+  reason: with b1-8 decided as a stateful parser in run.py, the shared diff reader has one obvious home
+    there. change_id must keep producing the same ids, since they key the stored dataset
+  task: t1
+- id: b1-16
+  decision: FIX
+  score: 5
+  reason: a crash on a valid fixture tree, and a fix of two lines
+  task: t2
+- id: b1-3
+  decision: FIX
+  score: 9
+  reason: a bug, the eval reports success when the run failed
+  task: t3
+- id: b1-4
+  decision: FIX
+  score: 7
+  reason: the same call shape and reply parsing in two modules that must agree
+  task: t3
+- id: b2-19
+  decision: FIX
+  score: 6
+  reason: a derivation written in two files, an unnamed return and a missing exit
+  task: t3
+- id: cross-2
+  decision: FIX
+  score: 9
+  reason: one call shape in two modules that must agree, and the copy in run.py hides failures as success
+  task: t3
+- id: b1-1
+  decision: FIX
+  score: 8
+  reason: the full tell of unparsed input (key access past the edge, parsed three times), plus a silent
+    cwd fallback
+  task: t4
+  after: &id001
+  - t3
+- id: b1-13
+  decision: FIX
+  score: 7
+  reason: same docstring as b1-14, so it shares the Fixture task
+  task: t4
+  after: *id001
+- id: b1-14
+  decision: FIX
+  score: 5
+  reason: one fact in three places
+  task: t4
+  after: *id001
+- id: b2-10
+  decision: FIX
+  score: 7
+  reason: derivation written three times across two files
+  task: t4
+  after: *id001
+- id: cross-1
+  decision: FIX
+  score: 8
+  reason: one input parsed three times across two modules, past its edge, by key
+  task: t4
+  after: *id001
+- id: b1-2
+  decision: FIX
+  score: 7
+  reason: dict with implicit keys whose schema a second module also depends on
+  task: t5
+  after: &id002
+  - t4
+- id: b1-5
+  decision: FIX
+  score: 7
+  reason: names that a writer and a reader in two modules must spell the same way
+  task: t5
+  after: *id002
+- id: b1-6
+  decision: FIX
+  score: 6
+  reason: a derivation written twice in one function, and a ref name a second module reads
+  task: t5
+  after: *id002
+- id: b1-7
+  decision: FIX
+  score: 6
+  reason: both tells met, a closure captures the value and one sibling passes it straight to the other
+  task: t5
+  after: *id002
+- id: b1-22
+  decision: FIX
+  score: 5
+  reason: a comment that does not parse
+  task: t5
+  after: *id002
+- id: b1-23
+  decision: FIX
+  score: 7
+  reason: a function with five inline roles, and the end shape the other findings reach together
+  task: t5
+  after: *id002
+- id: b2-9
+  decision: FIX
+  score: 7
+  reason: both modules are in the changeset and have no other callers, so the shared Report type is not
+    a public interface. Stacked on the Fixture task because both rewrite evaluate
+  task: t5
+  after: *id002
+- id: b2-8
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, three readers'
+  task: t5
+  after: *id002
+- id: b2-11
+  decision: FIX
+  score: 7
+  reason: raw input passed past its first reader, plus two unnamed tuples
+  task: t5
+  after: *id002
+- id: b2-12
+  decision: FIX
+  score: 9
+  reason: the doc states something false
+  task: t5
+  after: *id002
+- id: b2-13
+  decision: FIX
+  score: 6
+  reason: steps and details mixed in a 50-line function with a loop that computes and writes
+  task: t5
+  after: *id002
+- id: b2-14
+  decision: FIX
+  score: 5
+  reason: states a missing outcome
+  task: t5
+  after: *id002
+- id: cross-3
+  decision: FIX
+  score: 7
+  reason: file names and dict keys that a writer in one module and a reader in another must spell alike
+  task: t5
+  after: *id002
+- id: cross-4
+  decision: FIX
+  score: 6
+  reason: one literal written in one module and read in another, plus a derivation written twice in the
+    writer
+  task: t5
+  after: *id002
+- id: b2-15
+  decision: FIX
+  score: 6
+  reason: a 40-line function whose steps are separated by blocks of detail
+  task: t6
+  after: &id003
+  - t5
+- id: b2-16
+  decision: FIX
+  score: 9
+  reason: the doc states something false and leaves out an effect and an exit
+  task: t6
+  after: *id003
+- id: b2-17
+  decision: FIX
+  score: 6
+  reason: a bool param that only picks a branch, and a doc missing an effect
+  task: t6
+  after: *id003
+- id: cross-7
+  decision: FIX
+  score: 9
+  reason: one fact in two batches, both copies false in a different way
+  task: t6
+  after: *id003
+- id: b2-5
+  decision: FIX
+  score: 7
+  reason: a derivation written twice, with repeated I/O
+  task: t7
+  after: &id004
+  - t1
+  - t5
+- id: b2-6
+  decision: FIX
+  score: 9
+  reason: a bug, though its effect on similarity is small. Fixed by t1, whose shared changed-lines reader
+    joins the patch lines and the claims with spaces
+  task: t1
+- id: b2-7
+  decision: FIX
+  score: 9
+  reason: the answer leaks into the prompt, so a re-judge measures nothing
+  task: t7
+  after: *id004
+- id: b2-20
+  decision: FIX
+  score: 6
+  reason: steps and details mixed, and context captured by a closure and passed down
+  task: t7
+  after: *id004
+- id: b2-27
+  decision: FIX
+  score: 5
+  reason: unnamed tuple at a call site
+  task: t7
+  after: *id004
+- id: b1-11
+  decision: FIX
+  score: 9
+  reason: the doc states something false
+  task: t8
+- id: b1-15
+  decision: FIX
+  score: 5
+  reason: the doc says less than the code
+  task: t8
+- id: b2-29
+  decision: FIX
+  score: 6
+  reason: one fact in three places, one copy already false
+  task: t8
+- id: cross-6
+  decision: FIX
+  score: 9
+  reason: one fact in three places across two batches, and one copy states something false
+  task: t8
+- id: b2-2
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, four readers'
+  task: t9
+  after: &id005
+  - t1
+  - t6
+  - t7
+  - t8
+- id: b2-3
+  decision: FIX
+  score: 6
+  reason: a derivation written three times
+  task: t9
+  after: *id005
+- id: b2-4
+  decision: FIX
+  score: 6
+  reason: two derivations written twice and three times
+  task: t9
+  after: *id005
+- id: b2-18
+  decision: FIX
+  score: 6
+  reason: a literal set spelled in five places
+  task: t9
+  after: *id005
+- id: b2-21
+  decision: FIX
+  score: 5
+  reason: a selection repeated in two functions and mixed with effects
+  task: t9
+  after: *id005
+- id: b2-22
+  decision: FIX
+  score: 5
+  reason: doc leaves out an outcome and leaks mechanism
+  task: t9
+  after: *id005
+- id: b2-24
+  decision: FIX
+  score: 5
+  reason: the traversal row of the table
+  task: t9
+  after: *id005
+- id: b2-25
+  decision: FIX
+  score: 5
+  reason: a hand-built counter
+  task: t9
+  after: *id005
+- id: b2-26
+  decision: FIX
+  score: 6
+  reason: inline command bodies beside named ones, and unparsed argv
+  task: t9
+  after: *id005
+- id: b2-28
+  decision: FIX
+  score: 5
+  reason: the doc says less than the code and lists the output's fields
+  task: t9
+  after: *id005
+- id: b2-30
+  decision: FIX
+  score: 6
+  reason: one interface stated twice
+  task: t9
+  after: *id005
+- id: b2-1
+  decision: ASK
+  score: 8
+  reason: it rewrites nearly every function of changes.py. It is stacked on the FIX tasks of changes.py
+    and its patch shows the proposal; patches only, so no question is asked
+  task: t10
+  after:
+  - t9
+- id: b1-12
+  decision: SKIP
+  score: 4
+  reason: git is a generic helper used on several repos, so the shared column is weak, and the fix churns
+    every git call in changes.py
+  task: skip-b1-12
+- id: b1-17
+  decision: SKIP
+  score: 4
+  reason: an operator error with a loud failure
+  task: skip-b1-17
+- id: b1-18
+  decision: SKIP
+  score: 4
+  reason: rare and fails loudly
+  task: skip-b1-18
+- id: b1-19
+  decision: SKIP
+  score: 3
+  reason: true for every fixture source today
+  task: skip-b1-19
+- id: b1-20
+  decision: SKIP
+  score: 3
+  reason: three short lines in one test
+  task: skip-b1-20
+- id: b1-21
+  decision: SKIP
+  score: 4
+  reason: true of the whole eval setup, only the subject is loose
+  task: skip-b1-21
+- id: b2-31
+  decision: SKIP
+  score: 3
+  reason: rewording correct comments
+  task: skip-b2-31
+- id: b2-32
+  decision: SKIP
+  score: 3
+  reason: a true doc fact that adds little
+  task: skip-b2-32
+- id: e-1
+  decision: PLAN
+  score: 6
+  reason: the repo keeps no TODO.md or plan file, and patches only means no question about where plans go. Recorded here until the user names a place
+  task: plan-e-1
+- id: e-2
+  decision: SKIP
+  score: 4
+  reason: under the threshold
+  task: skip-e-2

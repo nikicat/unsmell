@@ -1,0 +1,99 @@
+id: 7967cdc768
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - src/evm/cache/event_signature_cache.rs:59-76
+  - src/evm/cache/event_signature_cache.rs:98
+  reach:
+  - src/evm/cache/event_signature_cache.rs:54-76
+  - src/evm/cache/event_signature_cache.rs:98
+  - src/evm/cache.rs:36-56
+  row: split protocol
+  claim: Topic's SQLite BLOB form is written twice. The bind is topic0.as_slice() at :98, and the read
+    is a 32-length guard plus B256::from_slice in the match at :69-71, which the changeset rewrote. The
+    query closure still returns an unnamed (sig, topic, abi) tuple that the match then reassembles into
+    EventSignatureRow, and a stored topic0 that is not 32 bytes silently reads as a cache miss. The house
+    pattern for a domain type's SQL form is the ToSql impls for ChainId and FilterHash in src/evm/cache.rs:41-56,
+    and Topic has none.
+  fix: Add ToSql and FromSql for Topic beside ChainId's and FilterHash's in src/evm/cache.rs (FromSql
+    rejecting a blob that is not 32 bytes). Bind topic0 directly at :98. get_event_signature decodes straight
+    into EventSignatureRow inside the row closure and uses query_row(..).optional() (OptionalExtension,
+    as src/matcher/anchor_store_sqlite.rs does), so the tuple, the length guard and the literal 32 go
+    away.
+  decision: FIX
+  score: 6
+  reason: 'Split protocol and inline decode on changed lines, with a house pattern to follow. Behaviour:
+    a corrupt topic0 blob becomes a CacheError instead of a silent miss followed by a network re-resolve.
+    The report should name this under Behaviour. If the user prefers the self-healing miss, FromSql can
+    still be used with the error mapped to None. log_cache.rs:137-140 and :446 bind and decode topics
+    the same way and could adopt the impls, but that code is outside this changeset (cross-file).'
+  same: []
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 6
+    reason: 'Split protocol on changed lines, with the house ToSql pattern in src/evm/cache.rs to follow.
+      Behaviour: a stored topic0 that is not 32 bytes becomes a CacheError instead of a silent miss.'
+    task: t1
+- id: b1-3
+  at:
+  - src/evm/cache/event_signature_cache.rs:115
+  - src/evm/cache/event_signature_cache.rs:126
+  - src/evm/cache/event_signature_cache.rs:135
+  - src/evm/cache/event_signature_cache.rs:159
+  reach:
+  - src/evm/cache/event_signature_cache.rs:115-168
+  row: repeated derivation
+  claim: The test constant TOPIC0 stays a B256, and the changeset wraps it as Topic::from(TOPIC0) at all
+    three uses.
+  fix: 'const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD)); and pass TOPIC0 directly at each use.'
+  decision: FIX
+  score: 5
+  reason: Same expression three times on changed lines. One-line fix. Combines with b1-1's test rewrite.
+  same:
+  - b1-1
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 5
+    reason: Same wrapping written three times on changed lines.
+    task: t1
+- id: b1-4
+  at:
+  - src/evm/cache/event_signature_cache.rs:20
+  - src/evm/cache/event_signature_cache.rs:22
+  reach:
+  - src/evm/cache/event_signature_cache.rs:18-23
+  row: tautological comment
+  claim: The topic0 field doc opens with the field's own name and joins its content with an em-dash appositive
+    ("`topic0` — the keccak256 hash of the signature."). The abi_json doc says "when populated", which
+    says less than the code. abi_json is None only for rows written before the migration at src/evm/cache.rs:258-262
+    added the column, and that state is transitional. The same fact is stated again at src/signatures.rs:51-53
+    and in the migration comment.
+  fix: topic0 gets "The keccak256 hash of the signature. A log of this event carries it as its first topic."
+    abi_json gets "The JSON of the matched ABI event item. None for rows written before the cache stored
+    it." This field owns the fact. The ResolvedEvent doc in src/signatures.rs, which is outside this batch,
+    can drop its cache-history sentence in a later pass.
+  decision: FIX
+  score: 5
+  reason: Opening-name check hit and a doc that leaves out the transitional None, both on lines the changeset
+    added.
+  same: []
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 5
+    reason: Field doc opens with its own name, and abi_json's doc leaves out that None is transitional.
+      Both on added lines.
+    task: t1
+check: ok

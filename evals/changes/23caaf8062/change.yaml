@@ -1,0 +1,40 @@
+id: 23caaf8062
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-9
+  at:
+  - src/evm/cache/event_signature_cache.rs:79
+  - src/evm/cache/event_signature_cache.rs:90
+  reach:
+  - src/evm/cache/event_signature_cache.rs:79-103
+  - src/bin/chainfold/signature_cache.rs:48
+  row: misleading name
+  claim: insert_event_signature runs INSERT OR REPLACE, so it overwrites any row with the same key. resolve_event
+    relies on this to fill abi_json into pre-migration rows (signatures.rs:89-104). Neither the name nor
+    a doc says so, and the method has no doc. These are unchanged lines.
+  fix: 'Rename it to put_event_signature (matching SignatureCache::put) or upsert_event_signature, and
+    add a one-line doc: "Stores the row for the key, replacing any existing one."'
+  decision: PLAN
+  score: 5
+  reason: unchanged lines; a name that says less than the body
+  same: []
+  triage:
+    id: b1-9
+    decision: PLAN
+    score: 5
+    reason: unchanged lines; name says less than the body
+    task: t5
+    after:
+    - t1
+after:
+- bc19c04051
+check: ok

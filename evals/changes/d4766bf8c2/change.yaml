@@ -1,0 +1,48 @@
+id: d4766bf8c2
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-005337
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - internal/notification/desktop.go:591-673
+  reach:
+  - internal/notification/desktop.go:582-678
+  - internal/notification/slow_upstream.go:79-111
+  row: primitive obsession
+  claim: The changeset fixed markup injection in formatBody by wrapping each of about twelve interpolated
+    values in esc() (desktop.go:601, 612, 620, 626, 628, 638, 653, 655, 657, 663), while the raw <b>/<i>
+    tags are written by hand into the same strings.Builder. "Escaped" is an invariant that no type carries,
+    so the next field added to the body can be interpolated raw and nothing fails; the sibling formatter
+    formatSlowUpstreamBody already does exactly that (b1-2).
+  fix: A small package-private markup writer in internal/notification (for example `type markup struct{
+    b strings.Builder }` with `text(s)`, `bold(s)`, `italic(s)` that escape their argument and `String()`),
+    so raw tags exist only inside it. formatBody and formatSlowUpstreamBody build through it; no esc alias
+    and no hand-written tag remain.
+  decision: ASK
+  score: 6
+  reason: 'The "escaped" tell is met in full (7-8), minus 2 for churn: it rewrites the whole ~95-line
+    formatBody and the slow-upstream formatter. Two shapes are defensible (a writer type vs. keeping html.EscapeString
+    at each call with named helpers from b1-3/b1-4), so ask.'
+  same: []
+  triage:
+    id: b1-1
+    decision: ASK
+    score: 6
+    reason: Two defensible shapes (markup writer type vs. esc at each call with named helpers); patches-only
+      run, so no question is asked and the patch shows the proposal.
+    task: t3
+    after:
+    - t1
+    - t2
+after:
+- 0d1fce1028
+- '8054371333'
+check: ok

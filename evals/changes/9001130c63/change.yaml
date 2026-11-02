@@ -1,0 +1,29 @@
+id: 9001130c63
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-21
+judge: null
+labels: []
+findings:
+- id: b1-21
+  at:
+  - evals/README.md:5-6
+  reach:
+  - evals/README.md:3-6
+  row: ambiguous noun
+  claim: The README says that the fixtures also measure whether real smells get fixed. Nothing in run.py
+    measures that. The labelled changes and changes.py score do.
+  fix: say that the labelled changes (see Changes and labels) measure whether real smells get fixed
+  decision: SKIP
+  score: 4
+  reason: true of the whole eval setup, only the subject is loose
+  same: []
+  triage:
+    id: b1-21
+    decision: SKIP
+    score: 4
+    reason: true of the whole eval setup, only the subject is loose
+    task: skip-b1-21
+check: ok

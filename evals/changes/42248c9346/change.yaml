@@ -1,0 +1,38 @@
+id: 42248c9346
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-15
+  at:
+  - seb.py:79-88
+  reach:
+  - seb.py:79-88
+  row: computing loop with effects
+  claim: transactions combines continuation-key paging (generic), accumulation into a list and a progress
+    print to stderr in one loop. The tuple assignment with a conditional at seb.py:80 also has to be read
+    twice.
+  fix: A generator EnableBanking.pages(path, params) yields each page and follows continuation_key. transactions
+    chains page["transactions"] from it and prints progress, and params is built on its own line.
+  decision: SKIP
+  score: 4
+  reason: The loop is small and has one user; the gain is local.
+  same: []
+  triage:
+    id: b1-15
+    decision: SKIP
+    score: 4
+    reason: a local gain with one user
+    task: t7
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

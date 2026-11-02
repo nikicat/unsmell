@@ -1,0 +1,27 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 4dcda50..e23812b 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -164,6 +164,12 @@ func (b *prompterBridge) unexportCallback(path dbus.ObjectPath) {
+ 	if !b.callbacks[path] {
+ 		return
+ 	}
++	b.dropCallbackLocked(path)
++}
++
++// Unexports the callback proxy at path from frontConn and forgets it. The
++// caller holds mu.
++func (b *prompterBridge) dropCallbackLocked(path dbus.ObjectPath) {
+ 	// Unexport by clearing the object; ignore the error (best-effort teardown).
+ 	_ = b.frontConn.Export(nil, path, prompterCallbackInterface)
+ 	delete(b.callbacks, path)
+@@ -172,8 +178,7 @@ func (b *prompterBridge) unexportCallback(path dbus.ObjectPath) {
+ func (b *prompterBridge) close() {
+ 	b.mu.Lock()
+ 	for path := range b.callbacks {
+-		_ = b.frontConn.Export(nil, path, prompterCallbackInterface)
+-		delete(b.callbacks, path)
++		b.dropCallbackLocked(path)
+ 	}
+ 	owned := b.owned
+ 	b.owned = false

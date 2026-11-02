@@ -1,0 +1,185 @@
+diff --git a/TODO.md b/TODO.md
+index a8db114..495056f 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -20,7 +20,7 @@ The schema items below change generated columns of `txn`. Because `CREATE TABLE
+ - `schema.sql:27` — the index name `txn_date` says neither which date it covers nor that it is per account. `txn_account_booking_date` would. An existing db keeps the old index, so drop it as part of the migration.
+ - `pyproject.toml:19` and `seb.py` `Store.__init__` — the schema file's name and its place next to the module are spelled in both files. Renaming either breaks only an installed `seb`. The wheel also installs a bare `schema.sql` at the top level of site-packages. Options: move the code into a `dengi/` package and load the schema with `importlib.resources`, or embed the schema in `seb.py` as a string. Either one changes how the program is laid out and run.
+ - `.gitignore:3-5` and `seb.py` `DB`, `Session.PATH`, `Config.from_env` (`private.pem`) — every runtime file sits in the current directory, and `.gitignore` has to repeat each name. A new state file can be committed by accident, and these files hold bank data, a consent and a private key. Keep the runtime state in one directory, for example the XDG state directory, and ignore that directory.
+-- `seb.py` `Session.parse` — a `valid_until` without a timezone parses, and the comparison with `datetime.now(UTC)` in `Session.load` then raises a TypeError instead of a BankError. Reject a naive `valid_until` in `Session.parse`.
++- `seb.py` `Session.parse` — a `valid_until` without a timezone parses, and the comparison with `datetime.now(UTC)` in `Session.expired` then raises a TypeError instead of a BankError. Reject a naive `valid_until` in `Session.parse`.
+ - `seb.py` `user_ip` and `EnableBanking.call` — a network failure, a failed ipify call, or a body that is not JSON raises a `requests` exception or a `ValueError`. Neither is a BankError, so the run ends in a traceback. Decide whether these should become BankError.
+ - `seb.py` `Transaction.booked` and `Account.parse` — `entry_reference`, and an account's `uid` and `iban`, are typed `str` but never checked. A null `uid` ends up in the transactions URL and in `txn.iban`. A null or numeric value gets through and fails later, in `Store.upsert_counting_new`, with an sqlite IntegrityError or a non-text key. Check their types where they are parsed.
+ - `seb.py` `Transaction.parse` and `Store.last_booking_date` — `booking_date` is first parsed when a later run resumes. A malformed value then raises ValueError on every run after it. Parse the date when the transaction is read, or add a `CHECK (date(booking_date) IS booking_date)` to the schema together with the migration.
+diff --git a/seb.py b/seb.py
+index 7e22eca..922b731 100755
+--- a/seb.py
++++ b/seb.py
+@@ -27,7 +27,7 @@ type IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+ 
+ 
+ class BankError(Exception):
+-    """A failed Enable Banking call or bank login."""
++    """A failed Enable Banking call or bank login, or a saved session that cannot be read."""
+ 
+ 
+ class ConfigError(Exception):
+@@ -46,7 +46,7 @@ def bank_body(kind: str):
+ 
+ @dataclass(frozen=True)
+ class Config:
+-    """The Enable Banking app that this program signs its requests as, and the bank it asks for consent."""
++    """The Enable Banking app that this program runs as, and the bank it asks for consent."""
+ 
+     app_id: uuid.UUID
+     private_key: RSAPrivateKey
+@@ -139,7 +139,12 @@ class Session:
+         except json.JSONDecodeError as e:
+             raise BankError(f"{cls.PATH}: {e}") from e
+         s = cls.parse(raw)
+-        return s if s.valid_until > datetime.now(UTC) else None
++        return None if s.expired else s
++
++    @property
++    def expired(self) -> bool:
++        """Checks whether the consent has run out."""
++        return self.valid_until <= datetime.now(UTC)
+ 
+     def save(self):
+         self.PATH.write_text(json.dumps(self.raw, indent=2))
+@@ -311,20 +316,6 @@ def ask_redirect_url(login: Login) -> str:
+     return input("> ").strip()
+ 
+ 
+-def session(bank: EnableBanking) -> Session:
+-    """Returns a session that has not expired, either the saved one or a new one from a bank login.
+-    Errors with BankError when a login is needed and the run is unattended.
+-    Errors as Session.load, EnableBanking.start_login, Login.code and EnableBanking.create_session do."""
+-    if s := Session.load():
+-        return s
+-    if not attended():
+-        raise BankError("no valid session. Run this from a terminal to log in to the bank.")
+-    login = bank.start_login()
+-    s = bank.create_session(login.code(ask_redirect_url(login)))
+-    s.save()
+-    return s
+-
+-
+ class Store:
+     """The transactions that this program has fetched. It owns every query on txn, so only it
+     has to agree with schema.sql."""
+@@ -366,27 +357,51 @@ class Synced:
+     account: Account
+     # The first day fetched, or None when the bank chose it.
+     since: date | None
+-    fetched: int
++    booked: int
+     new: int
+ 
+     def __str__(self) -> str:
+         since = self.since or "the first available day"
+-        return f"{self.account.key}: {self.fetched} booked fetched since {since}, {self.new} new"
++        return f"{self.account.key}: {self.booked} booked fetched since {since}, {self.new} new"
++
+ 
++@dataclass(frozen=True)
++class Run:
++    """One run of the program over the accounts of the user's session."""
++
++    bank: EnableBanking
++    store: Store
++    # The first day that the user asked to fetch, if any.
++    date_from: date | None
++
++    def session(self) -> Session:
++        """Returns a session that has not expired, either the saved one or a new one from a bank login.
++        Errors with BankError when a login is needed and the run is unattended.
++        Errors as Session.load, EnableBanking.start_login, Login.code and EnableBanking.create_session do."""
++        if s := Session.load():
++            return s
++        if not attended():
++            raise BankError("no valid session. Run this from a terminal to log in to the bank.")
++        login = self.bank.start_login()
++        s = self.bank.create_session(login.code(ask_redirect_url(login)))
++        s.save()
++        return s
+ 
+-def sync(bank: EnableBanking, store: Store, account: Account, date_from: date | None) -> Synced:
+-    """Stores the account's booked transactions from date_from on, or from its last stored booking
+-    day when date_from is None, and returns what was stored. Errors as EnableBanking.transactions
+-    and Transaction.booked do."""
+-    # The upsert dedupes the day that a resumed run fetches again.
+-    since = date_from or store.last_booking_date(account)
+-    txs = booked(counted(bank.transactions(account, since), f"{account.key} fetched"))
+-    return Synced(account, since, len(txs), store.upsert_counting_new(account, txs))
++    def sync(self, account: Account) -> Synced:
++        """Stores the account's booked transactions and returns what was stored. They start at
++        Run.date_from, or at the account's last stored booking day when Run.date_from is None. If the
++        account has no stored rows either, they start where EnableBanking.transactions starts when it
++        is given no date_from.
++        Errors as EnableBanking.transactions and Transaction.booked do."""
++        # The upsert dedupes the day that a resumed run fetches again.
++        since = self.date_from or self.store.last_booking_date(account)
++        txs = booked(counted(self.bank.transactions(account, since), f"{account.key} fetched"))
++        return Synced(account, since, len(txs), self.store.upsert_counting_new(account, txs))
+ 
+ 
+ def parse_args(argv: list[str]) -> date | None:
+-    """Returns the date_from argument, or None when it is not given. Errors when it is not
+-    a YYYY-MM-DD date."""
++    """Returns the date_from argument, or None when it is not given. Exits with a usage message
++    when it is not an ISO 8601 date."""
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("date_from", nargs="?", type=date.fromisoformat, help="the first day to fetch, as YYYY-MM-DD")
+     return parser.parse_args(argv).date_from
+@@ -395,10 +410,9 @@ def parse_args(argv: list[str]) -> date | None:
+ def main():
+     date_from = parse_args(sys.argv[1:])
+     try:
+-        bank = EnableBanking(Config.from_env(), user_ip())
+-        store = Store(DB)
+-        for account in session(bank).accounts:
+-            print(sync(bank, store, account, date_from))
++        run = Run(EnableBanking(Config.from_env(), user_ip()), Store(DB), date_from)
++        for account in run.session().accounts:
++            print(run.sync(account))
+     except (ConfigError, BankError) as e:
+         sys.exit(str(e))
+ 
+diff --git a/test_seb.py b/test_seb.py
+index 6d0e264..34debdf 100644
+--- a/test_seb.py
++++ b/test_seb.py
+@@ -32,6 +32,7 @@ class TransactionTest(unittest.TestCase):
+ 
+ 
+ NO_IBAN = Account("uid", None)
++WITH_IBAN = Account("uid", "LT01")
+ 
+ 
+ class PagedBank(EnableBanking):
+@@ -78,19 +79,18 @@ class LoginTest(unittest.TestCase):
+ class StoreTest(unittest.TestCase):
+     def test_upsert_counts_only_new_and_resumes_from_last_day(self):
+         store = Store(":memory:")
+-        account = Account("uid", "LT01")
+-        self.assertIsNone(store.last_booking_date(account))
++        self.assertIsNone(store.last_booking_date(WITH_IBAN))
+         first = booked([tx("a", "2026-10-01"), tx("b", "2026-10-03")])
+-        self.assertEqual(store.upsert_counting_new(account, first), 2)
++        self.assertEqual(store.upsert_counting_new(WITH_IBAN, first), 2)
+         again = booked([tx("b", "2026-10-03"), tx("c", "2026-10-02")])
+-        self.assertEqual(store.upsert_counting_new(account, again), 1)
+-        self.assertEqual(store.last_booking_date(account), date(2026, 10, 3))
++        self.assertEqual(store.upsert_counting_new(WITH_IBAN, again), 1)
++        self.assertEqual(store.last_booking_date(WITH_IBAN), date(2026, 10, 3))
+ 
+ 
+ class SchemaTest(unittest.TestCase):
+     def test_debit_amount_is_negative_cents(self):
+         store = Store(":memory:")
+-        store.upsert_counting_new(Account("uid", "LT01"), booked([tx("a")]))
++        store.upsert_counting_new(WITH_IBAN, booked([tx("a")]))
+         (amount,) = store.db.execute("SELECT amount_cents FROM txn WHERE entry_reference = 'a'").fetchone()
+         self.assertEqual(amount, -150)
+ 

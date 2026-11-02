@@ -1,0 +1,231 @@
+id: 2233303edb
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - seb.py:19-24
+  - seb.py:27-49
+  - seb.py:92-93
+  reach:
+  - seb.py:19-96
+  row: missing receiver
+  claim: headers() and call() share the API client context (API, APP_ID, KEY, PSU) through module globals;
+    authorize() and transactions() reach it through call(); PSU is a mutable global filled by main() via
+    `global PSU` (the comment '# set in main()' at seb.py:24 is the temporal-coupling tell)
+  fix: 'one EnableBanking client (frozen dataclass: app_id, key, psu headers) built once in main; call()
+    becomes its method and builds the JWT headers itself; authorize(), session() and transactions() become
+    its methods; no module globals besides constants; the ''# set in main()'' comment goes'
+  decision: FIX
+  score: 7
+  reason: catalog tell met in full (shared context threaded to every call, captured once); one file, no
+    external callers besides the seb:main entry point
+  same: []
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 7
+    reason: 'full tell: client context in module globals, PSU set by main through `global`'
+    task: t1
+- id: b1-4
+  at:
+  - seb.py:99-100
+  - seb.py:79-80
+  reach:
+  - seb.py:1-6
+  - seb.py:79-82
+  - seb.py:91-109
+  row: unparsed input
+  claim: 'date_from is raw text: sys.argv[1] is never validated and is re-read inside the per-account
+    loop, the DB value is a str from fetchone()[0], and transactions() forwards whatever str it gets to
+    the API; the usage line in the module docstring is a hand-written CLI help'
+  fix: main parses argv once with argparse (positional date_from, nargs='?', type=date.fromisoformat),
+    which also renders the usage; the stored resume day comes back as a date (Ledger.last_booking_date,
+    b1-9); transactions() takes date | None and sends date_from.isoformat()
+  decision: FIX
+  score: 7
+  reason: raw argv passed past the first function and validated nowhere; CLI shape unchanged (same positional,
+    now rejected when malformed)
+  same:
+  - b1-13
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 7
+    reason: argv date never validated and re-read per account; CLI shape unchanged
+    task: t1
+- id: b1-6
+  at:
+  - seb.py:67
+  - seb.py:71-76
+  reach:
+  - seb.py:52-76
+  - seb.py:96
+  row: misplaced rule
+  claim: 'the session file protocol is split: authorize() writes session.json and load_session() reads
+    it and checks its expiry on the raw dict; load_session''s name says less than the body, which may
+    run an interactive Smart-ID login and write a file'
+  fix: authorize() only returns a new session; one session() method (on the client of b1-2) returns a
+    session valid now, loading session.json or authorizing and saving it; the expiry test lives on the
+    session value (Session.expired once b1-5 lands, a small helper until then)
+  decision: FIX
+  score: 6
+  reason: misplaced rule and misleading name with tells met; local to seb.py
+  same:
+  - b1-5
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 6
+    reason: session file written in one function and read in another; load_session may log in
+    task: t1
+- id: b1-7
+  at:
+  - seb.py:52-68
+  reach:
+  - seb.py:52-68
+  row: mixed altitude
+  claim: authorize() interleaves building the /auth body, a terminal prompt, parsing and checking the
+    pasted redirect, the code exchange and the file write; q['code'][0] raises KeyError (a traceback)
+    when the bank redirects back with error=... and the right state, e.g. when the user cancels
+  fix: 'authorize() reads as steps: url = start_auth(state), code = read_redirect(state), return exchange(code);
+    read_redirect parses the pasted URL and exits with the redirect''s error/error_description when there
+    is no code or the state does not match; saving moves to session() (b1-6)'
+  decision: FIX
+  score: 6
+  reason: two inline roles plus an unhandled edge case at the input edge; error exit instead of a traceback
+    is a small behaviour change
+  same:
+  - b1-6
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 6
+    reason: 'verified: q[''code''][0] raises KeyError when the redirect carries error= with the right
+      state'
+    task: t1
+- id: b1-8
+  at:
+  - seb.py:79-88
+  reach:
+  - seb.py:79-88
+  - seb.py:101
+  row: inline generic machinery
+  claim: transactions() hand-builds continuation-key pagination (params dict mutated, out accumulator,
+    tuple-assigned on one line with params) and mixes it with a stderr progress counter
+  fix: 'transactions() is a generator yielding each transaction across pages (while True: page = call(...);
+    yield from page[''transactions'']; stop when no continuation_key); progress is printed by the caller
+    or dropped; main filters BOOK over the generator'
+  decision: FIX
+  score: 5
+  reason: mechanism plus progress effect in one loop; small local change
+  same: []
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 5
+    reason: pagination mechanism mixed with progress output; progress stays, in the caller
+    task: t1
+- id: b1-9
+  at:
+  - seb.py:94-95
+  - seb.py:99-108
+  reach:
+  - seb.py:91-109
+  row: concept mixing
+  claim: 'main mixes orchestration with three inline SQL statements on (db, iban): the resume day, a count
+    lambda and the upsert; db.execute(..., (iban,)).fetchone()[0] is written twice; schema setup and file
+    name are inline too'
+  fix: 'a Ledger class over the sqlite connection, created by Ledger.open(path) which runs schema.sql,
+    with last_booking_date(iban) -> date | None, count(iban) -> int and upsert(iban, txs) -> None; main
+    reads as steps: open ledger, get session, for each account fetch, filter booked, upsert, report'
+  decision: FIX
+  score: 7
+  reason: missing receiver for db across three queries plus a repeated derivation; queries stay written
+    out in full (no query builder)
+  same:
+  - b1-4
+  - b1-14
+  triage:
+    id: b1-9
+    decision: FIX
+    score: 7
+    reason: three inline queries on (db, iban) in main, fetchone()[0] twice; queries stay written out
+    task: t1
+- id: b1-13
+  at:
+  - seb.py:2-6
+  reach:
+  - seb.py:2-6
+  row: compressed doc
+  claim: 'the module docstring joins two ideas with a semicolon, hand-writes the CLI usage, and leaves
+    out what the user meets when there is no valid session: an interactive Smart-ID login whose result
+    is saved in session.json'
+  fix: '''Imports SEB Lithuania account history from Enable Banking into dengi.db.'' then ''Without a
+    date, the import resumes from the last stored booking day. When no valid session is saved in session.json,
+    it asks you to log in with Smart-ID first.''; usage comes from argparse (b1-4)'
+  decision: FIX
+  score: 5
+  reason: states a missing effect the user meets
+  same:
+  - b1-4
+  - b1-14
+  triage:
+    id: b1-13
+    decision: FIX
+    score: 5
+    reason: module doc omits the login the user meets; usage line goes to argparse
+    task: t1
+- id: b1-14
+  at:
+  - seb.py:98
+  - seb.py:5
+  reach:
+  - seb.py:98
+  row: duplicated knowledge
+  claim: the resume rule is stated in the module docstring (seb.py:5) and again in the comment at seb.py:98
+  fix: the rule's owner is Ledger.last_booking_date / the module doc; the seb.py:98 comment goes, and
+    'overlap is deduped by the upsert' moves to Ledger.upsert's doc
+  decision: FIX
+  score: 5
+  reason: one fact, two copies
+  same:
+  - b1-9
+  - b1-13
+  triage:
+    id: b1-14
+    decision: FIX
+    score: 5
+    reason: resume rule stated twice
+    task: t1
+- id: b1-15
+  at:
+  - seb.py:37-38
+  reach:
+  - seb.py:36-42
+  row: compressed doc
+  claim: psu_headers' doc opens with 'Mark the request' although the function marks nothing and returns
+    headers; the empty result for a non-terminal run is stated only after a colon joining a second idea
+  fix: '''Returns the PSU headers that mark a request as user-present. The bank then lifts its limit of
+    about four unattended accesses a day. Returns no headers when stdin is not a terminal, because an
+    unattended run must not claim that the user is there.'''
+  decision: FIX
+  score: 5
+  reason: states the missing outcome; plain sentences
+  same:
+  - b1-2
+  triage:
+    id: b1-15
+    decision: FIX
+    score: 5
+    reason: doc says the function marks the request; it returns headers
+    task: t1
+check: ok

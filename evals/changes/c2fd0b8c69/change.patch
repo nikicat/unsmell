@@ -1,0 +1,78 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 05bc8f5..e1c2425 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -126,15 +126,19 @@ func (b *prompterBridge) activate() error {
+ 
+ // --- Prompter interface (received from gnome-keyring on the backend bus) ---
+ 
+-// BeginPrompting starts a prompt. The callback object lives on gnome-keyring's
+-// backend connection; before forwarding to gnome-shell we export a proxy for it
+-// on the front connection so gnome-shell's PromptReady callbacks reach us.
++// Opens a prompt on gnome-shell's prompter and exports a proxy for callback on
++// the front bus, so gnome-shell's replies reach gnome-keyring.
++// Errors when no front prompter owns org.gnome.keyring.SystemPrompter.
+ func (b *prompterBridge) BeginPrompting(msg dbus.Message, callback dbus.ObjectPath) *dbus.Error {
+ 	if err := b.exportCallback(callback, senderOf(msg)); err != nil {
+ 		return dbustypes.ErrFailed(err)
+ 	}
+ 	b.logger.Info("forwarding keyring unlock prompt to the session prompter", "callback", callback)
+-	return b.toShell.forwardVoid(msg)
++	if err := b.toShell.forwardVoid(msg); err != nil {
++		b.unexportCallback(callback)
++		return err
++	}
++	return nil
+ }
+ 
+ // PerformPrompt drives one round of the prompt (shows the dialog, collects the
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index b63a84b..ac0206d 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -194,6 +194,45 @@ func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
+ 	recvCall(t, shell.begin, "BeginPrompting")
+ }
+ 
++// Pins that a BeginPrompting the front prompter rejects errors and leaves no
++// callback proxy exported on the front bus.
++func TestPrompterBridgeBeginForwardFails(t *testing.T) {
++	tmpDir := t.TempDir()
++	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
++	t.Cleanup(func() { backendCmd.Process.Kill(); backendCmd.Wait() })
++	frontCmd, frontAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "front.sock"))
++	t.Cleanup(func() { frontCmd.Process.Kill(); frontCmd.Wait() })
++
++	// A front name owner with no prompter object makes the forward fail. An
++	// unowned name would not: the bus would activate the host's gcr-prompter.
++	squatterConn, err := dbus.Connect(frontAddr)
++	require.NoError(t, err)
++	t.Cleanup(func() { squatterConn.Close() })
++	reply, err := squatterConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
++	require.NoError(t, err)
++	require.Equal(t, dbus.RequestNameReplyPrimaryOwner, reply)
++
++	proxyBackendConn, err := dbus.Connect(backendAddr)
++	require.NoError(t, err)
++	proxyFrontConn, err := dbus.Connect(frontAddr)
++	require.NoError(t, err)
++	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
++	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
++	t.Cleanup(func() { p.Close() })
++	require.NotNil(t, p.prompter)
++
++	keyringConn, err := dbus.Connect(backendAddr)
++	require.NoError(t, err)
++	t.Cleanup(func() { keyringConn.Close() })
++	prompter := keyringConn.Object(systemPrompterName, dbus.ObjectPath(systemPrompterPath))
++	err = prompter.Call(prompterInterface+".BeginPrompting", 0, dbus.ObjectPath("/org/gnome/keyring/Prompt/x")).Err
++	require.Error(t, err, "BeginPrompting must fail when the front prompter cannot take it")
++
++	p.prompter.mu.Lock()
++	defer p.prompter.mu.Unlock()
++	assert.Empty(t, p.prompter.callbacks, "a failed BeginPrompting must not leave a callback proxy exported")
++}
++
+ func recvCall(t *testing.T, ch chan promptCall, what string) promptCall {
+ 	t.Helper()
+ 	select {

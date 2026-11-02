@@ -1,0 +1,90 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 05bc8f5..1b789df 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -45,10 +45,13 @@ const (
+ //     there and forwards PromptReady to gnome-keyring's real callback object
+ //     on the backend bus.
+ type prompterBridge struct {
+-	frontConn   *dbus.Conn    // session bus: gnome-shell owns the real prompter
+-	backendConn *dbus.Conn    // private bus: backend gnome-keyring lives here
+-	toShell     callForwarder // forwards Prompter calls to gnome-shell
+-	logger      *logging.Logger
++	frontConn   *dbus.Conn // session bus: gnome-shell owns the real prompter
++	backendConn *dbus.Conn // private bus: backend gnome-keyring lives here
++	// Forwards Prompter calls to gnome-shell's prompter on the front bus. It looks
++	// the prompter up by name at each call, so a gnome-shell restart or a relogin
++	// needs nothing from the bridge.
++	toShell callForwarder
++	logger  *logging.Logger
+ 
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+@@ -57,21 +60,11 @@ type prompterBridge struct {
+ 	closed    bool                     // close() called; block late activation
+ }
+ 
+-// newPrompterBridge sets up the bridge when the topology needs one: the backend
+-// must be a distinct bus without its own prompter (the local-takeover case). It
+-// claims org.gnome.keyring.SystemPrompter on the backend bus immediately and
+-// unconditionally — it does NOT wait for gnome-shell's front prompter to appear
+-// first. That ownership is what pre-empts the gcr-prompter fallback: the backend
+-// bus can D-Bus-activate that fallback the instant gnome-keyring asks to unlock,
+-// and in the local-takeover topology the backend runs inside the graphical
+-// session, so the fallback actually draws its own (GTK) dialog instead of just
+-// hanging. Claiming the name from birth denies it that window. Forwarding to the
+-// real prompter resolves gnome-shell by name at prompt time (by which point the
+-// interactive session — and thus gnome-shell — is up), so it also survives a
+-// relogin/gnome-shell restart without re-arming anything.
+-//
+-// In topologies where the backend already shares a bus with a real prompter
+-// (remote mode, or same-bus), there is nothing to bridge and it returns (nil, nil).
++// Creates a bridge and claims org.gnome.keyring.SystemPrompter for it on the
++// backend bus. Returns (nil, nil) when the backend bus already has a
++// SystemPrompter, so there is nothing to bridge. If the backend bus refuses the
++// claim because another process took the name, the returned bridge owns nothing.
++// Errors when claiming the name or exporting the bridge fails.
+ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger) (*prompterBridge, error) {
+ 	if nameHasOwner(backendConn, systemPrompterName) {
+ 		// Same-bus / remote topology: the backend already reaches a real
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index b63a84b..8ca0844 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -140,14 +140,9 @@ func TestPrompterBridge(t *testing.T) {
+ 	assert.Equal(t, callbackPath, recvCall(t, shell.stop, "StopPrompting").callback)
+ }
+ 
+-// TestPrompterBridgeClaimsBackendBeforePrompter is the relogin regression: the
+-// proxy can start (or restart) BEFORE gnome-shell re-registers its prompter —
+-// both come up with the graphical session and the proxy often wins the race.
+-// The bridge must claim the backend SystemPrompter name IMMEDIATELY regardless,
+-// so the gcr-prompter fallback (which the backend bus would D-Bus-activate on
+-// the first unlock, and which draws a GTK dialog because the backend shares the
+-// graphical session) can never win that window. Forwarding to the real prompter
+-// is resolved by name at prompt time, so it doesn't need gnome-shell present yet.
++// Checks that the bridge claims the backend SystemPrompter name before
++// gnome-shell's prompter exists, and forwards to that prompter once it appears.
++// This is the relogin case, where the proxy often starts first.
+ func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
+@@ -164,8 +159,6 @@ func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
+ 	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
+ 	t.Cleanup(func() { p.Close() })
+ 
+-	// It must own the backend name straight away — before any front prompter —
+-	// so the gcr-prompter fallback has no window to claim it.
+ 	require.NotNil(t, p.prompter, "bridge must be created in the local-takeover topology")
+ 	assert.True(t, nameHasOwner(proxyBackendConn, systemPrompterName),
+ 		"bridge must claim the backend name at startup, before a front prompter exists")
+@@ -184,8 +177,7 @@ func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
+ 	require.NoError(t, err)
+ 	require.Equal(t, dbus.RequestNameReplyPrimaryOwner, reply)
+ 
+-	// Forwarding must work end-to-end once the front prompter is up — resolved
+-	// by name at call time, no re-arming needed.
++	// Forwarding works once the front prompter appears.
+ 	keyringConn, err := dbus.Connect(backendAddr)
+ 	require.NoError(t, err)
+ 	t.Cleanup(func() { keyringConn.Close() })

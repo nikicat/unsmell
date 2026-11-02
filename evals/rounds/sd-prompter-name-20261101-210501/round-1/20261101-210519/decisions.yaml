@@ -1,0 +1,95 @@
+- id: b1-1
+  decision: FIX
+  score: 6
+  reason: residue of the removed watch goroutine; activate now runs once on an unshared bridge
+  task: t1
+- id: b1-2
+  decision: ASK
+  score: 5
+  reason: two defensible shapes (fold activate into the constructor, or keep it with a named lost-claim outcome); patch shows the fold
+  task: t2
+- id: b1-3
+  decision: FIX
+  score: 9
+  reason: >-
+    overruled ASK. The changeset's own new text corrects the old claim ("actually draws its own
+    (GTK) dialog instead of just hanging"), and the change exists because of that behaviour, so the
+    user has already decided which copy is true. The stale "display-less, hangs forever" copies
+    (type doc, TestPrompterBridge doc, forward.go:71, proxy.go:166) follow it.
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 7
+  reason: changed lines; states the missing errors and the lost-claim outcome, drops history and copied facts
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 7
+  reason: one fact in ~7 comments, the copies already drifted (b1-3)
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 6
+  reason: changed lines; stale idempotency contract, no outcome or errors
+  task: t1
+- id: b1-7
+  decision: FIX
+  score: 9
+  reason: false text about the guard this change removed; the change made it false, so it is the change's residue
+  task: t3
+- id: b1-8
+  decision: FIX
+  score: 5
+  reason: changed lines; own-name opening and copied facts
+  task: t1
+- id: b1-9
+  decision: FIX
+  score: 5
+  reason: name on a changed line says less than the test checks; no callers
+  task: t1
+- id: b1-10
+  decision: FIX
+  score: 5
+  reason: names a mechanism the code no longer has
+  task: t1
+- id: b1-11
+  decision: ASK
+  score: 6
+  reason: >-
+    partly holds. The callback proxy leaks when forwarding fails, but an unowned front name is D-Bus-activated to gcr-prompter wherever gcr is installed, so prompts do not always fail outside GNOME. The patch unexports on failure and adds a pinning test. Its doc line "Errors when no front prompter owns ..." overstates for the same reason and needs "Errors when the front prompter cannot be reached or rejects the call". The design call (give the name back, or skip outside GNOME) stays open
+  task: t4
+- id: b1-12
+  decision: PLAN
+  score: 6
+  reason: unchanged lines, not a cause of a changed-line smell
+  task: t6
+- id: b1-13
+  decision: PLAN
+  score: 5
+  reason: unchanged lines, spans packages
+  task: t6
+- id: b1-14
+  decision: PLAN
+  score: 5
+  reason: dead field on unchanged lines, predates the change
+  task: t5
+- id: b1-15
+  decision: SKIP
+  score: 3
+  reason: under threshold
+  task: t5
+- id: b1-16
+  decision: SKIP
+  score: 3
+  reason: under threshold
+  task: t5
+- id: b1-17
+  decision: SKIP
+  score: 2
+  reason: under threshold, rewording correct docs on unchanged lines
+  task: t5
+- id: cross-1
+  decision: FIX
+  score: 7
+  reason: same fact as b1-3/b1-5; forward.go:71 and proxy.go:166 are folded into t1
+  task: t1

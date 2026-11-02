@@ -1,0 +1,30 @@
+id: unsmell-evals-20261102-150632-1-skip-e-2
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-e-2
+judge: null
+labels: []
+findings:
+- id: e-2
+  at:
+  - evals/run.py
+  reach:
+  - evals/run.py
+  row: unparsed input
+  claim: paths that git C-quotes (special or non-ASCII characters) are not unquoted by the diff parser
+    (reported by the t1 editor)
+  fix: run git diff with -c core.quotePath=false, or unquote quoted header paths
+  decision: PLAN
+  score: 4
+  reason: left over by t1
+  same:
+  - b1-8
+  triage:
+    id: e-2
+    decision: SKIP
+    score: 4
+    reason: under the threshold
+    task: skip-e-2
+check: ok

@@ -1,0 +1,64 @@
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..c8124ca 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -661,21 +661,27 @@ mod tests {
+         }
+     }
+ 
+-    fn warm_cache() -> (Arc<LogCache>, [u8; 32]) {
++    /// An in-memory cache holding the headers of genesis and of the anchor
++    /// block 200, with the filter hash of `ADDR` and `TOPICS`.
++    fn anchored_cache() -> (Arc<LogCache>, [u8; 32]) {
+         let cache = Arc::new(LogCache::open_in_memory().unwrap());
+         let fh = compute_filter_hash(&ADDR, &TOPICS);
+-
+         cache
+             .insert_block_header(0, &BH_0, &[0; 32], GENESIS_TS)
+             .unwrap();
+         cache
+-            .insert_block_header(100, &BH_100, &BH_0, GENESIS_TS + 1200)
++            .insert_block_header(200, &BH_200, &BH_101, GENESIS_TS + 2400)
+             .unwrap();
++        (cache, fh)
++    }
++
++    fn warm_cache() -> (Arc<LogCache>, [u8; 32]) {
++        let (cache, fh) = anchored_cache();
+         cache
+-            .insert_block_header(101, &BH_101, &BH_100, GENESIS_TS + 1212)
++            .insert_block_header(100, &BH_100, &BH_0, GENESIS_TS + 1200)
+             .unwrap();
+         cache
+-            .insert_block_header(200, &BH_200, &BH_101, GENESIS_TS + 2400)
++            .insert_block_header(101, &BH_101, &BH_100, GENESIS_TS + 1212)
+             .unwrap();
+ 
+         let logs = vec![
+@@ -774,22 +780,12 @@ mod tests {
+         assert_eq!(items[2].item.timestamp, GENESIS_TS + 1212);
+     }
+ 
+-    /// When a log carries its own `block_timestamp`, the walk stamps the event
+-    /// from it and never fetches the block header — proven by leaving no
+-    /// header cached for that block and no `get_block_by_number` queued on the
+-    /// mock provider, so a header fetch would error the walk.
++    /// A log that carries its own `block_timestamp` stamps the event without a
++    /// block header fetch. No header for block 150 is cached and the mock
++    /// provider has no `get_block_by_number` reply, so a fetch would fail the walk.
+     #[tokio::test]
+     async fn iter_uses_log_block_timestamp_without_header_fetch() {
+-        let cache = Arc::new(LogCache::open_in_memory().unwrap());
+-        let fh = compute_filter_hash(&ADDR, &TOPICS);
+-        // Anchor header (block 200) so construction is fully cache-served.
+-        cache
+-            .insert_block_header(0, &BH_0, &[0; 32], GENESIS_TS)
+-            .unwrap();
+-        cache
+-            .insert_block_header(200, &BH_200, &BH_101, GENESIS_TS + 2400)
+-            .unwrap();
+-        // A log at block 150 WITH a timestamp and deliberately NO header for 150.
++        let (cache, fh) = anchored_cache();
+         let mut log = make_log(150, 0, [0x9A; 32]);
+         log.block_timestamp = Some(GENESIS_TS + 1800);
+         cache.insert_logs(&fh, std::slice::from_ref(&log)).unwrap();

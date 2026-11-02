@@ -1,0 +1,40 @@
+id: 91ee2e11f2
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - src/evm/cache.rs:36-38
+  reach:
+  - src/evm/cache.rs:36-38
+  - src/evm/cache.rs:268-270
+  row: misleading name
+  claim: The CACHE_VERSION doc says "Bump this when cache schema or semantics change". But the migration
+    that the changeset added at cache.rs:239-249 changes the cached_logs schema and leaves the version
+    at 3, and so did the abi_json migration at cache.rs:231-238. Either the doc is false now that schema
+    changes go through rusqlite_migration, or the changeset missed a bump.
+  fix: Option A, which keeps existing caches and relies on the NULL fallback. The doc says to bump only
+    for a change that a migration cannot apply in place, for example a change in what existing rows mean.
+    Option B. Bump to 4, which abandons every existing cache file, and update the versioned_path test.
+  decision: ASK
+  score: 6
+  reason: The doc states a rule that the code does not follow. Bumping would change the on-disk file name,
+    which users can see, so the choice belongs to the user. The line is unchanged but it is the root cause
+    of the question that the changed migration raises.
+  same: []
+  triage:
+    id: b1-3
+    decision: ASK
+    score: 6
+    reason: whether CACHE_VERSION should bump is a decision about existing users' cache files; patch shows
+      the doc reword (option A), not asked because of "patches only"
+    task: t4
+check: ok

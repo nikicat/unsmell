@@ -1,0 +1,32 @@
+id: dengi-seb-20261102-005337-1-t6
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t6
+judge: null
+labels: []
+findings:
+- id: b1-9
+  at:
+  - seb.py:79-88
+  reach:
+  - seb.py:79-88
+  row: computing loop with effects
+  claim: transactions() runs the continuation-key pagination, accumulates the pages into a list, and prints
+    a progress line to stderr, all in one loop. The tuple assignment `params, out = {…} if date_from else
+    {}, []` (:80) has to be read twice to see where the conditional ends.
+  fix: A generator that yields each page's transactions and follows continuation_key. The caller collects
+    with list(), and the progress line stays at the call site or is dropped. The tuple assignment becomes
+    two statements.
+  decision: SKIP
+  score: 4
+  reason: A small, correct 10-line loop. The gain is a tidy-up, below the threshold.
+  same: []
+  triage:
+    id: b1-9
+    decision: SKIP
+    score: 4
+    reason: small correct loop
+    task: t6
+check: ok

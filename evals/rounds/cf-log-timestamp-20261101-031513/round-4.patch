@@ -1,0 +1,154 @@
+diff --git a/TODO.md b/TODO.md
+index 8b2b71f..3e2848e 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -108,3 +108,10 @@ These sit on lines the change did not touch, or wait on a larger item above. The
+ - **Facts written twice:** the uniqueness key `(filter_hash, block_hash, log_index)` (`cache.rs:128`, `log_cache.rs:131`), and the BLAKE3 filter hash (`cache.rs:125`, `log_cache.rs:38-41`). `compute_filter_hash` should own the second.
+ - **`migrations()` and `configure_connection` are `pub(crate)`** but only `cache.rs` calls them. Make them private.
+ - **The `CacheDb::open` and `LogCache::open` docs do not say that they create the file.**
++
++## Smells found by the fourth unsmell run on the `block_timestamp` change (2026-11-01)
++
++These need a change outside the files the change touched, or a shared module the bin and the example do not have yet.
++
++- **The upcast to `Arc<dyn HistBackend>` before `Hist::new` is written by every backend** (`src/arch.rs:225`). `EvmLogHistory::hist` now hides it for one type, but about 25 sites still write `let backend: Arc<dyn HistBackend<..>> = self.arc_self(); Hist::new(backend, ..)`: `src/matcher.rs:669-694`, `src/merge.rs:411-443` and `813-841`, `src/combinators/tests_common.rs:106-134`, and the mock backends in `tests/phase3_hist_store.rs`, `phase4_combinators.rs`, `phase5_merge.rs` and `phase6_matcher.rs`. `HistStore::new` (`arch.rs:316`) has the same upcast on four types. Options: (a) make `Hist::new` generic over `B: HistBackend<T, P> + 'static` taking `Arc<B>`, and change the callers that already hold an `Arc<dyn …>` (`combinators/filtered.rs`, `mapped.rs`); (b) keep `new` and add a generic `Hist::over(Arc<B>, start, end)`. (a) is preferred: one constructor. With it, `EvmLogHistory::hist` becomes `Hist::new(Arc::clone(self), …)`, so decide then whether `hist` still earns its place.
++- **The forward walk and the follow loop are copied between `examples/history_explorer.rs:258-293` and `src/bin/chainfold/evm/events.rs:72-105`.** The same `--limit` cut-off, the same messages and the same 2 s poll interval. The `block_timestamp` change had to edit both copies the same way. Fix: one print-walk helper that both can reach, in the library or a shared module.
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index da27656..613f01e 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -239,8 +239,8 @@ pub(crate) fn migrations() -> rusqlite_migration::Migrations<'static> {
+         rusqlite_migration::M::up(
+             "
+         -- The block time of the log in unix seconds, as the provider put it on
+-        -- the eth_getLogs response. Most providers leave it out. It is NULL
+-        -- then, and also on rows written before this column existed.
++        -- the eth_getLogs response. The column is NULL when the provider leaves
++        -- the time out, and on rows written before the column existed.
+         ALTER TABLE cached_logs ADD COLUMN block_timestamp INTEGER;
+         ",
+         ),
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index aa56d93..71f3f9b 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -14,8 +14,8 @@ use alloy::rpc::types::Log;
+ use super::{CacheError, SharedConn};
+ use crate::evm::observe::{SqliteOp, sqlite_span};
+ 
+-/// Expands to the `cached_logs` columns that hold one [`Log`]. The INSERT in
+-/// [`LogCache::insert_logs`] binds its parameters in this order.
++/// Expands to the `cached_logs` columns that hold one [`Log`]. The list
++/// leaves out `filter_hash`, which keys the row rather than the log.
+ macro_rules! log_columns {
+     () => {
+         "block_number, log_index, address, topic0, topic1, topic2, topic3, \
+@@ -24,7 +24,7 @@ macro_rules! log_columns {
+ }
+ 
+ /// Expands to a query that selects [`log_columns`] from `cached_logs`, with
+-/// the given clauses after the FROM. [`row_to_log`] decodes its rows.
++/// the given clauses after the FROM.
+ macro_rules! select_logs {
+     ($clauses:literal) => {
+         concat!("SELECT ", log_columns!(), " FROM cached_logs ", $clauses)
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index ca6d5c4..7bd2e35 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -531,9 +531,9 @@ where
+     }
+ }
+ 
+-/// Where the timestamp of a log's block comes from. [`log_timestamp`] and
+-/// [`blocks_needing_header`] both get a log's source from this type, so the
+-/// two always agree on where the timestamp comes from.
++/// The source of the timestamp of a log's block. [`log_timestamp`] and
++/// [`blocks_needing_header`] both decide through this type whether a log
++/// needs its block header, so they never disagree.
+ enum TimestampSource {
+     /// The timestamp that the log carries.
+     Log(Timestamp),
+@@ -692,7 +692,6 @@ mod tests {
+     const BH_0: [u8; 32] = [0x00; 32];
+     const BH_100: [u8; 32] = [0xA0; 32];
+     const BH_101: [u8; 32] = [0xA1; 32];
+-    const BH_STAMPED: [u8; 32] = [0x9A; 32];
+     const BH_200: [u8; 32] = [0xA2; 32];
+ 
+     fn make_log(block_num: u64, log_idx: u64, block_hash: [u8; 32]) -> Log {
+@@ -722,6 +721,9 @@ mod tests {
+     /// header timestamp in [`warm_cache`].
+     const STAMPED_TS: Timestamp = GENESIS_TS + 1800;
+ 
++    /// The block hash of [`make_stamped_log`].
++    const BH_STAMPED: [u8; 32] = [0x9A; 32];
++
+     /// Returns a log that carries its own timestamp.
+     fn make_stamped_log() -> Log {
+         let mut log = make_log(STAMPED_BLOCK, 0, BH_STAMPED);
+@@ -770,6 +772,16 @@ mod tests {
+             .unwrap()
+     }
+ 
++    /// Returns a history over the [`warm_cache`] logs, from the earliest cut
++    /// through the end of block 200. Block 200 is the last block that the
++    /// cache has scanned.
++    async fn warm_hist() -> Hist<EvmEvent, EvmPosition> {
++        let (store, _) = warm_cache();
++        make_history(store)
++            .await
++            .hist(EvmPosition::earliest(), EvmPosition::new(200, u32::MAX))
++    }
++
+     /// Iterate a Hist into a Vec<Positioned> with no in-flight fetcher.
+     async fn collect(hist: Hist<EvmEvent, EvmPosition>) -> Vec<Positioned<EvmEvent, EvmPosition>> {
+         hist.iter().try_collect().await.unwrap()
+@@ -777,10 +789,7 @@ mod tests {
+ 
+     #[tokio::test]
+     async fn iter_walks_all_logs_in_window() {
+-        let (store, _) = warm_cache();
+-        let history = make_history(store).await;
+-        let end = EvmPosition::new(200, u32::MAX);
+-        let hist = history.hist(EvmPosition::earliest(), end);
++        let hist = warm_hist().await;
+ 
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 3);
+@@ -791,10 +800,7 @@ mod tests {
+ 
+     #[tokio::test]
+     async fn split_clamps_anchor_to_window() {
+-        let (store, _) = warm_cache();
+-        let history = make_history(store).await;
+-        let end = EvmPosition::new(200, u32::MAX);
+-        let hist = history.hist(EvmPosition::earliest(), end);
++        let hist = warm_hist().await;
+ 
+         // Split past end ⇒ head = full, tail = empty.
+         let (head, tail) = hist.split(EvmPosition::new(9999, 0));
+@@ -828,10 +834,7 @@ mod tests {
+ 
+     #[tokio::test]
+     async fn iter_picks_up_timestamp_from_store() {
+-        let (store, _) = warm_cache();
+-        let history = make_history(store).await;
+-        let end = EvmPosition::new(200, u32::MAX);
+-        let hist = history.hist(EvmPosition::earliest(), end);
++        let hist = warm_hist().await;
+         let items = collect(hist).await;
+         // block 100 header inserted with GENESIS_TS + 1200
+         assert_eq!(items[0].item.timestamp, GENESIS_TS + 1200);
+@@ -962,10 +965,7 @@ mod tests {
+             }
+         }
+ 
+-        let (store, _) = warm_cache();
+-        let history = make_history(store).await;
+-        let end = EvmPosition::new(200, u32::MAX);
+-        let hist = history.hist(EvmPosition::earliest(), end);
++        let hist = warm_hist().await;
+ 
+         // Install the counter only around the walk — make_history's setup RPCs
+         // (chain_id, block_number) happen before this and aren't counted.

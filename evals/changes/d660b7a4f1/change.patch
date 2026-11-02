@@ -1,0 +1,178 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 57c24fd..4538263 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -25,6 +25,7 @@ full patch and the report of every round, so that a review worktree can be rebui
+ from the fixture without the run directory.
+ """
+ import argparse
++import functools
+ import hashlib
+ import json
+ import os
+@@ -35,7 +36,9 @@ import sys
+ from collections import Counter
+ from dataclasses import dataclass
+ from datetime import date
++from operator import attrgetter
+ from pathlib import Path
++from typing import NamedTuple
+ 
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+@@ -202,52 +205,75 @@ def all_changes():
+     return sorted((load(p) for p in CHANGES.glob("*/change.yaml")), key=lambda m: m["id"])
+ 
+ 
++@functools.cache
+ def tokens(cid):
+     """The words of a change's changed lines and of its findings' claims, for comparing changes."""
+     patch = (CHANGES / cid / "change.patch").read_text()
+     meta = load(CHANGES / cid / "change.yaml")
+     text = " ".join([*(c.line.text for c in changed_lines(patch)),
+                      *(f.get("claim", "") for f in meta.get("findings", []))])
+-    return set(re.findall(r"\w+", text))
++    return frozenset(re.findall(r"\w+", text))
+ 
+ 
+-def prior(meta):
+-    """Returns the most similar change of the same fixture from another run that a user labelled,
+-    and the share of words they have in common; None when nothing shares a third of its words."""
++def similarity(a, b):
++    """Returns the share of words that two token sets have in common, from 0 to 1."""
++    return len(a & b) / (len(a | b) or 1)
++
++
++def from_other_runs(meta, other):
++    """Tells whether other is a different change than meta that none of meta's runs made."""
+     runs = {s["run"] for s in meta["seen"]}
+-    others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and m["id"] != meta["id"]
+-              and not runs & {s["run"] for s in m["seen"]}
+-              and any(l["by"].startswith("user") for l in m["labels"])]
++    return other["id"] != meta["id"] and not runs & {s["run"] for s in other["seen"]}
++
++
++class Match(NamedTuple):
++    """A labelled change that resembles the change being shown."""
++
++    change: dict
++    share: float  # of the words the two changes have in common
++
++
++# The least share of words that prior needs to call a labelled change a match.
++MATCH_SHARE = 0.33
++
++
++def prior(meta):
++    """Returns the change from another run of the same fixture that a user labelled and that is most similar to meta.
++
++    The match carries the share of words the two changes have in common.
++    Returns None when no labelled change shares a third of its words.
++    """
+     mine = tokens(meta["id"])
+-    best = max(((len(mine & tokens(m["id"])) / (len(mine | tokens(m["id"])) or 1), m) for m in others),
+-               key=lambda p: p[0], default=(0, None))
+-    return best[::-1] if best[0] >= 0.33 else None
++    others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and from_other_runs(meta, m)
++              and any(l["by"].startswith("user") for l in m["labels"])]
++    best = max((Match(m, similarity(mine, tokens(m["id"]))) for m in others),
++               key=attrgetter("share"), default=None)
++    return best if best and best.share >= MATCH_SHARE else None
+ 
+ 
+ def neighbours(meta, labelled, k=5):
+-    """Returns the k labelled changes whose changed tokens overlap most with meta's."""
++    """Returns the k labelled changes from other runs whose words overlap most with meta's."""
+     mine = tokens(meta["id"])
+-    def overlap(other):
+-        theirs = tokens(other["id"])
+-        return len(mine & theirs) / (len(mine | theirs) or 1)
+-    return sorted(labelled, key=overlap, reverse=True)[:k]
++    return sorted((o for o in labelled if from_other_runs(meta, o)),
++                  key=lambda o: similarity(mine, tokens(o["id"])), reverse=True)[:k]
+ 
+ 
+-def judge(ids, model, jobs):
+-    skill = SKILL.read_text()
+-    metas = all_changes()
+-    labelled = [m for m in metas if m["labels"] and m["labels"][-1]["label"] != "unsure"]
+-    todo = [m for m in metas if (m["id"] in ids if ids else not m["judge"] and not m["labels"])]
+-    schema = {"type": "object", "required": ["label", "confidence", "reason"], "properties": {
+-        "label": {"enum": list(LABELS)},
+-        "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+-    def one(meta):
++@dataclass(frozen=True)
++class Judge:
++    """A model that proposes a label for a change, shown the skill and the most similar labelled changes."""
++
++    model: str
++    skill: str  # the text of SKILL.md
++    labelled: list[dict]  # the changes whose newest label is not unsure, the pool of examples
++
++    def prompt(self, meta):
++        """Returns the prompt that asks the model to label one change."""
+         first = meta["seen"][0]
+         examples = "\n\n".join(
+             f"### Example {o['id']}: labelled {o['labels'][-1]['label']}\n"
+             f"Note: {o['labels'][-1].get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
+-            for o in neighbours(meta, labelled))
+-        prompt = (
++            for o in neighbours(meta, self.labelled))
++        return (
+             "You label one change that a refactoring skill made, as good (worth making), bad (should not "
+             "have been made, or made worse code) or neutral. Judge the code, not the skill's own report. "
+             "The skill's rules are below for reference; a change can follow them and still be bad.\n\n"
+@@ -255,21 +281,37 @@ def judge(ids, model, jobs):
+             f"## The round's own report\n\n{Rounds(first['run']).report(first['round']).read_text()[:6000]}\n\n"
+             f"## The findings and decisions the change was made for\n\n{yaml.safe_dump(meta['findings'], allow_unicode=True)}\n\n"
+             f"## The change to label\n\n```diff\n{(CHANGES / meta['id'] / 'change.patch').read_text()}```\n\n"
+-            f"## The skill\n\n{skill}")
++            f"## The skill\n\n{self.skill}")
++
++    def label(self, meta):
++        """Stores the model's proposed label in the change's change.yaml and returns its cost in USD.
++
++        A failed call prints why and costs 0.
++        """
++        schema = {"type": "object", "required": ["label", "confidence", "reason"], "properties": {
++            "label": {"enum": list(LABELS)},
++            "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+         try:
+-            reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", model, stdin=prompt)
++            reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", self.model,
++                           stdin=self.prompt(meta))
+             verdict = reply.structured or json.loads(reply.result)
+         except (RuntimeError, json.JSONDecodeError) as e:
+             print(f"{meta['id']}: judge failed: {e}", file=sys.stderr)
+             return 0.0
+-        meta["judge"] = {**verdict, "model": model}
++        meta["judge"] = {**verdict, "model": self.model}
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {verdict['label']:7} {verdict['confidence']:.2f} {summary(meta)}",
+               flush=True)
+         return reply.cost_usd
+ 
++
++def judge(ids, model, jobs):
++    """Proposes a label for each change in ids, or with no ids for each change that has no label and no proposal."""
++    metas = all_changes()
++    labelled = [m for m in metas if m["labels"] and m["labels"][-1]["label"] != "unsure"]
++    todo = [m for m in metas if (m["id"] in ids if ids else not m["judge"] and not m["labels"])]
+     with ThreadPoolExecutor(jobs) as pool:
+-        cost = sum(pool.map(one, todo))
++        cost = sum(pool.map(Judge(model, SKILL.read_text(), labelled).label, todo))
+     print(f"judged {len(todo)} changes for ${cost:.2f}")
+ 
+ 
+@@ -357,9 +399,8 @@ def show(meta, rebuild=True):
+     if not (CHANGES / meta["id"] / "change.patch").read_text().strip():
+         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
+     if match := prior(meta):
+-        other, share = match
+-        newest = [l for l in other["labels"] if l["by"].startswith("user")][-1]
+-        print(f"\n  closest labelled change from an earlier run: {other['id']}, {share:.0%} of words shared,"
++        newest = [l for l in match.change["labels"] if l["by"].startswith("user")][-1]
++        print(f"\n  closest labelled change from an earlier run: {match.change['id']}, {match.share:.0%} of words shared,"
+               f" labelled {paint(newest['label'], COLORS[newest['label']])}"
+               f"{': ' + newest['note'] if newest.get('note') else ''}")
+     if meta["judge"]:

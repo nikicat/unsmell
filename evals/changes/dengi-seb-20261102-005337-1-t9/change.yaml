@@ -1,0 +1,58 @@
+id: dengi-seb-20261102-005337-1-t9
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t9
+judge: null
+labels: []
+findings:
+- id: b1-15
+  at:
+  - seb.py:101
+  - schema.sql:3
+  reach:
+  - seb.py:101
+  - schema.sql:3
+  row: misplaced rule
+  claim: The reason for the "BOOK" filter (seb.py:101) is that pending transactions have no entry_reference,
+    which is half of txn's primary key. That reason is stated only in a trailing comment in schema.sql:3
+    ("booked only, pending has none"), and the filter carries no comment.
+  fix: 'A comment at the filter (in Ledger.store, b1-8): "Pending transactions have no entry_reference,
+    so only booked ones can be keyed." schema.sql:3 keeps "Unique per account at SEB." on its own line
+    above the column.'
+  decision: SKIP
+  score: 4
+  reason: The fact is true, and moving it adds little. It folds into b1-8 if that is fixed.
+  same:
+  - b1-8
+  - b1-20
+  triage:
+    id: b1-15
+    decision: SKIP
+    score: 4
+    reason: comment move only; t1 must carry the comment along when it moves the filter
+    task: t9
+- id: b1-16
+  at:
+  - seb.py:5
+  - seb.py:98
+  reach:
+  - seb.py:98
+  row: duplicated knowledge
+  claim: '"resume from last stored day" is stated in the module docstring (:5) and again in main''s comment
+    (:98).'
+  fix: 'Keep the docstring''s statement. The comment at the resume query (Ledger.last_booking_date, b1-8)
+    keeps only the why: "Re-fetching the last stored day is safe, because the upsert dedupes it."'
+  decision: SKIP
+  score: 4
+  reason: A short duplicated comment fact. It folds into b1-8.
+  same:
+  - b1-8
+  triage:
+    id: b1-16
+    decision: SKIP
+    score: 4
+    reason: short duplicated fact; t1 carries the resume comment along
+    task: t9
+check: ok

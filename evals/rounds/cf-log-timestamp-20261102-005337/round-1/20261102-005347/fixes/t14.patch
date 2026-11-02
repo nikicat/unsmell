@@ -1,0 +1,43 @@
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 8596f73..9ded369 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -120,15 +120,9 @@ pub(crate) fn migrations() -> rusqlite_migration::Migrations<'static> {
+     rusqlite_migration::Migrations::new(vec![
+         rusqlite_migration::M::up(
+             "
+-        -- Raw EVM log entries returned by eth_getLogs, keyed by filter.
+-        -- Each row is a 1:1 copy of an alloy Log struct (minus 'removed').
+-        -- filter_hash: BLAKE3(address ++ topic0..3) — groups logs by the
+-        --   eth_getLogs filter that produced them. Different filters for the
+-        --   same contract (e.g. Transfer vs Approval) get separate partitions.
+-        -- Uniqueness is (filter_hash, block_hash, log_index) — not block_number —
+-        --   so that the same log_index on different forks (reorgs) can coexist.
+-        --   Reorged logs remain in the table and are filtered out at query time
+-        --   via the reorged_blocks table.
++        -- EVM logs returned by eth_getLogs, grouped by the hash of the filter that
++        -- fetched them. A log is keyed by its block hash, not its number, so logs
++        -- from both sides of a reorg can coexist. Reads skip reorged blocks.
+         CREATE TABLE cached_logs (
+             id                INTEGER PRIMARY KEY AUTOINCREMENT,
+             filter_hash       BLOB    NOT NULL,
+@@ -159,16 +153,9 @@ pub(crate) fn migrations() -> rusqlite_migration::Migrations<'static> {
+             block_number INTEGER NOT NULL
+         );
+ 
+-        -- Tracks which block ranges have been scanned (via eth_getLogs) for
+-        -- a given filter_hash, even if zero logs were returned.
+-        -- Used to compute gaps: when the user requests [A, B], we diff
+-        -- against scanned_ranges to find sub-ranges we haven't fetched yet.
+-        -- Ranges are inclusive [start_block, end_block].
+-        -- end_block_hash identifies the block at end_block — if it appears
+-        --   in reorged_blocks, this range must be rescanned.
+-        -- Ranges are NOT eagerly merged on insert. Only finalized ranges
+-        --   should be compacted (via compact_ranges) to prevent a single
+-        --   reorg at the tip from invalidating a huge merged range.
++        -- Inclusive block ranges already scanned for each filter, kept even when a
++        -- scan found no logs, so that a request fetches only the blocks no range
++        -- covers. A range whose end_block_hash is reorged must be scanned again.
+         CREATE TABLE scanned_ranges (
+             id              INTEGER PRIMARY KEY AUTOINCREMENT,
+             filter_hash     BLOB    NOT NULL,

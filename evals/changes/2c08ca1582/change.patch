@@ -1,0 +1,22 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..cf7d6c0 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -45,7 +45,7 @@ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+ ROUNDS = EVALS / "rounds"
+ REVIEW = CACHE / "review"
+-# The id of the change in the review repo, which show and label use when given none.
++# The id of the change in the review repo.
+ CURRENT = REVIEW / "current"
+ LABELS = ("good", "bad", "neutral", "unsure")  # unsure: looked at, but cannot judge it
+ # ANSI SGR codes for show's output; NO_COLOR or a pipe turns them off.
+@@ -156,7 +156,7 @@ def all_changes():
+ 
+ 
+ def tokens(cid):
+-    """The words of a change's changed lines and of its findings' claims, for comparing changes."""
++    """Returns the words of a change's changed lines and of its findings' claims."""
+     patch = (CHANGES / cid / "change.patch").read_text()
+     meta = load(CHANGES / cid / "change.yaml")
+     text = "".join(l for l in patch.splitlines() if l[:1] in "+-")

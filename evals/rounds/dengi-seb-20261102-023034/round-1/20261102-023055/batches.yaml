@@ -1,0 +1,2 @@
+- id: b1
+  paths: [seb.py, schema.sql, pyproject.toml, .gitignore]

@@ -1,0 +1,6 @@
+# The changeset has one batch (b1), so there is no pair of batches to compare.
+# The cross-file pass was not spawned; b1's survey already followed the class
+# outside the batch (b1-2, slow_upstream.go).
+read: []
+unread: []
+findings: []

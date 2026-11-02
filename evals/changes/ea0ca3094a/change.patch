@@ -1,0 +1,18 @@
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..fa7960f 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -545,12 +545,10 @@ mod tests {
+ 
+     #[test]
+     fn logs_preserve_block_timestamp() {
+-        // The block_timestamp column survives the SQLite round-trip when the
+-        // provider supplied it, and stays NULL/None when it didn't.
+         let store = LogCache::open_in_memory().unwrap();
+         let mut with_ts = make_test_log(100, 0, BLOCK_HASH_A);
+         with_ts.block_timestamp = Some(1_700_000_123);
+-        let without_ts = make_test_log(101, 0, BLOCK_HASH_B); // block_timestamp: None
++        let without_ts = make_test_log(101, 0, BLOCK_HASH_B);
+         store.insert_logs(&FH, &[with_ts, without_ts]).unwrap();
+         let got = store.get_logs_in_range(&FH, 100, 101).unwrap();
+         assert_eq!(got[0].block_timestamp, Some(1_700_000_123));

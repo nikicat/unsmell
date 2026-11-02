@@ -1,0 +1,30 @@
+id: c3e27e95ef
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-18
+judge: null
+labels: []
+findings:
+- id: b1-18
+  at:
+  - evals/run.py:145
+  reach:
+  - evals/run.py:145
+  row: primitive obsession
+  claim: The workdir is named from fixture.name and a timestamp with one-second resolution. Two fixtures
+    with one basename, such as a tuning and a held-out fixture, that start in the same second collide
+    in materialize's mkdir.
+  fix: create the workdir with a unique suffix, or with mkdir that retries on a taken name
+  decision: SKIP
+  score: 4
+  reason: rare and fails loudly
+  same: []
+  triage:
+    id: b1-18
+    decision: SKIP
+    score: 4
+    reason: rare and fails loudly
+    task: skip-b1-18
+check: ok

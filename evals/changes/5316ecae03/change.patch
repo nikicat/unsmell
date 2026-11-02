@@ -1,0 +1,59 @@
+diff --git a/seb.py b/seb.py
+index ab9a4a1..339e513 100644
+--- a/seb.py
++++ b/seb.py
+@@ -93,6 +93,18 @@ def psu_headers() -> dict[str, str]:
+     return {"Psu-Ip-Address": ip, "Psu-User-Agent": "dengi"}
+ 
+ 
++@dataclass
++class ApiError(Exception):
++    """An error response from the Enable Banking API."""
++    method: str
++    path: str
++    status: int
++    body: str
++
++    def __str__(self) -> str:
++        return f"{self.method} {self.path}: {self.status} {self.body}"
++
++
+ @dataclass(frozen=True)
+ class EnableBanking:
+     config: Config
+@@ -107,9 +119,10 @@ class EnableBanking:
+         return {"Authorization": f"Bearer {token}"} | self.psu
+ 
+     def call(self, method: str, path: str, **kw) -> dict:
++        """Raises ApiError when the API answers with an error status."""
+         r = requests.request(method, API + path, headers=self.headers(), timeout=60, **kw)
+         if not r.ok:
+-            sys.exit(f"{method} {path}: {r.status_code} {r.text}")
++            raise ApiError(method, path, r.status_code, r.text)
+         return r.json()
+ 
+     def authorize(self) -> Session:
+@@ -203,13 +216,16 @@ def main():
+     date_from = parse_date_from(sys.argv[1:])
+     bank = EnableBanking(Config.from_env(), psu_headers())
+     store = Store.open(DB)
+-    for account in bank.session().accounts:
+-        # The upsert dedupes the day that overlaps the last run.
+-        since = date_from or store.last_booking_date(account.key)
+-        txs = booked(bank.transactions(account.uid, since))
+-        new = store.upsert(account.key, txs)
+-        span = f"since {since}" if since else "full history"
+-        print(f"{account.key}: {len(txs)} booked fetched {span}, {new} new")
++    try:
++        for account in bank.session().accounts:
++            # The upsert dedupes the day that overlaps the last run.
++            since = date_from or store.last_booking_date(account.key)
++            txs = booked(bank.transactions(account.uid, since))
++            new = store.upsert(account.key, txs)
++            span = f"since {since}" if since else "full history"
++            print(f"{account.key}: {len(txs)} booked fetched {span}, {new} new")
++    except ApiError as e:
++        sys.exit(str(e))
+ 
+ 
+ if __name__ == "__main__":

@@ -1,0 +1,45 @@
+id: 2605b7e243
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - src/evm/cache/event_signature_cache.rs:50-52
+  - src/evm/cache/event_signature_cache.rs:81-83
+  - src/bin/chainfold/signature_cache.rs:24-26
+  - src/bin/chainfold/signature_cache.rs:42-44
+  reach:
+  - src/evm/cache/event_signature_cache.rs:48-103
+  - src/bin/chainfold/signature_cache.rs:22-57
+  - src/signatures.rs:59-119
+  row: data clump
+  claim: (chain_id, address, event_name), the primary key of event_signatures, travels as three parameters
+    through get_event_signature, insert_event_signature, SignatureCache::get/put, resolve_event and resolve_event_topic.
+    The adapter repeats the ChainId::new / Address::from conversion in both methods (:29, :49-50). These
+    are unchanged lines.
+  fix: A key type (for example EventSignatureKey { chain_id, address, event_name }) is built once by the
+    resolver and passed whole. Its primitive form lives in signatures.rs, and the cache-layer form or
+    a From conversion lives in evm::cache.
+  decision: PLAN
+  score: 5
+  reason: unchanged lines that span the signatures trait outside the batch; not already in TODO.md
+  same: []
+  triage:
+    id: b1-7
+    decision: PLAN
+    score: 5
+    reason: unchanged lines spanning the signatures trait outside the batch
+    task: t3
+    after:
+    - t1
+after:
+- bc19c04051
+check: ok

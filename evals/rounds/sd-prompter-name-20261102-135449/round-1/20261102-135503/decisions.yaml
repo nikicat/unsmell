@@ -1,0 +1,89 @@
+- id: b1-1
+  decision: FIX
+  score: 6
+  reason: "activate's only other caller (awaitFrontPrompter) was removed by the changeset; its guard, lock use and the active/closed fields are dead"
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 6
+  reason: "new 15- and 8-line docs carry history, caps and copies of facts the type doc and callForwarder own; constructor doc lacks the error contract"
+  task: t1
+- id: b1-9
+  decision: FIX
+  score: 6
+  reason: "e2e comment describes the re-activation the changeset deleted; same fact as cross-2"
+  task: t1
+- id: cross-2
+  decision: FIX
+  score: 7
+  reason: "by-name forwarding is owned by callForwarder; the changeset copied it three times"
+  task: t1
+- id: cross-3
+  decision: FIX
+  score: 5
+  reason: "the changeset introduced 'front prompter'/'real prompter' for gnome-shell's prompter; t1's rewrite settles on one name. Log messages are left alone"
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 9
+  reason: "test comment and assertion message describe the front-bus guard the changeset removed"
+  task: t2
+- id: b1-3
+  decision: FIX
+  score: 5
+  reason: "an inert bridge with owned=false is a second state; nil already means nothing to bridge. Stacked, since it starts from t1's folded constructor"
+  task: t3
+  after: [t1]
+- id: b1-2
+  decision: ASK
+  score: 9
+  reason: "the changeset's new text and four unchanged sites disagree on whether the gcr-prompter fallback draws a dialog or hangs; only the user knows. Patch proposes the changeset's newer claim, owned by the type doc"
+  task: t4
+  after: [t1]
+- id: cross-1
+  decision: ASK
+  score: 9
+  reason: "same contradiction as b1-2, seen across files"
+  task: t4
+  after: [t1]
+- id: b1-6
+  decision: ASK
+  score: 5
+  reason: "the type doc is the owner b1-2 settles; rewriting it there is one fix, so it rides with the ASK instead of a separate PLAN"
+  task: t4
+  after: [t1]
+- id: b1-8
+  decision: ASK
+  score: 5
+  reason: "forward.go and proxy.go copies of the same fact; linked to b1-2 by same"
+  task: t4
+  after: [t1]
+- id: cross-5
+  decision: DISCARD
+  score: 2
+  reason: "duplicates b1-8; the misplacement it names predates the changeset and is not a smell on its own"
+- id: b1-10
+  decision: PLAN
+  score: 5
+  reason: "dead field on unchanged lines"
+  task: t5
+- id: b1-11
+  decision: PLAN
+  score: 5
+  reason: "docs on unchanged lines open with their own name"
+  task: t6
+- id: b1-7
+  decision: PLAN
+  score: 5
+  reason: "test fixture duplication predates the changeset"
+  task: t7
+- id: cross-4
+  decision: PLAN
+  score: 5
+  reason: "adjacent same-typed conns in opposite orders is the parameter-bloat tell in full (scored 4 by the agent, raised to the floor of 5); unchanged lines"
+  task: t8
+- id: b1-12
+  decision: SKIP
+  score: 3
+  reason: "two-line idiom twice on unchanged lines"
+  task: t9

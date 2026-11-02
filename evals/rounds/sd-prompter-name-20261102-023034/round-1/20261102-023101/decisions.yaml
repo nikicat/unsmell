@@ -1,0 +1,102 @@
+- id: b1-1
+  decision: FIX
+  score: 6
+  reason: "checked: activate's only caller is newPrompterBridge:90, before b escapes, so closed and active can never be true there"
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 6
+  reason: shares lines with b1-1; the idempotency sentence dies with the guard
+  task: t1
+- id: b1-2
+  decision: ASK
+  score: 5
+  reason: "a further shape; it changes Proxy.prompter from an inert bridge to nil, which is a second defensible design"
+  task: t2
+  note: "the patch also rewrites the newPrompterBridge doc and the proxy.go comment, which t3 and t4 touch; if t2 is taken with them, take t2's constructor doc"
+  after: [t1]
+- id: b1-4
+  decision: FIX
+  score: 6
+  reason: "the doc states the current contract only; the fallback rationale is left to t4"
+  task: t3
+- id: b1-6
+  decision: FIX
+  score: 6
+  reason: the toShell field decides the by-name resolution, so it owns the fact
+  task: t3
+- id: b1-7
+  decision: FIX
+  score: 5
+  reason: "same text as b1-4 and b1-6, in the test"
+  task: t3
+- id: b1-3
+  decision: ASK
+  score: 9
+  reason: "checked: prompter.go:28-30, prompter_test.go:61-63, forward.go:70-71 and proxy.go:165-166 say the fallback is display-less and the unlock hangs; prompter.go:66-68 and prompter_test.go:147-149 say it draws a GTK dialog. Only the user knows which is true. The patch takes the changeset's newer claim"
+  task: t4
+  after: [t3]
+- id: b1-13
+  decision: PLAN
+  score: 5
+  reason: "overlaps b1-3 on the type doc; rides on t4's patch, and is planned if t4 is declined"
+  task: t4
+  after: [t3]
+- id: b1-8
+  decision: FIX
+  score: 9
+  reason: "checked: prompter_test.go:75-76 and :98 describe the front-bus guard removed at HEAD prompter.go:87; demo-driver-install.sh:138-139 says the bridge re-establishes after relogin, which it no longer does"
+  task: t5
+- id: b1-9
+  decision: SKIP
+  score: 4
+  reason: the name is overloaded, not false
+  task: t6
+  after: [t1]
+- id: b1-12
+  decision: PLAN
+  score: 5
+  reason: unchanged lines of close()
+  task: t7
+  after: [t1]
+- id: b1-14
+  decision: PLAN
+  score: 5
+  reason: "copies at prompter.go:77-78 and proxy.go:164-167 are unchanged lines"
+  task: t8
+  after: [t3]
+- id: b1-15
+  decision: PLAN
+  score: 5
+  reason: unchanged lines
+  task: t9
+- id: b1-10
+  decision: PLAN
+  score: 5
+  reason: "unchanged lines; prompter.go:23 rides with t4"
+  task: t10
+  after: [t4]
+- id: b1-11
+  decision: PLAN
+  score: 6
+  reason: unchanged lines in both tests
+  task: t11
+  after: [t3, t5]
+- id: b1-16
+  decision: PLAN
+  score: 5
+  reason: "found by the t4 editor; unchanged lines. No patch: t4's patch already shows the prompterBridge side"
+  task: t12
+  after: [t4]
+- id: b1-17
+  decision: PLAN
+  score: 5
+  reason: "found by the t10 editor; unchanged lines, the same docs as b1-10"
+  task: t10
+  after: [t4]
+- id: b1-18
+  decision: PLAN
+  score: 5
+  reason: "found by the t11 editor; outside the changeset, and it only exists once t11 is taken"
+  task: t11
+  after: [t3, t5]

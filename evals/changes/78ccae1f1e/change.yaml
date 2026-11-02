@@ -1,0 +1,34 @@
+id: 78ccae1f1e
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-12
+  at:
+  - internal/notification/desktop.go:627
+  reach:
+  - internal/notification/desktop.go:627
+  - internal/sshagent/proxy.go:73
+  row: split protocol
+  claim: The SSH destination is read by the key "destination" from Items[0].Attributes, which internal/sshagent/proxy.go:73
+    writes with its own literal. The changeset only changed the next line (628).
+  fix: A shared exported constant (or a typed accessor on approval.ItemInfo) used by both the sshagent
+    writer and the notification reader.
+  decision: PLAN
+  score: 6
+  reason: The key access line is unchanged and spans packages.
+  same: []
+  triage:
+    id: b1-12
+    decision: PLAN
+    score: 6
+    reason: unchanged line, and the fix crosses into internal/sshagent
+    task: t7
+check: ok

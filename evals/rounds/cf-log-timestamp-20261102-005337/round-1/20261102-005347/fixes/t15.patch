@@ -1,0 +1,15 @@
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..6c28986 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -922,10 +922,4 @@ mod tests {
+             "a fully-cached walk must not issue eth_getLogs"
+         );
+     }
+-
+-    // Suppress dead-code warnings on unused fixtures during phase work.
+-    #[allow(dead_code)]
+-    fn _unused_warmup() {
+-        let _ = (BH_0, BH_100, BH_101, BH_200);
+-    }
+ }

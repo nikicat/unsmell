@@ -1,0 +1,4 @@
+# The changeset is one batch (b1), so no finding can span two batches.
+read: []
+unread: []
+findings: []

@@ -1,0 +1,36 @@
+id: 5316ecae03
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t10
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-18
+  at:
+  - seb.py:45-49
+  reach:
+  - seb.py:45-49
+  row: concept mixing
+  claim: call(), the HTTP helper, also decides that any non-2xx response ends the process (sys.exit),
+    so no caller can handle an API error.
+  fix: call raises an ApiError(method, path, status, body), and main turns it into the exit message.
+  decision: SKIP
+  score: 3
+  reason: For a one-shot CLI script, exiting at the helper is acceptable. No caller needs to recover today.
+  same: []
+  triage:
+    id: b1-18
+    decision: SKIP
+    score: 3
+    reason: no caller needs to recover
+    task: t10
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

@@ -1,0 +1,22 @@
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..1e12a4f 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -17,6 +17,7 @@ import os
+ import shutil
+ import subprocess
+ import sys
++import tempfile
+ import tomllib
+ from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass, field
+@@ -142,7 +143,8 @@ def run_skill(repo, log, args):
+ def evaluate(fixture, rounds, args):
+     spec = tomllib.loads((fixture / "fixture.toml").read_text())
+     check = spec["check"]
+-    workdir = CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}"
++    (CACHE / "runs").mkdir(parents=True, exist_ok=True)
++    workdir = Path(tempfile.mkdtemp(prefix=f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}-", dir=CACHE / "runs"))
+     repo = materialize(fixture, spec, workdir)
+     # Which skill text the rounds ran, so that their changes can be traced to it.
+     (workdir / "skill.sha256").write_text(hashlib.sha256((SKILL_REPO / "skills" / "unsmell" / "SKILL.md").read_bytes()).hexdigest())

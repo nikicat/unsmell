@@ -1,0 +1,23 @@
+read: []
+unread: []
+findings:
+  - id: e-1
+    at: [evals/run.py]
+    reach: [evals/run.py]
+    row: unparsed input
+    claim: "Delta.between's git diff still follows the user's color.diff=always and diff.external settings, which would corrupt the parse (reported by the t1 editor)"
+    fix: pass --no-color and --no-ext-diff to the git diff that Delta.between runs
+    decision: PLAN
+    score: 6
+    reason: left over by t1, outside its stated shape
+    same: [b1-8]
+  - id: e-2
+    at: [evals/run.py]
+    reach: [evals/run.py]
+    row: unparsed input
+    claim: paths that git C-quotes (special or non-ASCII characters) are not unquoted by the diff parser (reported by the t1 editor)
+    fix: run git diff with -c core.quotePath=false, or unquote quoted header paths
+    decision: PLAN
+    score: 4
+    reason: left over by t1
+    same: [b1-8]

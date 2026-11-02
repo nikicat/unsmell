@@ -1,0 +1,47 @@
+diff --git a/TODO.md b/TODO.md
+index 4a7a00f..86155bd 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -80,10 +80,6 @@ are scaffolding; delete them (and the re-exports) rather than dressing them up.
+   Stringly-typed and load-bearing (drives RPC selection). Replace with
+   `#[serde(rename_all = "lowercase")] enum { None, Limited, Yes, Unspecified }`.
+   Low–med friction.
+-- **`EventSignatureRow` → named struct.** `src/evm/cache/event_signature_cache.rs:17`
+-  is `pub type EventSignatureRow = (String, B256, Option<String>)` — the naked
+-  3-tuple smell. `struct EventSignatureRow { signature: String, topic0: Topic,
+-  abi_json: Option<String> }`. Low friction.
+ - **CLI flag bools → `clap::ValueEnum`s.** `src/bin/chainfold/cli.rs`:
+   `reverse: bool` (`:14`), `follow: bool` (`:18`), `decode: bool` (`:141`) reach
+   call sites as `run(.., true, false)` with no clue. `enum Direction { Forward,
+@@ -132,5 +128,30 @@ core can merge heterogeneous positions. Newtyping there fights the generic core.
+ ### Suggested next batch (value-to-friction order)
+ 
+ Delete `EvmBlock`/`EvmTransaction`; then `Timestamp` newtype, `PrivacyTracking`
+-enum, `EventSignatureRow` struct, and the `12`→const fix — one commit each. The
++enum, and the `12`→const fix — one commit each. The
+ CLI flag-enums and `SourceKey` are a good follow-on.
++
++## unsmell run 2026-11-02 (`EventSignatureRow` struct)
++
++- **Two types for one cached event record.** `EventSignatureRow`
++  (`src/evm/cache/event_signature_cache.rs`) and `signatures::ResolvedEvent`
++  have the same three fields. The adapter in `src/bin/chainfold/signature_cache.rs`
++  copies one into the other in `get` and takes it apart again in `put`. Options:
++  (a) delete `EventSignatureRow`. Then `get_event_signature` returns
++  `Option<ResolvedEvent>`, `insert_event_signature` takes `&ResolvedEvent`, and
++  the adapter only maps errors. (b) Keep both types and add
++  `From<EventSignatureRow> for ResolvedEvent` in `evm::cache`. Recommended: (a).
++  Either way, `insert_event_signature` should take the record as one value
++  instead of `signature, topic0, abi_json`. The tests can then compare whole
++  rows with the `PartialEq` derive. Patch: `.git/unsmell/20261102-005400/fixes/t3.patch`.
++- **Cache key travels as three values.** `(chain_id, address, event_name)` goes
++  through `get_event_signature`, `insert_event_signature`, `SignatureCache::get`
++  and `put`, `resolve_event` and `resolve_event_topic`. Make it one key type. The
++  `signatures` copy must stay chainfold-free (raw `u64`/`[u8; 20]`). Patch:
++  `fixes/t5.patch`.
++- **Dead constructors.** `EventSignatureCache::open` has no callers, and
++  `open_in_memory` is only used by the file's own tests. Delete both, and have
++  the tests use `CacheDb::open_in_memory()?.signatures()`. Patch: `fixes/t4.patch`.
++- **U256 BLOB decode written twice.** `src/evm/cache/erc20_cache.rs` reads a
++  `Vec<u8>`, checks `len() == 32` and maps a wrong length to `None` in two
++  queries. Give it one named decode in `src/evm/cache.rs`. Patch: `fixes/t6.patch`.

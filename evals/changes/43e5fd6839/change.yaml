@@ -1,0 +1,28 @@
+id: 43e5fd6839
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-20
+judge: null
+labels: []
+findings:
+- id: b1-20
+  at:
+  - evals/test_run.py:14-19
+  reach:
+  - evals/test_run.py:9-25
+  row: repeated derivation
+  claim: write_text and then snapshot is written three times
+  fix: a local helper that writes the text and returns the snapshot
+  decision: SKIP
+  score: 3
+  reason: three short lines in one test
+  same: []
+  triage:
+    id: b1-20
+    decision: SKIP
+    score: 3
+    reason: three short lines in one test
+    task: skip-b1-20
+check: ok

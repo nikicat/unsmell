@@ -1,0 +1,40 @@
+diff --git a/TODO.md b/TODO.md
+index 4a7a00f..a53f91d 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -80,10 +80,6 @@ are scaffolding; delete them (and the re-exports) rather than dressing them up.
+   Stringly-typed and load-bearing (drives RPC selection). Replace with
+   `#[serde(rename_all = "lowercase")] enum { None, Limited, Yes, Unspecified }`.
+   Low–med friction.
+-- **`EventSignatureRow` → named struct.** `src/evm/cache/event_signature_cache.rs:17`
+-  is `pub type EventSignatureRow = (String, B256, Option<String>)` — the naked
+-  3-tuple smell. `struct EventSignatureRow { signature: String, topic0: Topic,
+-  abi_json: Option<String> }`. Low friction.
+ - **CLI flag bools → `clap::ValueEnum`s.** `src/bin/chainfold/cli.rs`:
+   `reverse: bool` (`:14`), `follow: bool` (`:18`), `decode: bool` (`:141`) reach
+   call sites as `run(.., true, false)` with no clue. `enum Direction { Forward,
+@@ -132,5 +128,23 @@ core can merge heterogeneous positions. Newtyping there fights the generic core.
+ ### Suggested next batch (value-to-friction order)
+ 
+ Delete `EvmBlock`/`EvmTransaction`; then `Timestamp` newtype, `PrivacyTracking`
+-enum, `EventSignatureRow` struct, and the `12`→const fix — one commit each. The
++enum, and the `12`→const fix — one commit each. The
+ CLI flag-enums and `SourceKey` are a good follow-on.
++
++## Unsmell run 2026-11-02 (`EventSignatureRow` struct)
++
++- **Event-signature cache key is a data clump.** `src/evm/cache/event_signature_cache.rs`
++  `get_event_signature` and `insert_event_signature` both take `chain_id`,
++  `address` and `event_name` as three parameters, and the adapter in
++  `src/bin/chainfold/signature_cache.rs` (`get` and `put`) builds them the same
++  way twice from the trait's raw `u64`, `[u8; 20]` and `&str`. Fix: an
++  `EventSignatureKey { chain_id: ChainId, address: Address, event_name: &str }`
++  that both methods take, built once per adapter call by a constructor from the
++  raw values.
++- **Module doc of `event_signature_cache.rs` reads back its own name and shape.**
++  Lines 1-8 open with `EventSignatureCache`, restate the row as the tuple
++  `(chain, address, event name) → (signature, topic0, abi)`, and keep a note on
++  why the type was named as it is. Fix: rewrite it as the module's place in the
++  system, for example "Stores the event signatures that the resolver has found,
++  one row per chain, contract and event name, so that a repeated lookup needs no
++  network request." Drop the naming note.

@@ -1,0 +1,223 @@
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index a479880..1f2345e 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -69,7 +69,7 @@ const DEFAULT_BLOCK_TIME: u64 = 12;
+ 
+ pub struct EvmLogHistory<P> {
+     provider: P,
+-    store: Arc<LogCache>,
++    headers: BlockHeaders<P>,
+     index: Arc<LogIndex>,
+     filter_hash: [u8; 32],
+     address: [u8; 20],
+@@ -133,9 +133,8 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+             .instrument(rpc_span(RpcMethod::BlockNumber))
+             .await
+             .map_err(|e| HistoryError::internal(format!("get_block_number failed: {e}")))?;
+-        let anchor_timestamp = ensure_block_header_via(&provider, &store, anchor_block)
+-            .await?
+-            .timestamp;
++        let headers = BlockHeaders::new(provider.clone(), store.clone());
++        let anchor_timestamp = headers.header(anchor_block).await?.timestamp;
+ 
+         let earliest = EvmPosition::earliest();
+         let (latest_tx, latest_rx) = watch::channel(earliest);
+@@ -151,9 +150,9 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+             rx
+         };
+ 
+-        let fetcher = build_fetcher(provider.clone(), store.clone(), address, topics);
++        let fetcher = build_fetcher(provider.clone(), headers.clone(), address, topics);
+         let index = Arc::new(LogIndex::with_chunk_size(
+-            store.clone(),
++            store,
+             filter_hash,
+             fetcher,
+             chunk_size,
+@@ -161,7 +160,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+ 
+         let history = Arc::new(Self {
+             provider,
+-            store,
++            headers,
+             index,
+             filter_hash,
+             address,
+@@ -248,7 +247,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+         // We don't need the header here — chain identity and timestamps
+         // live elsewhere — but we touch the cache so later iter() calls
+         // for the tip block don't have to round-trip.
+-        let _ = ensure_block_header_via(&self.provider, &self.store, block_number).await?;
++        let _ = self.headers.header(block_number).await?;
+         let pos = EvmPosition::new(block_number, u32::MAX);
+         let prev = self.latest_store.get().block;
+         let _ = self.latest_tx.send(pos);
+@@ -389,16 +388,14 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistBackend<EvmEvent
+         let start_pos = evm_to_block_pos(start);
+         let end_pos = evm_to_block_pos(end);
+         let log_stream = self.index.clone().items(start_pos, end_pos);
+-        let provider = self.provider.clone();
+-        let store = self.store.clone();
++        let headers = self.headers.clone();
+ 
+         Box::pin(log_stream.then(move |result| {
+-            let provider = provider.clone();
+-            let store = store.clone();
++            let headers = headers.clone();
+             async move {
+                 match result {
+                     Ok(log) => {
+-                        let timestamp = log_timestamp(&provider, &store, &log).await?;
++                        let timestamp = headers.log_timestamp(&log).await?;
+                         let event = log_to_evm_event(&log, timestamp);
+                         let pos = event.position();
+                         Ok(Positioned::new(event, pos))
+@@ -519,68 +516,72 @@ fn log_to_evm_event(log: &Log, timestamp: u64) -> EvmEvent {
+     }
+ }
+ 
+-/// Cache-first block-header lookup. Falls back to RPC and persists.
+-pub(crate) async fn ensure_block_header_via<P>(
+-    provider: &P,
+-    store: &LogCache,
+-    block_number: u64,
+-) -> Result<BlockHeader, HistoryError>
+-where
+-    P: Provider<Ethereum>,
+-{
+-    if let Some(header) = store
+-        .get_block_header(block_number)
+-        .map_err(|e| HistoryError::internal(e.to_string()))?
+-    {
+-        cache_event(CacheLayer::BlockHeader, CacheOutcome::Hit);
+-        return Ok(header);
+-    }
+-    cache_event(CacheLayer::BlockHeader, CacheOutcome::Miss);
+-
+-    let block = provider
+-        .get_block_by_number(BlockNumberOrTag::Number(block_number))
+-        .into_future()
+-        .instrument(rpc_span(RpcMethod::GetBlockByNumber))
+-        .await
+-        .map_err(|e| HistoryError::internal(format!("get_block failed: {e}")))?
+-        .ok_or_else(|| HistoryError::internal(format!("block {block_number} not found")))?;
++/// The only way history code gets a block header. Every header it hands out
++/// is kept in the [`LogCache`], so a block is fetched over RPC at most once.
++#[derive(Clone)]
++pub(crate) struct BlockHeaders<P> {
++    provider: P,
++    store: Arc<LogCache>,
++}
+ 
+-    let hash: [u8; 32] = block.header.hash.0;
+-    let parent_hash: [u8; 32] = block.header.parent_hash.0;
+-    let timestamp = block.header.timestamp;
++impl<P: Provider<Ethereum>> BlockHeaders<P> {
++    pub(crate) fn new(provider: P, store: Arc<LogCache>) -> Self {
++        Self { provider, store }
++    }
+ 
+-    store
+-        .insert_block_header(block_number, &hash, &parent_hash, timestamp)
+-        .map_err(|e| HistoryError::internal(e.to_string()))?;
++    /// Returns the header of block `block_number`. Errors when the provider has
++    /// no block at that height.
++    pub(crate) async fn header(&self, block_number: u64) -> Result<BlockHeader, HistoryError> {
++        if let Some(header) = self
++            .store
++            .get_block_header(block_number)
++            .map_err(|e| HistoryError::internal(e.to_string()))?
++        {
++            cache_event(CacheLayer::BlockHeader, CacheOutcome::Hit);
++            return Ok(header);
++        }
++        cache_event(CacheLayer::BlockHeader, CacheOutcome::Miss);
+ 
+-    Ok(BlockHeader {
+-        height: block_number,
+-        hash,
+-        parent_hash,
+-        timestamp,
+-    })
+-}
++        let block = self
++            .provider
++            .get_block_by_number(BlockNumberOrTag::Number(block_number))
++            .into_future()
++            .instrument(rpc_span(RpcMethod::GetBlockByNumber))
++            .await
++            .map_err(|e| HistoryError::internal(format!("get_block failed: {e}")))?
++            .ok_or_else(|| HistoryError::internal(format!("block {block_number} not found")))?;
++
++        let hash: [u8; 32] = block.header.hash.0;
++        let parent_hash: [u8; 32] = block.header.parent_hash.0;
++        let timestamp = block.header.timestamp;
++
++        self.store
++            .insert_block_header(block_number, &hash, &parent_hash, timestamp)
++            .map_err(|e| HistoryError::internal(e.to_string()))?;
++
++        Ok(BlockHeader {
++            height: block_number,
++            hash,
++            parent_hash,
++            timestamp,
++        })
++    }
+ 
+-/// Returns the Unix timestamp of the block that holds `log`. A log that
+-/// carries its own timestamp needs no block header. For any other log, the
+-/// timestamp comes from the block header. Errors when the header fetch fails.
+-async fn log_timestamp<P: Provider<Ethereum>>(
+-    provider: &P,
+-    store: &LogCache,
+-    log: &Log,
+-) -> Result<u64, HistoryError> {
+-    if let Some(timestamp) = log.block_timestamp {
+-        return Ok(timestamp);
+-    }
+-    let block_number = log.block_number.unwrap_or(0);
+-    Ok(ensure_block_header_via(provider, store, block_number)
+-        .await?
+-        .timestamp)
++    /// Returns the Unix timestamp of the block that holds `log`. A log that
++    /// carries its own timestamp needs no block header. For any other log, the
++    /// timestamp comes from the block header. Errors when the header fetch fails.
++    async fn log_timestamp(&self, log: &Log) -> Result<u64, HistoryError> {
++        if let Some(timestamp) = log.block_timestamp {
++            return Ok(timestamp);
++        }
++        let block_number = log.block_number.unwrap_or(0);
++        Ok(self.header(block_number).await?.timestamp)
++    }
+ }
+ 
+ fn build_fetcher<P>(
+     provider: P,
+-    store: Arc<LogCache>,
++    headers: BlockHeaders<P>,
+     address: [u8; 20],
+     topics: [Option<[u8; 32]>; 4],
+ ) -> Fetcher
+@@ -589,7 +590,7 @@ where
+ {
+     Arc::new(move |from, to| {
+         let provider = provider.clone();
+-        let store = store.clone();
++        let headers = headers.clone();
+         Box::pin(async move {
+             let filter = Filter::new()
+                 .address(Address::from(address))
+@@ -604,9 +605,9 @@ where
+                 .map_err(|e| HistoryError::internal(format!("eth_getLogs failed: {e}")))?;
+             tracing::debug!(from, to, num_logs = logs.len(), "eth_getLogs returned");
+ 
+-            let end_header = ensure_block_header_via(&provider, &store, to).await?;
++            let end_header = headers.header(to).await?;
+             for log in logs.iter().filter(|log| log.block_number.is_some()) {
+-                let _ = log_timestamp(&provider, &store, log).await;
++                let _ = headers.log_timestamp(log).await;
+             }
+ 
+             Ok(LogPage {

@@ -1,0 +1,66 @@
+id: 237f585d24
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t11
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-11
+  at:
+  - internal/proxy/prompter_test.go:68-97
+  - internal/proxy/prompter_test.go:152-192
+  reach:
+  - internal/proxy/prompter_test.go:67-195
+  row: repeated derivation
+  claim: 'both tests build the same fixtures inline: two test dbus daemons with kill/wait cleanup (:68-73,
+    :152-156), the proxy connected between them (:91-97, :159-165), the mock shell prompter exported and
+    named (:77-88, :174-185), and the keyring connection and prompter object (:102-109, :189-192)'
+  fix: test helpers startBuses(t) (frontAddr, backendAddr), connectProxy(t, frontAddr, backendAddr) *Proxy,
+    startShellPrompter(t, frontAddr) *mockShellPrompter, and connectKeyring(t, backendAddr) returning
+    the conn and the prompter object; both tests read as their steps
+  decision: PLAN
+  score: 6
+  reason: unchanged lines
+  same: []
+  triage:
+    id: b1-11
+    decision: PLAN
+    score: 6
+    reason: unchanged lines in both tests
+    task: t11
+    after:
+    - t3
+    - t5
+- id: b1-18
+  at:
+  - internal/proxy/prompt_test.go
+  reach:
+  - internal/proxy/prompt_test.go
+  - internal/proxy/prompter_test.go
+  row: repeated derivation
+  claim: 'reported by the t11 editor: newPromptTestEnv in prompt_test.go starts the same pair of test
+    buses inline that t11''s startBuses helper extracts'
+  fix: newPromptTestEnv uses startBuses
+  decision: PLAN
+  score: 5
+  reason: outside the changeset
+  same:
+  - b1-11
+  triage:
+    id: b1-18
+    decision: PLAN
+    score: 5
+    reason: found by the t11 editor; outside the changeset, and it only exists once t11 is taken
+    task: t11
+    after:
+    - t3
+    - t5
+after:
+- 4bbb595b0f
+- b5838bccc6
+check: ok

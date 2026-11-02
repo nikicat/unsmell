@@ -1,0 +1,41 @@
+id: '8054371333'
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-005337
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: bad
+  note: intention is good but implementation is smelly (html.EscapeString duplication)
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - internal/notification/slow_upstream.go:86-106
+  reach:
+  - internal/notification/slow_upstream.go:79-111
+  - internal/notification/slow_upstream_test.go
+  row: unparsed input
+  claim: formatSlowUpstreamBody writes item labels or paths (slow_upstream.go:87, 92) and process comm
+    names (:105) unescaped into a body that goes through the same org.freedesktop.Notifications Notify
+    call (NotifyPersistent). This is the same markup injection that the changeset fixed in formatBody;
+    the fix covered only one of the package's two body formatters.
+  fix: Escape every client-controlled value in formatSlowUpstreamBody with the same mechanism formatBody
+    uses (html.EscapeString, or the markup writer if b1-1 is accepted), plus a slow_upstream_test.go case
+    with a hostile label and comm name.
+  decision: FIX
+  score: 9
+  reason: A bug of the class the changeset fixes; the root cause (no single escaping owner) extends outside
+    the batch (§6). The slow-upstream notification has no action buttons, so impact is lower, but injected
+    markup still renders.
+  same: []
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 9
+    reason: Verified slow_upstream.go:86-106 writes labels and comm names raw into a Notify body; same
+      bug class, root cause of the changeset's fix (§6).
+    task: t2
+check: ok

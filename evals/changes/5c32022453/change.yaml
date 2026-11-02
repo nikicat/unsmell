@@ -1,0 +1,44 @@
+id: 5c32022453
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: bad
+  note: should be solved by migration to ORM, as now it's overengineered
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-14
+  at:
+  - schema.sql:1
+  - seb.py:95
+  reach:
+  - schema.sql:1-25
+  - seb.py:95
+  row: temporal coupling
+  claim: The schema is applied with CREATE TABLE IF NOT EXISTS on every run, and it has no version (PRAGMA
+    user_version). Any later edit to schema.sql, such as a generated column, never reaches an existing
+    dengi.db, and nothing reports the mismatch.
+  fix: Store.open checks PRAGMA user_version against a SCHEMA_VERSION in schema.sql. It applies migrations
+    in order or recreates the generated columns, because they derive from raw, and exits when the database
+    is newer.
+  decision: PLAN
+  score: 5
+  reason: This is a latent problem, not a bug today. It needs a design decision on migration versus rebuild
+    from raw.
+  same:
+  - b1-12
+  triage:
+    id: b1-14
+    decision: PLAN
+    score: 5
+    reason: needs a migration-or-rebuild decision; the repo has no plan file, so its location is pending
+    task: t6
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

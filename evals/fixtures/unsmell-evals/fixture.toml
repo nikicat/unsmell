@@ -1,0 +1,5 @@
+# Python, the eval tooling itself (run.py, changes.py, test_run.py, README.md), before its
+# first commit. The commit is the snapshot that unsmell's own run 20261102-150632 made.
+source = "~/src/unsmell"
+commit = "96965b3c9feee8202db25b9bf1ede97216dacee0"
+check = "cd evals && uv run --with pyyaml python test_run.py && python3 -m py_compile run.py changes.py"

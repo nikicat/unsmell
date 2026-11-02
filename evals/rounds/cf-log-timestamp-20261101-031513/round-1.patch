@@ -1,0 +1,385 @@
+diff --git a/TODO.md b/TODO.md
+index e0bfb5f..442baa6 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -31,3 +31,36 @@ No way to discover which `--chain <name>` values resolve without consulting `cha
+ - Refuse to proceed (or warn loudly) when `red_flags` is non-empty — DefiLlama flags chains with known scam/spam issues.
+ 
+ When either is wired up, the field stops being dead and the corresponding `#[allow]` can be removed.
++
++## Smells left by the `cached_logs.block_timestamp` change (unsmell run, 2026-11-01)
++
++Found while cleaning up the per-log timestamp change. None was fixed in that run: each one either sits on lines the change did not touch or needs a larger refactor.
++
++### Log cache (`src/evm/cache/log_cache.rs`, `src/evm/cache.rs`)
++
++- **`insert_logs` selects and writes in one loop** (`log_cache.rs`, `insert_logs`). The loop skips pending logs, applies the `unwrap_or(0)` defaults, encodes the row and runs `execute`, all in the same body. Fix: filter the logs that have a `block_hash` first, encode each into a named row struct (the counterpart of `row_to_log`), then run the inserts over the result. That struct should also own the column list: today `log_columns!`, the `?1 … ?13` placeholders, the `params!` order and the names in `row_to_log` must still agree by hand.
++- **No parsed "mined log" type** (`log_cache.rs:insert_logs`, `history.rs:log_to_evm_event` and `log_timestamp`). The optional fields of alloy's `Log` are read again at each use. A missing `block_number`, `log_index` or `transaction_index` silently becomes 0. A missing `block_hash` is skipped by the cache but turned into `[0; 32]` by `log_to_evm_event`. `transaction_hash` is bound as an `Option` into a `NOT NULL` column, so a log without one fails the whole batch. Fix: parse each RPC log once into a `MinedLog` type that both files take.
++- **The u64↔i64 SQLite casts are written about 20 times.** Fix: two named helpers (or a `ToSql`/`FromSql` newtype for block numbers and timestamps).
++- **`CACHE_VERSION` doc contradicts the migrations** (`cache.rs:36`). It says to bump the version on every schema change, but schema changes go through `migrations()` without a bump. Fix: say that the version is bumped only for changes a migration cannot express.
++- **`BlockHeader` uses primitives** (`log_cache.rs:72-76`). `timestamp` is a bare `u64` instead of `arch::Timestamp`, and `hash`/`parent_hash` are `[u8; 32]`. `insert_block_header` takes the four fields loose, and `history.rs:ensure_block_header_via` unpacks a header to call it and then rebuilds one. Fix: type the fields and make `insert_block_header` take `&BlockHeader`.
++- **No filter type.** `address: [u8; 20]` and `topics: [Option<[u8; 32]>; 4]` travel together through `compute_filter_hash`, `EvmLogHistory::with_options`, `build_fetcher` and `apply_topics`, and the filter hash is a bare `[u8; 32]` next to block hashes of the same type. Fix: a `LogFilter { address, topics }` with `hash() -> FilterHash` and `apply(Filter)`.
++- **`match rows.next() { Some(r) => Ok(Some(r?)), None => Ok(None) }` is written twice** (`get_log_by_ref`, `get_block_header`). Use rusqlite's `OptionalExtension`, as `src/matcher/anchor_store_sqlite.rs` already does.
++- **`(SELECT block_hash FROM reorged_blocks)` is spelled four times**, and the scanned-range INSERT twice. Name them once.
++- **`compact_ranges` merges intervals inline.** Extract an interval-merge helper with its own tests.
++- **`CacheDb::open` and `open_in_memory` have the same body.**
++- **Blob decoding panics on a bad length** (`copy_from_slice` in `row_to_log` and `get_block_header`). Return a decode error instead.
++- **Docs.** The module and type docs list the tables (four copies), and "navigation queries live in `LogIndex`" is said three times. The docs of `get_log_by_ref`, `record_scanned_range`, `invalidate_from` and similar state caller preconditions ("the caller is expected to…", "Only call this…") instead of a contract. `get_logs_in_range`'s doc has no verb. `arch.md:256` still says `LogStore`.
++
++### History (`src/evm/history.rs`)
++
++- **`provider` and `store` are threaded into every header lookup** (`ensure_block_header_via`, `log_timestamp`, the `iter` closure, `build_fetcher`). Fix: a `HeaderSource { provider, store }` with `header(block)` and `timestamp_of(&Log)` methods, the latter replacing the free `log_timestamp`. At the same time, give `ensure_block_header_via` an error contract (its doc narrates "cache-first, falls back to RPC") and narrow it from `pub(crate)`, since it has no caller outside this file.
++- **The fetcher repeats header lookups.** `blocks_needing_header` yields the same block once per log, so a block with many logs is looked up many times. Dedupe the block numbers before the loop. The fetcher closure also mixes filter-building detail with its steps, and the `Filter` is built the same way in two places.
++- **`EvmPosition::new(b, u32::MAX)` is the end-of-block cut, written about 12 times.** Fix: `EvmPosition::end_of_block(b)`.
++- **`self_ref: OnceLock<Weak<Self>>` is set after construction.** `Arc::new_cyclic` removes the temporal coupling.
++- **`with_options` takes 6 parameters**, two of them adjacent `u64`s (`chunk_size`, `block_time`). `anchor_timestamp` and `block_time` are bare `u64` without a unit.
++- **Smaller repeats:** `get_block_number` with its `map_err` (twice), the boxed warn callback (twice), `evm_to_block_pos` should be a `From` impl, `_unused_warmup` is a dead shim, and the test literals `200u64` and `12` repeat the anchor block and `DEFAULT_BLOCK_TIME`.
++- **Docs.** The module doc is 26 lines and lists mechanisms. `subscribe` and `update_tip` name no errors, and `subscribe` does not mention the task it spawns. Line 218 lists callers. Line 197 is imperative, and line 243 starts with "Internal:".
++
++### Tests
++
++- **`make_test_log` (`log_cache.rs`) and `make_log` (`history.rs`) build the same `Log`.** Share one test fixture.
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 8596f73..da27656 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -238,12 +238,9 @@ pub(crate) fn migrations() -> rusqlite_migration::Migrations<'static> {
+         ),
+         rusqlite_migration::M::up(
+             "
+-        -- Per-log block timestamp, when the provider includes it on the
+-        -- eth_getLogs response (a non-standard but common extension). Lets the
+-        -- query path stamp EvmEvent.timestamp directly, skipping the
+-        -- eth_getBlockByNumber header fetch. Nullable: most providers omit it,
+-        -- and rows written before this column existed have NULL — in both
+-        -- cases the reader falls back to the cached block header.
++        -- The block time of the log in unix seconds, as the provider put it on
++        -- the eth_getLogs response. Most providers leave it out. It is NULL
++        -- then, and also on rows written before this column existed.
+         ALTER TABLE cached_logs ADD COLUMN block_timestamp INTEGER;
+         ",
+         ),
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..82df9ed 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -14,6 +14,15 @@ use alloy::rpc::types::Log;
+ use super::{CacheError, SharedConn};
+ use crate::evm::observe::{SqliteOp, sqlite_span};
+ 
++/// Expands to the `cached_logs` columns that hold one [`Log`], in the order
++/// the INSERT in [`LogCache::insert_logs`] binds them.
++macro_rules! log_columns {
++    () => {
++        "block_number, log_index, address, topic0, topic1, topic2, topic3, \
++         data, block_hash, transaction_hash, transaction_index, block_timestamp"
++    };
++}
++
+ // ============================================================
+ // Helpers
+ // ============================================================
+@@ -117,12 +126,11 @@ impl LogCache {
+         let conn = self.conn.lock().unwrap();
+         let tx = conn.unchecked_transaction()?;
+         {
+-            let mut stmt = tx.prepare_cached(
+-                "INSERT OR IGNORE INTO cached_logs
+-                 (filter_hash, block_number, log_index, address, topic0, topic1, topic2, topic3,
+-                  data, block_hash, transaction_hash, transaction_index, block_timestamp)
+-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+-            )?;
++            let mut stmt = tx.prepare_cached(concat!(
++                "INSERT OR IGNORE INTO cached_logs (filter_hash, ",
++                log_columns!(),
++                ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
++            ))?;
+             for log in logs {
+                 let Some(block_hash) = log.block_hash else {
+                     continue;
+@@ -160,13 +168,13 @@ impl LogCache {
+         log_index: u32,
+     ) -> Result<Option<Log>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(
+-            "SELECT block_number, log_index, address, topic0, topic1, topic2, topic3,
+-                    data, block_hash, transaction_hash, transaction_index, block_timestamp
+-             FROM cached_logs
++        let mut stmt = conn.prepare_cached(concat!(
++            "SELECT ",
++            log_columns!(),
++            " FROM cached_logs
+              WHERE filter_hash = ?1 AND block_hash = ?2 AND log_index = ?3
+              LIMIT 1",
+-        )?;
++        ))?;
+         let mut rows = stmt.query_map(
+             rusqlite::params![&filter_hash[..], &block_hash[..], log_index as i64],
+             row_to_log,
+@@ -187,14 +195,14 @@ impl LogCache {
+     ) -> Result<Vec<Log>, CacheError> {
+         let _span = sqlite_span(SqliteOp::GetLogsInRange).entered();
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(
+-            "SELECT block_number, log_index, address, topic0, topic1, topic2, topic3,
+-                    data, block_hash, transaction_hash, transaction_index, block_timestamp
+-             FROM cached_logs
++        let mut stmt = conn.prepare_cached(concat!(
++            "SELECT ",
++            log_columns!(),
++            " FROM cached_logs
+              WHERE filter_hash = ?1 AND block_number >= ?2 AND block_number <= ?3
+                AND block_hash NOT IN (SELECT block_hash FROM reorged_blocks)
+              ORDER BY block_number ASC, log_index ASC",
+-        )?;
++        ))?;
+         let logs = stmt
+             .query_map(
+                 rusqlite::params![&filter_hash[..], from_block as i64, to_block as i64],
+@@ -429,19 +437,20 @@ impl LogCache {
+ // Row decoding
+ // ============================================================
+ 
++/// Decodes a row selected with [`log_columns`].
+ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+-    let block_number: i64 = row.get(0)?;
+-    let log_index: i64 = row.get(1)?;
+-    let address_bytes: Vec<u8> = row.get(2)?;
+-    let topic0: Option<Vec<u8>> = row.get(3)?;
+-    let topic1: Option<Vec<u8>> = row.get(4)?;
+-    let topic2: Option<Vec<u8>> = row.get(5)?;
+-    let topic3: Option<Vec<u8>> = row.get(6)?;
+-    let data: Vec<u8> = row.get(7)?;
+-    let block_hash: Vec<u8> = row.get(8)?;
+-    let tx_hash: Option<Vec<u8>> = row.get(9)?;
+-    let tx_index: i64 = row.get(10)?;
+-    let block_timestamp: Option<i64> = row.get(11)?;
++    let block_number: i64 = row.get("block_number")?;
++    let log_index: i64 = row.get("log_index")?;
++    let address_bytes: Vec<u8> = row.get("address")?;
++    let topic0: Option<Vec<u8>> = row.get("topic0")?;
++    let topic1: Option<Vec<u8>> = row.get("topic1")?;
++    let topic2: Option<Vec<u8>> = row.get("topic2")?;
++    let topic3: Option<Vec<u8>> = row.get("topic3")?;
++    let data: Vec<u8> = row.get("data")?;
++    let block_hash: Vec<u8> = row.get("block_hash")?;
++    let tx_hash: Option<Vec<u8>> = row.get("transaction_hash")?;
++    let tx_index: i64 = row.get("transaction_index")?;
++    let block_timestamp: Option<i64> = row.get("block_timestamp")?;
+ 
+     let mut topics = Vec::new();
+     for bytes in [topic0, topic1, topic2, topic3].into_iter().flatten() {
+@@ -545,15 +554,14 @@ mod tests {
+ 
+     #[test]
+     fn logs_preserve_block_timestamp() {
+-        // The block_timestamp column survives the SQLite round-trip when the
+-        // provider supplied it, and stays NULL/None when it didn't.
+         let store = LogCache::open_in_memory().unwrap();
++        let block_time = 1_700_000_123;
+         let mut with_ts = make_test_log(100, 0, BLOCK_HASH_A);
+-        with_ts.block_timestamp = Some(1_700_000_123);
+-        let without_ts = make_test_log(101, 0, BLOCK_HASH_B); // block_timestamp: None
++        with_ts.block_timestamp = Some(block_time);
++        let without_ts = make_test_log(101, 0, BLOCK_HASH_B);
+         store.insert_logs(&FH, &[with_ts, without_ts]).unwrap();
+         let got = store.get_logs_in_range(&FH, 100, 101).unwrap();
+-        assert_eq!(got[0].block_timestamp, Some(1_700_000_123));
++        assert_eq!(got[0].block_timestamp, Some(block_time));
+         assert_eq!(got[1].block_timestamp, None);
+     }
+ 
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..4bbc703 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -398,15 +398,8 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistBackend<EvmEvent
+             async move {
+                 match result {
+                     Ok(log) => {
+-                        let mut event = log_to_evm_event(&log);
+-                        // Only round-trip to a block header when the log didn't
+-                        // already carry its timestamp.
+-                        if log.block_timestamp.is_none() {
+-                            let bn = log.block_number.unwrap_or(0);
+-                            event.timestamp = ensure_block_header_via(&provider, &store, bn)
+-                                .await?
+-                                .timestamp;
+-                        }
++                        let timestamp = log_timestamp(&provider, &store, &log).await?;
++                        let event = log_to_evm_event(&log, timestamp);
+                         let pos = event.position();
+                         Ok(Positioned::new(event, pos))
+                     }
+@@ -509,17 +502,70 @@ fn apply_topics(mut filter: Filter, topics: &[Option<[u8; 32]>; 4]) -> Filter {
+     filter
+ }
+ 
+-fn log_to_evm_event(log: &Log) -> EvmEvent {
++/// Returns the block time of `log`, in unix seconds. Uses the timestamp the
++/// provider put on the log when there is one, and the block header otherwise.
++/// Errors as [`ensure_block_header_via`] does when the header is needed.
++async fn log_timestamp<P>(
++    provider: &P,
++    store: &LogCache,
++    log: &Log,
++) -> Result<Timestamp, HistoryError>
++where
++    P: Provider<Ethereum>,
++{
++    match TimestampSource::of(log) {
++        TimestampSource::Log(timestamp) => Ok(timestamp),
++        TimestampSource::Header(block_number) => {
++            Ok(ensure_block_header_via(provider, store, block_number)
++                .await?
++                .timestamp)
++        }
++    }
++}
++
++/// Where the block time of a log comes from. Both the per-log lookup and the
++/// fetcher's header prefetch decide by it, so they agree on which headers
++/// are read.
++enum TimestampSource {
++    /// The timestamp the provider put on the log, in unix seconds.
++    Log(Timestamp),
++    /// The header of the block with this number.
++    Header(u64),
++}
++
++impl TimestampSource {
++    fn of(log: &Log) -> Self {
++        match log.block_timestamp {
++            Some(timestamp) => Self::Log(timestamp),
++            None => Self::Header(log_block_number(log)),
++        }
++    }
++}
++
++/// Returns the numbers of the blocks whose header [`log_timestamp`] reads for `logs`.
++fn blocks_needing_header(logs: &[Log]) -> impl Iterator<Item = u64> + '_ {
++    logs.iter()
++        .filter_map(|log| match TimestampSource::of(log) {
++            TimestampSource::Header(block_number) => Some(block_number),
++            TimestampSource::Log(_) => None,
++        })
++}
++
++/// Returns the number of the block that holds `log`. A pending log has no
++/// block number and counts as block 0.
++fn log_block_number(log: &Log) -> u64 {
++    log.block_number.unwrap_or(0)
++}
++
++fn log_to_evm_event(log: &Log, timestamp: Timestamp) -> EvmEvent {
+     let addr: [u8; 20] = log.address().0.0;
+     let block_hash: [u8; 32] = log.block_hash.map_or([0; 32], |h| h.0);
+     let tx_hash: [u8; 32] = log.transaction_hash.map_or([0; 32], |h| h.0);
+ 
+     EvmEvent {
+         contract_address: addr,
+-        block_number: log.block_number.unwrap_or(0),
+-        // Provider-supplied per-log timestamp when present; otherwise 0, and
+-        // the caller fills it from the (cached) block header.
+-        timestamp: log.block_timestamp.unwrap_or(0),
++        block_number: log_block_number(log),
++        timestamp,
+         block_hash,
+         log_index: log.log_index.unwrap_or(0) as u32,
+         tx_hash,
+@@ -597,15 +643,8 @@ where
+             tracing::debug!(from, to, num_logs = logs.len(), "eth_getLogs returned");
+ 
+             let end_header = ensure_block_header_via(&provider, &store, to).await?;
+-            for log in &logs {
+-                // Logs that carry their own timestamp need no header — the
+-                // query path reads it straight off the persisted log.
+-                if log.block_timestamp.is_some() {
+-                    continue;
+-                }
+-                if let Some(bn) = log.block_number {
+-                    let _ = ensure_block_header_via(&provider, &store, bn).await;
+-                }
++            for block_number in blocks_needing_header(&logs) {
++                let _ = ensure_block_header_via(&provider, &store, block_number).await;
+             }
+ 
+             Ok(LogPage {
+@@ -639,6 +678,7 @@ mod tests {
+     const BH_0: [u8; 32] = [0x00; 32];
+     const BH_100: [u8; 32] = [0xA0; 32];
+     const BH_101: [u8; 32] = [0xA1; 32];
++    const BH_150: [u8; 32] = [0x9A; 32];
+     const BH_200: [u8; 32] = [0xA2; 32];
+ 
+     fn make_log(block_num: u64, log_idx: u64, block_hash: [u8; 32]) -> Log {
+@@ -661,6 +701,17 @@ mod tests {
+         }
+     }
+ 
++    /// The block time that [`make_stamped_log`] carries. It differs from every
++    /// header timestamp in [`warm_cache`].
++    const BLOCK_150_TS: u64 = GENESIS_TS + 1800;
++
++    /// Returns a log in block 150 that carries its own timestamp.
++    fn make_stamped_log() -> Log {
++        let mut log = make_log(150, 0, BH_150);
++        log.block_timestamp = Some(BLOCK_150_TS);
++        log
++    }
++
+     fn warm_cache() -> (Arc<LogCache>, [u8; 32]) {
+         let cache = Arc::new(LogCache::open_in_memory().unwrap());
+         let fh = compute_filter_hash(&ADDR, &TOPICS);
+@@ -774,26 +825,13 @@ mod tests {
+         assert_eq!(items[2].item.timestamp, GENESIS_TS + 1212);
+     }
+ 
+-    /// When a log carries its own `block_timestamp`, the walk stamps the event
+-    /// from it and never fetches the block header — proven by leaving no
+-    /// header cached for that block and no `get_block_by_number` queued on the
+-    /// mock provider, so a header fetch would error the walk.
++    /// A log that carries its own timestamp is stamped without its block
++    /// header. No header for block 150 is cached and the mock provider answers
++    /// no `get_block_by_number`, so a header lookup would fail the stream.
+     #[tokio::test]
+     async fn iter_uses_log_block_timestamp_without_header_fetch() {
+-        let cache = Arc::new(LogCache::open_in_memory().unwrap());
+-        let fh = compute_filter_hash(&ADDR, &TOPICS);
+-        // Anchor header (block 200) so construction is fully cache-served.
+-        cache
+-            .insert_block_header(0, &BH_0, &[0; 32], GENESIS_TS)
+-            .unwrap();
+-        cache
+-            .insert_block_header(200, &BH_200, &BH_101, GENESIS_TS + 2400)
+-            .unwrap();
+-        // A log at block 150 WITH a timestamp and deliberately NO header for 150.
+-        let mut log = make_log(150, 0, [0x9A; 32]);
+-        log.block_timestamp = Some(GENESIS_TS + 1800);
+-        cache.insert_logs(&fh, std::slice::from_ref(&log)).unwrap();
+-        cache.record_scanned_range(&fh, 0, 200, &BH_200).unwrap();
++        let (cache, fh) = warm_cache();
++        cache.insert_logs(&fh, &[make_stamped_log()]).unwrap();
+ 
+         let history = make_history(cache).await;
+         let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+@@ -804,7 +842,18 @@ mod tests {
+         );
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 1);
+-        assert_eq!(items[0].item.timestamp, GENESIS_TS + 1800);
++        assert_eq!(items[0].item.timestamp, BLOCK_150_TS);
++    }
++
++    #[test]
++    fn blocks_needing_header_skips_logs_with_timestamp() {
++        let logs = [
++            make_log(100, 0, BH_100),
++            make_stamped_log(),
++            make_log(101, 0, BH_101),
++        ];
++        let blocks: Vec<u64> = blocks_needing_header(&logs).collect();
++        assert_eq!(blocks, [100, 101]);
+     }
+ 
+     #[tokio::test]

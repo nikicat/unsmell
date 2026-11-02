@@ -1,0 +1,281 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..5613988 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -33,13 +33,14 @@ import shutil
+ import subprocess
+ import sys
+ import tomllib
++from collections import Counter
+ from datetime import date
+ from pathlib import Path
+ 
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+ 
+-from run import CACHE, CONFIG, git, materialize
++from run import CACHE, CONFIG, Sign, changed_lines, git, materialize, parse_diff
+ 
+ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+@@ -68,8 +69,8 @@ def dump(path, data):
+ 
+ def change_id(patch):
+     """Returns the id of a patch: a hash of its files and changed lines, whitespace aside."""
+-    lines = [l if l.startswith(("+++", "---")) else l[0] + " ".join(l[1:].split())
+-             for l in patch.splitlines() if l[:1] in "+-"]
++    lines = [l for part in parse_diff(patch)
++             for l in [*part.headers, *(c.sign + " ".join(c.line.text.split()) for c in part.changes)]]
+     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
+ 
+ 
+@@ -159,8 +160,8 @@ def tokens(cid):
+     """The words of a change's changed lines and of its findings' claims, for comparing changes."""
+     patch = (CHANGES / cid / "change.patch").read_text()
+     meta = load(CHANGES / cid / "change.yaml")
+-    text = "".join(l for l in patch.splitlines() if l[:1] in "+-")
+-    text += " ".join(f.get("claim", "") for f in meta.get("findings", []))
++    text = " ".join([*(c.line.text for c in changed_lines(patch)),
++                     *(f.get("claim", "") for f in meta.get("findings", []))])
+     return set(re.findall(r"\w+", text))
+ 
+ 
+@@ -371,11 +372,9 @@ def list_changes():
+         label = "+".join(sorted(set(newest.values()))) or "-"
+         decisions = "/".join(sorted({f["triage"]["decision"] for f in meta["findings"]}))
+         claim = " ".join(meta["findings"][0].get("claim", "").split())
+-        lines = (CHANGES / meta["id"] / "change.patch").read_text().splitlines()
+-        added = sum(l.startswith("+") and not l.startswith("+++") for l in lines)
+-        removed = sum(l.startswith("-") and not l.startswith("---") for l in lines)
++        signs = Counter(c.sign for c in changed_lines((CHANGES / meta["id"] / "change.patch").read_text()))
+         print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions:9}"
+-              f"  {f'+{added} -{removed}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
++              f"  {f'+{signs[Sign.ADDED]} -{signs[Sign.REMOVED]}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
+ 
+ 
+ def score(run_dirs):
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..bb2a6cb 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -21,7 +21,9 @@ import tomllib
+ from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass, field
+ from datetime import datetime
++from enum import StrEnum
+ from pathlib import Path
++from typing import NamedTuple
+ 
+ SKILL_REPO = Path(__file__).resolve().parent.parent
+ CACHE = Path.home() / ".cache" / "unsmell-eval"
+@@ -47,36 +49,132 @@ def snapshot(repo):
+     return git(repo, "write-tree", env=env).strip()
+ 
+ 
++class Sign(StrEnum):
++    """The mark that a unified diff puts before a changed line."""
++
++    ADDED = "+"
++    REMOVED = "-"
++
++    @property
++    def header(self):
++        """The start of the header line that names the file on this side."""
++        return self * 3 + " "
++
++    @property
++    def prefix(self):
++        """The prefix that git diff puts before the path on this side."""
++        return "b/" if self is Sign.ADDED else "a/"
++
++
++class Line(NamedTuple):
++    """One line of a file and the path of that file."""
++
++    path: str
++    text: str
++
++    @property
++    def significant(self):
++        """Whether the line carries a change of its own.
++
++        A line of three characters or fewer, such as a brace, `end` or a blank line,
++        is set by the lines around it. Counting it would make unrelated changes look alike.
++        """
++        return len(self.text.strip()) > 3
++
++
++class ChangedLine(NamedTuple):
++    """One line that a diff adds or removes. A removed line has the old path, an added line the new one."""
++
++    sign: Sign
++    line: Line
++
++
++@dataclass
++class FileDiff:
++    """The part of a unified diff that changes one file."""
++
++    headers: list[str] = field(default_factory=list)
++    """The `---` and `+++` lines as written."""
++    changes: list[ChangedLine] = field(default_factory=list)
++    paths: dict[Sign, str] = field(default_factory=dict)
++    """The path on each side, without git's prefix. A side that is /dev/null has none."""
++
++    def read_header(self, line):
++        """Takes the path from a `---` or `+++` line."""
++        self.headers.append(line)
++        sign = Sign(line[0])
++        path = line.removeprefix(sign.header).removesuffix("\t")
++        if path != "/dev/null":
++            self.paths[sign] = path.removeprefix(sign.prefix)
++
++
++def parse_diff(diff):
++    """Splits a unified diff into the parts that change one file each.
++
++    A part's header runs from its `diff --git` line to its first `@@` line. Lines
++    before the first `diff --git` form a part of their own.
++    """
++    parts, in_header = [], True
++    for line in diff.splitlines():
++        if line.startswith("diff --git ") or not parts:
++            parts.append(FileDiff())
++            in_header = True
++        part = parts[-1]
++        if line.startswith("@@"):
++            in_header = False
++        elif in_header:
++            if line.startswith(tuple(sign.header for sign in Sign)):
++                part.read_header(line)
++        elif line[:1] in Sign:
++            sign = Sign(line[0])
++            part.changes.append(ChangedLine(sign, Line(part.paths[sign], line[1:])))
++    return parts
++
++
++def changed_lines(diff):
++    """Yields every line that a unified diff adds or removes, in the diff's order."""
++    for part in parse_diff(diff):
++        yield from part.changes
++
++
+ @dataclass
+ class Delta:
+-    """The lines one round added and removed, per file."""
++    """The significant lines that one round added and removed, per file.
+ 
+-    added: set = field(default_factory=set)
+-    removed: set = field(default_factory=set)
++    A line's text has its surrounding whitespace stripped. A line that a round moves counts
++    as removed from its old place and added at its new one.
++    """
++
++    added: set[Line] = field(default_factory=set)
++    removed: set[Line] = field(default_factory=set)
+ 
+     @classmethod
+     def between(cls, repo, old, new):
+-        delta, path = cls(), None
+-        for line in git(repo, "diff", "-U0", old, new).splitlines():
+-            if line.startswith("+++ "):
+-                path = line[6:]
+-            elif line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+-                text = line[1:].strip()
+-                # ponytail: line-level heuristic; a moved line that changes nothing else counts too
+-                if len(text) > 3:
+-                    (delta.added if line[0] == "+" else delta.removed).add((path, text))
++        """Returns the lines that differ between two trees of repo."""
++        delta = cls()
++        diff = git(repo, "diff", "-U0", f"--src-prefix={Sign.REMOVED.prefix}",
++                   f"--dst-prefix={Sign.ADDED.prefix}", old, new)
++        for changed in changed_lines(diff):
++            line = changed.line._replace(text=changed.line.text.strip())
++            if line.significant:
++                (delta.added if changed.sign is Sign.ADDED else delta.removed).add(line)
+         return delta
+ 
++    @classmethod
++    def _union(cls, deltas):
++        """Returns one delta that holds every line the given deltas added or removed."""
++        return cls(set().union(*(d.added for d in deltas)), set().union(*(d.removed for d in deltas)))
++
+     def empty(self):
+         return not (self.added or self.removed)
+ 
+     def reversals(self, earlier):
+         """Counts lines this round brings back after an earlier round removed them."""
+-        return len(self.added & set().union(*(d.removed for d in earlier)))
++        return len(self.added & self._union(earlier).removed)
+ 
+     def rework(self, earlier):
+         """Counts lines this round removes after an earlier round added them."""
+-        return len(self.removed & set().union(*(d.added for d in earlier)))
++        return len(self.removed & self._union(earlier).added)
+ 
+ 
+ def clear(repo):
+diff --git a/evals/test_run.py b/evals/test_run.py
+index f3c1cd5..97d3c37 100755
+--- a/evals/test_run.py
++++ b/evals/test_run.py
+@@ -3,13 +3,18 @@
+ import tempfile
+ from pathlib import Path
+ 
+-from run import CACHE, Delta, git, snapshot
++from run import CACHE, Delta, Line, git, snapshot
+ 
+ 
+-def test_reversal(root):
+-    repo = root / "repo"
++def scratch_repo(root, name):
++    repo = root / name
+     repo.mkdir()
+     git(repo, "init", "-q")
++    return repo
++
++
++def test_reversal(root):
++    repo = scratch_repo(root, "reversal")
+     f = repo / "a.py"
+     f.write_text("x = compute_once()\n")
+     t0 = snapshot(repo)
+@@ -25,8 +30,36 @@ def test_reversal(root):
+     assert git(repo, "status", "--porcelain") == "?? a.py\n", "snapshot must not stage"
+ 
+ 
++def test_restored_file(root):
++    repo = scratch_repo(root, "restored")
++    # A user's setting that would drop the a/ and b/ prefixes from the diff's paths.
++    git(repo, "config", "diff.noprefix", "true")
++    f = repo / "a.py"
++    f.write_text("x = compute_once()\n")
++    t0 = snapshot(repo)
++    f.unlink()
++    t1 = snapshot(repo)
++    f.write_text("x = compute_once()\n")
++    t2 = snapshot(repo)
++    first, second = Delta.between(repo, t0, t1), Delta.between(repo, t1, t2)
++    assert first.removed == {Line("a.py", "x = compute_once()")}, first
++    assert second.reversals([first]) == 1, second
++
++
++def test_lines_like_headers(root):
++    repo = scratch_repo(root, "headers")
++    f = repo / "q.sql"
++    f.write_text("-- select everything\n")
++    t0 = snapshot(repo)
++    f.write_text("++counter_in_c;\n")
++    delta = Delta.between(repo, t0, snapshot(repo))
++    assert delta.removed == {Line("q.sql", "-- select everything")}, delta
++    assert delta.added == {Line("q.sql", "++counter_in_c;")}, delta
++
++
+ if __name__ == "__main__":
+     CACHE.mkdir(parents=True, exist_ok=True)
+     with tempfile.TemporaryDirectory(dir=CACHE) as root:
+-        test_reversal(Path(root))
++        for test in (test_reversal, test_restored_file, test_lines_like_headers):
++            test(Path(root))
+     print("ok")

@@ -1,0 +1,50 @@
+id: 8e5f802ab2
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  note: even better would be to introduce a full blown input data schema with validation, probably as
+    a planned proposal
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - seb.py:97
+  - schema.sql:2
+  reach:
+  - seb.py:97
+  - schema.sql:2
+  - schema.sql:22
+  - schema.sql:25
+  row: algebraic blindness
+  claim: The iban variable and the txn.iban column hold an IBAN, or the account's Enable Banking uid when
+    the bank sends no IBAN (seb.py:97). As far as I know, Enable Banking issues account uids per session;
+    this should be checked against its API docs. If so, every 180-day re-authorization files the same
+    account under a new key. Resume (seb.py:99-100) then starts from all history, and every transaction
+    is stored a second time under the new key, because the primary key is (iban, entry_reference).
+  fix: 'Option A: require an IBAN and exit with a message for an account without one. Option B: key the
+    ledger by a stable account identifier (the account''s identification_hash, or account_id.other.identification)
+    in a column named for what it holds, such as account. Account.ledger_key (b1-4) owns the choice. I
+    would pick A for an SEB LT personal account, which always has an IBAN.'
+  decision: ASK
+  score: 6
+  reason: Two kinds of value in one name and column, with a likely duplication bug on re-authorization.
+    The fix changes the stored schema or the CLI behaviour, and two designs are defensible.
+  same:
+  - b1-4
+  triage:
+    id: b1-7
+    decision: ASK
+    score: 6
+    reason: changes stored key or CLI behaviour; two defensible designs; patch shows option A (require
+      an IBAN)
+    task: t5
+    after: t1
+after:
+- ee1b3d94ed
+check: ok

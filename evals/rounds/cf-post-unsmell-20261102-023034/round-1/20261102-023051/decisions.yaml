@@ -1,0 +1,46 @@
+- id: b1-1
+  decision: ASK
+  score: 6
+  reason: "The fix changes the exported signature of chainfold::evm::EventSignatureCache::insert_event_signature, which is an ASK under §5 even though the bin is its only in-repo caller. Patches only, so no question is asked; the patch shows the proposal."
+  task: t2
+  after: [t1]
+- id: b1-2
+  decision: FIX
+  score: 6
+  reason: "Split protocol on changed lines, with the house ToSql pattern in src/evm/cache.rs to follow. Behaviour: a stored topic0 that is not 32 bytes becomes a CacheError instead of a silent miss."
+  task: t1
+- id: b1-3
+  decision: FIX
+  score: 5
+  reason: "Same wrapping written three times on changed lines."
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 5
+  reason: "Field doc opens with its own name, and abi_json's doc leaves out that None is transitional. Both on added lines."
+  task: t1
+- id: b1-5
+  decision: SKIP
+  score: 3
+  reason: "Each conversion direction is written once at the adapter boundary."
+  task: t4
+- id: b1-6
+  decision: PLAN
+  score: 5
+  reason: "Real clump on unchanged lines, not the cause of a changed-line smell."
+  task: t3
+- id: b1-7
+  decision: SKIP
+  score: 3
+  reason: "Two short closures on unchanged lines."
+  task: t5
+- id: b1-8
+  decision: PLAN
+  score: 5
+  reason: "Module doc smell on unchanged lines."
+  task: t3
+- id: b1-9
+  decision: SKIP
+  score: 2
+  reason: "Rewording correct docs."
+  task: t6

@@ -1,0 +1,35 @@
+id: ea0ca3094a
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t10
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-4
+  at:
+  - src/evm/cache/log_cache.rs:548-549
+  - src/evm/cache/log_cache.rs:553
+  reach:
+  - src/evm/cache/log_cache.rs:548-553
+  row: tautological comment / compressed doc
+  claim: 'The comment in the new test logs_preserve_block_timestamp (log_cache.rs:548-549) restates the
+    test name and writes "NULL/None"; the trailing `// block_timestamp: None` at :553 restates make_test_log''s
+    default at :495.'
+  fix: Drop the first sentence's restatement or the whole comment; keep the trailing note only if the
+    reader needs the fixture default.
+  decision: SKIP
+  score: 2
+  reason: The comments are correct; rewording a correct test comment scores 0-2.
+  same: []
+  triage:
+    id: b1-4
+    decision: SKIP
+    score: 2
+    task: t10
+    reason: test comments restate the test name
+check: ok

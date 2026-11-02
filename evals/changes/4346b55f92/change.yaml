@@ -1,0 +1,39 @@
+id: 4346b55f92
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t4
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-13
+  at:
+  - schema.sql:10
+  - schema.sql:12
+  - schema.sql:14
+  reach:
+  - schema.sql:9-15
+  row: repeated derivation
+  claim: The debit test IIF(raw ->> '$.credit_debit_indicator' = 'DBIT', …) is written three times, in
+    amount_cents, counterparty and counterparty_iban.
+  fix: Add a generated column, debit INTEGER AS (raw ->> '$.credit_debit_indicator' = 'DBIT'), and use
+    IIF(debit, …) in the three columns. SQLite allows a generated column to refer to another one.
+  decision: ASK
+  score: 5
+  reason: A real repeated rule, but the fix adds a stored column. CREATE TABLE IF NOT EXISTS will not
+    migrate an existing dengi.db.
+  same: []
+  triage:
+    id: b1-13
+    decision: ASK
+    score: 5
+    reason: adds a generated column; existing dengi.db is not migrated
+    task: t4
+check: ok

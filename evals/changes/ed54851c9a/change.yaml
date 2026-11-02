@@ -1,0 +1,66 @@
+id: ed54851c9a
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-17
+  at:
+  - pyproject.toml:10-18
+  - seb.py:95
+  reach:
+  - pyproject.toml:10-18
+  - seb.py:95
+  row: split protocol
+  claim: schema.sql is spelled in the wheel config (pyproject.toml:18) and in the loader (seb.py:95);
+    only-include installs seb.py and schema.sql at the root of site-packages, a generic file name outside
+    any package
+  fix: a dengi package (dengi/__init__.py or dengi/seb.py plus dengi/schema.sql), the script pointing
+    at dengi.seb:main, the schema read with importlib.resources.files('dengi') / 'schema.sql'
+  decision: ASK
+  score: 5
+  reason: new layout and file moves; the entry point string changes
+  same: []
+  triage:
+    id: b1-17
+    decision: ASK
+    score: 5
+    reason: package layout and entry point change
+    task: t8
+    after:
+    - t1
+- id: cross-1
+  at:
+  - pyproject.toml:18
+  - seb.py:95
+  reach:
+  - pyproject.toml:10-18
+  - seb.py:95
+  row: split protocol
+  claim: the file name schema.sql is spelled in the wheel config (only-include, pyproject.toml:18) and
+    in the loader (seb.py:95); renaming or moving it in one place breaks the installed script with no
+    error until run, and only-include drops it at the site-packages root
+  fix: a dengi package holding seb.py and schema.sql, the loader reading importlib.resources.files('dengi')
+    / 'schema.sql', and the wheel config including the package directory rather than naming the file
+  decision: ASK
+  score: 5
+  reason: new layout, file moves and a changed entry point string
+  same:
+  - b1-17
+  triage:
+    id: cross-1
+    decision: ASK
+    score: 5
+    reason: same as b1-17
+    task: t8
+    after:
+    - t1
+after:
+- 2233303edb
+check: fail

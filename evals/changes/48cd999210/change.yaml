@@ -1,0 +1,38 @@
+id: 48cd999210
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-4
+  at:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  reach:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  row: ambiguous noun
+  claim: TestPrompterBridge still says the front prompter is present 'so the bridge's guard sees it and
+    activates' (:75-76) and asserts 'bridge should activate when the front bus has a prompter and the
+    backend does not' (:98). The changeset removed that guard, `nameHasOwner(frontConn, systemPrompterName)`
+    at HEAD prompter.go:87. The bridge no longer looks at the front bus, so both statements are false.
+  fix: Comment at :75 becomes '// gnome-shell's prompter on the front bus.' and the :98 message becomes
+    'bridge should be created when the backend bus has no prompter'.
+  decision: FIX
+  score: 9
+  reason: A comment and an assertion message state a condition the code no longer has. This is residue
+    of the changeset's deletion.
+  same: []
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 9
+    reason: test comment and assertion message describe the front-bus guard the changeset removed
+    task: t2
+check: ok

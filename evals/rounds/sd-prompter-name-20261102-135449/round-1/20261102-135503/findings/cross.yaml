@@ -1,0 +1,106 @@
+read: []
+read_lines:
+  - internal/proxy/proxy.go:155-176
+  - internal/proxy/forward.go:30-79
+  - internal/proxy/signals.go:18-38
+  - internal/proxy/prompt.go:20-30
+  - internal/proxy/prompter.go:10-92
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:185-189
+  - e2e/gnome/vm/demo-driver-install.sh:136-140
+unread: []
+findings:
+  - id: cross-1
+    at:
+      - internal/proxy/prompter.go:66-68
+      - internal/proxy/prompter_test.go:147-149
+      - internal/proxy/prompter.go:28-30
+      - internal/proxy/prompter_test.go:61-63
+      - internal/proxy/proxy.go:164-167
+      - internal/proxy/forward.go:69-71
+    reach:
+      - internal/proxy/prompter.go:23-46
+      - internal/proxy/prompter.go:60-74
+      - internal/proxy/prompter_test.go:60-66
+      - internal/proxy/prompter_test.go:143-150
+      - internal/proxy/proxy.go:164-167
+      - internal/proxy/forward.go:68-71
+    row: duplicated knowledge
+    claim: "The reason the bridge exists (it pre-empts the gcr-prompter fallback on the backend bus) is stated in four files: the prompterBridge type doc (prompter.go:28-33), the newPrompterBridge doc (prompter.go:64-68, rewritten by the changeset), two test docs (prompter_test.go:61-63, :146-149), the call-site comment at proxy.go:164-166, and the nameHasOwner doc at forward.go:69-71. The copies disagree. The changeset's text at prompter.go:66-68 and prompter_test.go:148-149 says the fallback draws a GTK dialog. proxy.go:166 and forward.go:71, which the changeset did not touch, still say it is display-less and the unlock hangs, as does the type doc."
+    fix: "Ask the user which behaviour is true. State it once, in the prompterBridge type doc. proxy.go:164-167 keeps only 'No-op when the topology doesn't need it.' (or is dropped), and forward.go:68-71 drops its prompter-bridge sentence. The constructor and test docs drop their copies. One task with b1-2 and b1-8."
+    decision: ASK
+    score: 9
+    reason: "One fact in four files, and the copies contradict each other. Which side is true is a domain fact the code cannot settle."
+    same: [b1-2, b1-8]
+  - id: cross-2
+    at:
+      - internal/proxy/prompter.go:68-71
+      - internal/proxy/prompter_test.go:149-150
+      - internal/proxy/prompter_test.go:187-188
+      - e2e/gnome/vm/demo-driver-install.sh:138-139
+      - internal/proxy/forward.go:30-32
+    reach:
+      - internal/proxy/prompter.go:60-74
+      - internal/proxy/prompter_test.go:143-150
+      - internal/proxy/prompter_test.go:187-188
+      - e2e/gnome/vm/demo-driver-install.sh:138-139
+    row: duplicated knowledge
+    claim: "That forwarding reaches gnome-shell by bus name at call time, and so survives a relogin, is a property of callForwarder: it is addressed to dstName (forward.go:30-32), and toShell is built with dstName systemPrompterName (prompter.go:85). The changeset restates it three times on changed lines (prompter.go:68-71, prompter_test.go:149-150, :187-188). The e2e script at demo-driver-install.sh:138-139 still states the opposite: it says the bridge 're-establishes' itself after the relogin, the deferred activation the changeset removed (HEAD prompter.go:130-175)."
+    fix: "The fact lives in callForwarder's doc only (forward.go:30-32, already true) and, if wanted, in the toShell field comment at prompter.go:50 ('forwards Prompter calls to gnome-shell, addressed by name'). The three changed-line copies are dropped, as b1-5 words it. The demo-driver parenthetical is dropped or reads '(forwarded by name, so it keeps working across the relogin)', as b1-9 words it. One task with b1-5 and b1-9."
+    decision: FIX
+    score: 7
+    reason: "Copies on changed lines, plus a stale contrary copy in another file left behind by the changeset's deletion."
+    same: [b1-5, b1-9]
+  - id: cross-3
+    at:
+      - internal/proxy/prompter.go:63
+      - internal/proxy/prompter.go:69
+      - internal/proxy/prompter.go:32-33
+      - internal/proxy/prompter_test.go:149
+      - internal/proxy/prompter_test.go:167
+      - internal/proxy/proxy.go:164-165
+      - internal/proxy/prompter.go:113
+      - internal/proxy/prompter.go:123
+      - internal/proxy/prompter.go:136
+    reach:
+      - internal/proxy/prompter.go:60-74
+      - internal/proxy/prompter_test.go:143-150
+      - internal/proxy/prompter_test.go:167-168
+      - internal/proxy/proxy.go:164-167
+    row: ambiguous noun
+    claim: "gnome-shell's SystemPrompter has four names across files. The changeset's new text calls it 'front prompter' (prompter.go:63, prompter_test.go:167) and 'real prompter' (prompter.go:69, prompter_test.go:149). proxy.go:164-165 and the log messages at prompter.go:113, :123 and :136 call it 'session prompter', and the type doc calls it 'gnome-shell's real prompter' (prompter.go:32-33). 'prompter' alone also names the gcr-prompter fallback and the bridge itself."
+    fix: "Use one term in docs and comments, 'gnome-shell's prompter', the wording b1-5's rewrite already uses. The changed lines get it through b1-5, and proxy.go:164-167 through cross-1's task. The log messages are user-visible output on unchanged lines and stay as they are."
+    decision: FIX
+    score: 5
+    reason: "The new names are on changed lines and are removed by b1-5's rewrite. This finding pins that rewrite to the term the other files can share."
+    same: [b1-5, b1-2]
+  - id: cross-4
+    at:
+      - internal/proxy/proxy.go:158
+      - internal/proxy/proxy.go:168
+      - internal/proxy/signals.go:26
+      - internal/proxy/prompter.go:75
+    reach:
+      - internal/proxy/proxy.go:155-172
+      - internal/proxy/signals.go:18-33
+      - internal/proxy/prompter.go:47-90
+    row: data clump
+    claim: "newSignalForwarder(backendConn, frontConn, logger) (signals.go:26) and newPrompterBridge(frontConn, backendConn, logger) (prompter.go:75) take the same three Proxy fields, and both store the two conns as fields with the same names. The two *dbus.Conn parameters come in opposite orders, and the calls sit ten lines apart in proxy.go (:158, :168). A swap compiles silently and would bridge the wrong bus. NewPromptHandler (prompt.go:24) takes the backend conn as 'localConn', a third name for the same value. The changeset touched none of these signatures."
+    fix: "A small value type for the topology, e.g. `type busPair struct{ front, backend *dbus.Conn }`, held on Proxy and passed as one argument to newSignalForwarder and newPrompterBridge (and stored in their structs in place of the two fields), so the order cannot be swapped."
+    decision: PLAN
+    score: 4
+    reason: "Unchanged lines outside the diff, and not the root cause of any changed-line smell. Two same-typed parameters in opposite order are a real hazard, but no bug today."
+    same: []
+  - id: cross-5
+    at:
+      - internal/proxy/forward.go:68-78
+      - internal/proxy/prompter.go:76
+    reach:
+      - internal/proxy/forward.go:68-78
+    row: misplaced rule
+    claim: "nameHasOwner lives in forward.go, next to callForwarder, but its only production caller is prompter.go:76 (plus prompter_test.go:170). That was true at HEAD too: both callers were in prompter.go (HEAD :73, :87). Its doc explains its result in terms of the prompter bridge (forward.go:69-71). The changeset removed one of the two callers."
+    fix: "Keep nameHasOwner as a generic bus query with a doc that does not mention its caller (b1-8's wording). Moving it to prompter.go is optional. It has nothing to do with forwarding, but it is a generic D-Bus helper."
+    decision: SKIP
+    score: 2
+    reason: "Pre-existing placement on unchanged lines. The useful part, the caller-layer doc, is already b1-8."
+    same: [b1-8]

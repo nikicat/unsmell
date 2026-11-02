@@ -1,0 +1,124 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 1d24c88..d71ab28 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -3,6 +3,7 @@ name = "dengi"
+ version = "0.1.0"
+ requires-python = ">=3.14"
+ dependencies = [
++    "pydantic-settings>=2.14.0",
+     "pyjwt[crypto]>=2.15.1",
+     "requests>=2.34.2",
+ ]
+diff --git a/seb.py b/seb.py
+index 3c4369b..b2472a2 100644
+--- a/seb.py
++++ b/seb.py
+@@ -6,7 +6,6 @@ When there is no valid session, it asks you to log in with Smart-ID first.
+ """
+ import argparse
+ import json
+-import os
+ import sqlite3
+ import sys
+ import uuid
+@@ -18,12 +17,28 @@ from urllib.parse import parse_qs, urlparse
+ 
+ import jwt
+ import requests
++from pydantic import FilePath, HttpUrl, ValidationError
++from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+ API = "https://api.enablebanking.com"
+-APP_ID = os.environ.get("EB_APP_ID", "00000000-0000-4000-8000-000000000000")
+-KEY_PATH = Path(os.environ.get("EB_KEY", "private.pem"))
+-REDIRECT = os.environ.get("EB_REDIRECT", "https://localhost/")  # must match one registered on the app
+-SESSION = Path("session.json")
++
++
++class Settings(BaseSettings):
++    """The configuration of an import, read from the EB_* environment variables.
++
++    Relative paths resolve against the current directory,
++    so each directory you run the import from keeps its own key, session and ledger.
++    """
++
++    model_config = SettingsConfigDict(env_prefix="EB_")
++
++    app_id: uuid.UUID
++    key: FilePath = Path("private.pem")
++    # Must match one of the redirect URLs registered on the app.
++    redirect: HttpUrl = HttpUrl("https://localhost/")
++    aspsp: str = "SEB"
++    session: Path = Path("session.json")
++    db: Path = Path("dengi.db")
+ 
+ 
+ def psu_headers() -> dict[str, str]:
+@@ -61,15 +76,18 @@ def still_valid(session: dict) -> bool:
+ class EnableBanking:
+     """A client of the Enable Banking API that signs each request as the given application."""
+ 
+-    app_id: str
++    app_id: uuid.UUID
+     key: bytes
++    redirect: HttpUrl
++    aspsp: str
++    session_file: Path
+     psu: dict[str, str]
+ 
+     def call(self, method, path, **kw):
+         now = int(datetime.now(timezone.utc).timestamp())
+         token = jwt.encode(
+             {"iss": "enablebanking.com", "aud": "api.enablebanking.com", "iat": now, "exp": now + 3600},
+-            self.key, algorithm="RS256", headers={"kid": self.app_id},
++            self.key, algorithm="RS256", headers={"kid": str(self.app_id)},
+         )
+         headers = {"Authorization": f"Bearer {token}"} | self.psu
+         r = requests.request(method, API + path, headers=headers, timeout=60, **kw)
+@@ -79,12 +97,12 @@ class EnableBanking:
+ 
+     def session(self) -> dict:
+         """Returns a session that is valid now, either the saved one or a new one from authorize()."""
+-        if SESSION.exists():
+-            saved = json.loads(SESSION.read_text())
++        if self.session_file.exists():
++            saved = json.loads(self.session_file.read_text())
+             if still_valid(saved):
+                 return saved
+         session = self.authorize()
+-        SESSION.write_text(json.dumps(session, indent=2))
++        self.session_file.write_text(json.dumps(session, indent=2))
+         return session
+ 
+     def authorize(self) -> dict:
+@@ -100,9 +118,9 @@ class EnableBanking:
+         valid_until = datetime.now(timezone.utc) + timedelta(days=180)  # PSD2 max; bank may cap lower
+         return self.call("POST", "/auth", json={
+             "access": {"valid_until": valid_until.isoformat()},
+-            "aspsp": {"name": os.environ.get("EB_ASPSP", "SEB"), "country": "LT"},
++            "aspsp": {"name": self.aspsp, "country": "LT"},
+             "state": state,
+-            "redirect_url": REDIRECT,
++            "redirect_url": str(self.redirect),
+             "psu_type": "personal",
+         })["url"]
+ 
+@@ -166,8 +184,15 @@ def parse_args() -> argparse.Namespace:
+ 
+ def main():
+     args = parse_args()
+-    client = EnableBanking(APP_ID, KEY_PATH.read_bytes(), psu_headers())
+-    ledger = Ledger.open(Path("dengi.db"))
++    try:
++        settings = Settings()
++    except ValidationError as e:
++        sys.exit(str(e))
++    client = EnableBanking(
++        app_id=settings.app_id, key=settings.key.read_bytes(), redirect=settings.redirect,
++        aspsp=settings.aspsp, session_file=settings.session, psu=psu_headers(),
++    )
++    ledger = Ledger.open(settings.db)
+     for acc in client.session()["accounts"]:
+         iban = acc.get("account_id", {}).get("iban") or acc["uid"]
+         date_from = args.date_from or ledger.last_booking_date(iban)

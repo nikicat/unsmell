@@ -20,8 +20,8 @@ read it as intent and apply it before anything else. Common shapes:
 | `only duplication`, `just the long functions`, `skip naming` | Run the named rows of §4 only. |
 | `report only`, `dry run`, `don't fix anything` | Everything becomes a report line. Zero edits, zero questions. The run still writes its files (§3.0), with the decisions it would have made, and stops before the editors. |
 | `patches only`, `don't merge` | Run §3.0 up to the patches (step 5) and stop: nothing is merged into the working tree, nothing is re-checked, and no question is asked. The report lists each task with its patch. |
-| `fix everything`, `don't ask`, `just do it` | ASK collapses into FIX: pick the option you'd have recommended, apply it, and say what you chose and what the alternative was. |
-| `ask first`, `check with me` | FIX collapses into ASK: propose, don't apply. |
+| `fix everything`, `don't ask`, `just do it` | Step 6 of §3.0 accepts every FIX and ASK change without asking. For an ASK, apply the option you'd have recommended, and say what you chose and what the alternative was. |
+| `ask first`, `check with me` | The default already asks about every change (§3.0, step 6). |
 | `the whole file`, `this module`, `the repo` | Scope becomes what they named instead of the changeset. Warn if it's huge, then do it. |
 | `aggressive` / `light touch` | Move the bar for what's worth fixing, not the catalog. |
 | `threshold 6`, `bar 3` | Set the value threshold of §5.0 for this run. |
@@ -125,16 +125,18 @@ never become part of the next run's changeset.
    what the user has already decided or rejected in this conversation. It reads
    each finding's lines from disk before it decides. A survey agent can be
    wrong, and that is a reason to check the finding, not to drop it. Every
-   finding but a discarded one gets a `task`. Findings whose `reach` overlaps,
-   or that `same` links, share one task: one fix makes the final shape that all
-   of them ask for. When that code has a second defensible shape that goes
-   further, and only the first is a FIX, the second is its own task stacked on
-   the first (`after`): its patch starts from the first task's result and holds
-   only what the second shape adds. Two tasks never each make part of one fix,
-   and an alternative never leaves out the docs and tests that the first task
-   fixed.
+   finding but a discarded one gets a `change`. Findings whose `reach` overlaps,
+   or that `same` links, share one change: one fix makes the final shape that
+   all of them ask for. When that code has a second defensible shape that goes
+   further, and only the first is a FIX, the second is its own change stacked on
+   the first (`after`): its patch starts from the first change's result and
+   holds only what the second shape adds. `after` marks only such an
+   alternative. It never orders two fixes that touch the same file: each patch
+   starts from the base, so that each can be accepted or rejected alone (step
+   6). Two changes never each make part of one fix, and an alternative never
+   leaves out the docs and tests that the first change fixed.
 
-5. **One editor agent per task, all in parallel, each in its own worktree.**
+5. **One editor agent per change, all in parallel, each in its own worktree.**
    Each is fresh. The worktree starts from a snapshot of the working tree, so it
    holds the whole changeset, staged, unstaged and untracked, and the user's
    index is never touched:
@@ -143,7 +145,7 @@ never become part of the next run's changeset.
    run=$(git rev-parse --git-dir)/unsmell/<run>
    tree=$(GIT_INDEX_FILE=$run/index sh -c 'git read-tree HEAD && git add -A && git write-tree')
    base=$(git commit-tree "$tree" -p HEAD -m "unsmell base")   # once per run
-   git worktree add --detach "$run/worktrees/<task>" "$base"   # once per task
+   git worktree add --detach "$run/worktrees/<change>" "$base"   # once per change
    ```
 
    **The build check** is the project's fastest command that fails on code that
@@ -152,52 +154,103 @@ never become part of the next run's changeset.
    test suite, a linter, or a build in each feature set: a dozen editors that
    each rebuild the project in parallel cost more than the fixes. The editors of
    one run share one build directory, such as `CARGO_TARGET_DIR=$run/target`, so
-   that dependencies build once. The full check runs once, on the merged code
-   (step 6).
+   that dependencies build once. The full check runs once, on the accepted
+   changes (step 6).
 
-   A stacked task waits for the task it is `after`. Its worktree starts from a
-   commit of that task's patch on `$base`, and its patch is the diff from that
-   commit.
+   A stacked change waits for the change it is `after`. Its worktree starts from
+   a commit of that change's patch on `$base`, and its patch is the diff from
+   that commit.
 
-   The editor's prompt gives the worktree path, the task's findings and decision
-   entries, the style ground truth from §2, the user's decisions in this
-   conversation that bear on the task, and an instruction to read this skill's
-   §5 and §6. It edits only inside its worktree, makes the fix in the final
-   shape the findings name, and runs the build check below. Before it finishes,
-   it reads its own diff against the catalog (§4), because nothing else will
-   until the re-check. A fix that adds a smell is not finished: a library call
-   written out at every site where a named helper stood is duplication, a value
-   that a new function would return typed is fetched and parsed inline, or the
-   root cause that the findings name is left half done. When it is done, the
-   main agent saves the patch and removes the worktree:
+   The editor's prompt gives the worktree path, the change's findings and
+   decision entries, the style ground truth from §2, the user's decisions in
+   this conversation that bear on the change, and an instruction to read this
+   skill's §5 and §6. It edits only inside its worktree, makes the fix in the
+   final shape the findings name, and runs the build check below. Before it
+   finishes, it reads its own diff against the catalog (§4), because nothing
+   else will until the re-check. A fix that adds a smell is not finished: a
+   library call written out at every site where a named helper stood is
+   duplication, a value that a new function would return typed is fetched and
+   parsed inline, or the root cause that the findings name is left half done.
+   When it is done, the main agent saves the patch and removes the worktree:
 
    ```sh
-   git -C "$run/worktrees/<task>" add -A
-   git -C "$run/worktrees/<task>" diff --cached "$base" > "$run/fixes/<task>.patch"
-   git worktree remove --force "$run/worktrees/<task>"
+   git -C "$run/worktrees/<change>" add -A
+   git -C "$run/worktrees/<change>" diff --cached "$base" > "$run/fixes/<change>.patch"
+   git worktree remove --force "$run/worktrees/<change>"
    ```
 
-   Tasks whose decision is not FIX get a patch too: it shows the user what an
+   Changes whose decision is not FIX get a patch too: it shows the user what an
    ASK proposes, and what a PLAN or a SKIP would have cost. An editor that finds
-   the task cannot be done as described says so, and the main agent records that
-   in the task's decision entries instead of a patch.
+   the change cannot be done as described says so, and the main agent records
+   that in the change's decision entries instead of a patch.
 
-6. **The main agent merges the FIX patches** into the working tree, one task at
-   a time, with `git apply`. A patch that no longer applies, because an earlier
-   one changed its lines, is redone by hand on the merged code, to the same
-   final shape. The other patches stay in the run directory. Then the main agent
-   runs the project's full check on the merged code once: its tests and linters.
-   A failure is fixed in the task whose patch caused it.
+6. **The user reviews the changes one at a time.** One change mixed into twenty
+   is hard to judge; one at a time, each gets a real verdict. The FIX and ASK
+   changes are reviewed, highest score first, and an alternative comes right
+   after the change it is stacked on. The user reviews each change in one review
+   worktree, which stays at the same path for the whole run, so that an editor
+   or diff viewer can stay open on it. Its HEAD is the snapshot with every
+   change accepted so far, and its working tree adds the change under review,
+   unstaged, so that `git diff` there shows exactly that change:
+
+   ```sh
+   git worktree add --detach "$run/review" "$base"         # once per run
+   git -C "$run/review" reset -q --hard && git -C "$run/review" clean -qfd
+   git -C "$run/review" apply --intent-to-add "$run/fixes/<change>.patch"
+   ```
+
+   After an accept, the review worktree moves on to a commit of the accepted
+   patch (`git commit-tree`, as for the snapshot), so that the next change is
+   shown on top of it. For each change, the main agent prints the review
+   worktree's path, the change's findings (row, claim, decision and score) and
+   `git diff --stat`, then asks one question (`AskUserQuestion`) with four
+   answers. The question holds everything the user needs to find the change,
+   because the question box covers the text printed before it. It names the
+   change by what it does, not only by its id. It gives the review worktree's
+   absolute path, and the command that shows the change:
+   `cd /abs/path/.git/unsmell/<run>/review && git diff`. The `accept` answer's
+   preview shows the findings and the `--stat`.
+
+   - **accept**: apply the patch to the working tree with `git apply`. A patch
+     that no longer applies, because an accepted one changed its lines, is
+     redone by hand on the current code, to the same final shape.
+   - **reject**: the change is not wanted. The patch stays in the run directory,
+     so that it can be reconsidered later. When the user says that a finding is
+     wrong, the report lists it as a rule of this skill to fix.
+   - **plan**: the intention is right, but the implementation is not. Write a
+     plan entry (§5, PLAN) with where the smell is and what is wrong, from the
+     findings; the direction, from the user's note; and the patch's path, as the
+     alternative already tried. When the note is a lasting decision rather than
+     work to do ("settings go through a schema library"), it goes where the
+     project keeps its decisions, such as its ADRs or design docs, instead.
+   - **later**: nothing is applied, and the report lists the change as open.
+
+   Each verdict and the user's note go into the change's entries in
+   `decisions.yaml`, as `verdict` and `note`. The SKIP changes are not reviewed;
+   their patches stay in the run directory, and the report lists them.
+
+   The PLAN changes come last, and each asks one question before its plan entry
+   is written: plan it, or **implement it now**. Implementing it now runs an
+   editor (step 5) in a worktree that starts from the review worktree's HEAD, so
+   that a change too large to judge against the base is made on top of
+   everything accepted so far. Its patch is then reviewed like the others. When
+   no user can answer, as in a headless run, the run stops before this step, as
+   `patches only` does.
+
+   After the last verdict, the main agent runs the project's full check once on
+   the result: its tests and linters. A failure is fixed in the change whose
+   patch caused it.
 
 7. **A fresh re-check agent, until one finds nothing.** It gets the run
-   directory, the files that the merged fixes touched, and the FIX entries of
-   `decisions.yaml`. It runs §3 on those files, because the fixes are the newest
-   code and the least read, and it writes `findings/recheck-<n>.yaml`. Its
-   findings go back to step 4, and the fixes that come out of them go through
-   steps 5 and 6 and get a new re-check agent. Stop when a re-check returns no
-   finding that the run would fix, or after three re-checks; then every finding
-   still open is planned (§5). A fix that the next run would refactor again was
-   not finished, and the re-check is where it gets finished.
+   directory, the files that the accepted changes touched, and the accepted
+   entries of `decisions.yaml`. It runs §3 on those files, because the fixes are
+   the newest code and the least read, and it writes
+   `findings/recheck-<n>.yaml`. Its findings go back to step 4, and the fixes
+   that come out of them go through steps 5 and 6 and get a new re-check agent.
+   Stop when a re-check returns no finding that the run would fix, or after
+   three re-checks; then every finding still open is planned (§5). A fix that
+   the next run would refactor again was not finished, and the re-check is where
+   it gets finished.
 
 A findings file:
 
@@ -231,8 +284,10 @@ per finding of every findings file:
   decision: FIX                   # final, by §5
   score: 7
   reason: the full tell; the user named no other shape
-  task: t2                        # all but DISCARD: findings with one task get one patch
-  after: [t1]                     # a stacked task only: the tasks its patch starts from
+  change: c2                      # all but DISCARD: findings with one change get one patch
+  after: [c1]                     # a stacked change only: the changes its patch starts from
+  verdict: plan                   # step 6: accept, reject, plan or later
+  note: use pydantic-settings     # the user's reason or direction, when given
 ```
 
 Every file is YAML in block style, as above, and must parse. Quote a value that
@@ -1046,8 +1101,9 @@ A fix is finished or not made. It leaves no residue: no local that only renames
 another (`params = query`), no two names for one value, no half of the old shape
 beside the new one. The re-check (§3.0) treats residue as a finding.
 
-**ASK** — one batched round of questions (`AskUserQuestion`), never a drip feed.
-Ask when:
+**ASK** — a change whose review (§3.0, step 6) needs a decision, not only a
+verdict. Its question says what is wrong, the options and which you'd pick; a
+second option is its own change, stacked on the first. Ask when:
 
 - it changes a public/exported/published API, or anything with callers you can't
   enumerate

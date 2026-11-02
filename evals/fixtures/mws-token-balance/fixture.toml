@@ -1,0 +1,4 @@
+# TypeScript (Deno), 9 files: new MCP tools spread over three packages.
+source = "~/src/mcp-wallet-signer"
+commit = "aa9eaab"
+check = "deno check packages/*/src/*.ts"

@@ -1,0 +1,41 @@
+id: e5ba511568
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - src/evm/cache/log_cache.rs:444
+  - src/evm/cache/log_cache.rs:164-165
+  - src/evm/cache/log_cache.rs:191-192
+  reach:
+  - src/evm/cache/log_cache.rs:432-444
+  row: unparsed input (position access) / split protocol
+  claim: row_to_log reads the new column as `row.get(11)` (log_cache.rs:444), so the changeset had to
+    append block_timestamp as the 12th column in both SELECTs (log_cache.rs:165, :192) in the same order.
+    Every column of row_to_log depends on position, and the two SELECTs that feed it are 30 lines apart;
+    get_log_by_ref has no round-trip test for the new column.
+  fix: row_to_log reads each column by name (`row.get("block_timestamp")?`, `row.get("block_number")?`,
+    …), so each SELECT only has to include the columns, not order them. SQL text stays written out in
+    full (§5). Alternatively keep positions and add a get_log_by_ref round-trip assertion on block_timestamp.
+  decision: ASK
+  score: 5
+  reason: The tell is met on a changed line, but positional access is the convention everywhere in the
+    repo's rusqlite code (log_cache.rs:250, :281-284, :404-406) and name lookup is a style choice with
+    a small per-row cost on the hot get_logs_in_range path; two defensible designs.
+  same: []
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 5
+    task: t3
+    reason: 'the positional read at log_cache.rs:444 ties two SELECTs to one column order; by-name reads
+      would differ from the rest of the repo. Patches only: not asked, a patch shows the proposal'
+check: ok

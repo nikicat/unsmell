@@ -1,0 +1,29 @@
+id: 785bb25317
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-17
+judge: null
+labels: []
+findings:
+- id: b1-17
+  at:
+  - evals/run.py:178
+  - evals/run.py:168
+  reach:
+  - evals/run.py:178
+  row: unparsed input
+  claim: --rounds 0 or below runs no round, and run.py:168 then fails with IndexError
+  fix: reject a value under 1 at argparse with a type that checks it
+  decision: SKIP
+  score: 4
+  reason: an operator error with a loud failure
+  same: []
+  triage:
+    id: b1-17
+    decision: SKIP
+    score: 4
+    reason: an operator error with a loud failure
+    task: skip-b1-17
+check: ok

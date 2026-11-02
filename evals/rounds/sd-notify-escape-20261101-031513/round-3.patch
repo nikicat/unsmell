@@ -1,0 +1,572 @@
+diff --git a/TODO.md b/TODO.md
+index 66f653f..6a4f281 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -39,3 +39,11 @@
+ - [ ] `internal/notification/slow_upstream.go`: `NewSlowUpstreamNotifier` and `newSlowUpstreamNotifier` have identical bodies, and the second's doc names its caller ("for testing"). Keep one. All seven docs in the file open with their declaration's own name. `NotifySlowUpstream`'s doc narrates ("then returns") and does not say the dismiss function is a no-op when the send failed. The icon `"dialog-password"` is spelled here and three times in `desktop.go:notificationMeta`.
+ - [ ] `internal/notification/slow_upstream_test.go`: the mock and notifier setup and the locked `mock.notified[0]` read are repeated in about 12 tests. Several index `[0]` without a length check, so a failure panics. Use `mockNotifier.lastNotify`, and make the four summary tests one table.
+ - [ ] `internal/notification/desktop_test.go`: `newTestHandler` duplicates `newTestHandlerWithDelay`. The ListenActions goroutine, sleep and cancel block is repeated five times, and the notification-ID lookup under the lock four times. The GetSecret fixture is built inline about ten times. The connect helper at :1018 duplicates `DBusNotifier.connect`. `notifID := …; _ = notifID` and `_ = mock` are dead code. `mockApprover` encodes the call kind as an "auto:"/"approve_auto:" string prefix.
++
++## Unsmell run 2026-11-01 (third pass): markup value type
++
++- [ ] `internal/notification/body.go:formatBody` treats a request with no process chain as remote, and only a comment names that rule. The same `len(SenderInfo.ProcessChain)` check is at `internal/cli/format.go:139` and `internal/api/handlers.go:317,464`. Give `approval.SenderInfo` a named predicate once someone confirms that "no chain" really means "remote".
++- [ ] `internal/notification/body.go:sender` shows `@client[0]` when an invoker is named but the PID is 0, while the arm without an invoker hides a zero PID. The "name[pid]" rendering is also written three times in `body.go`, at `internal/cli/format.go:146` and at `internal/api/peercred.go:64`. Make one formatter on `approval.ProcessInfo`/`SenderInfo` and decide what a zero PID shows.
++- [ ] `internal/notification/slow_upstream.go:slowUpstreamSummary` is a fourth per-request-type `switch`. Include it in the per-type table planned in the second-pass entry above.
++- [ ] `internal/notification/slow_upstream.go`: the `SlowUpstreamNotifier` doc gives the caller's reason (pinentry context), which `internal/proxy/slow_upstream.go:23` also states. The `NotifySlowUpstream` doc lists the body contents, which `formatSlowUpstreamBody` owns. Cut both down to the item's own contract.
++- [ ] `internal/notification/desktop.go:146` reads the D-Bus signal body by position (`sig.Body[0]`, `sig.Body[1]`). The `NotifyPersistent` doc names the D-Bus method `CloseNotification`, and "alternating (id, label) pairs" is stated at both `:30` and `:190`. Decode the signal into a named struct and give each fact one owner.
+diff --git a/internal/notification/body.go b/internal/notification/body.go
+new file mode 100644
+index 0000000..ab07019
+--- /dev/null
++++ b/internal/notification/body.go
+@@ -0,0 +1,126 @@
++package notification
++
++import (
++	"fmt"
++	"maps"
++	"slices"
++	"strings"
++
++	"github.com/nikicat/secrets-dispatcher/internal/approval"
++)
++
++func (h *Handler) formatBody(req *approval.Request) markup {
++	b := bodyBuilder{showPIDs: h.showPIDs}
++
++	switch req.Type {
++	case approval.RequestTypeGPGSign:
++		if req.GPGSignInfo == nil {
++			return b.markup
++		}
++		b.gpgSubject(req.GPGSignInfo)
++	case approval.RequestTypeSSHSign:
++		if len(req.Items) > 0 {
++			b.sshSubject(req.Items[0])
++		}
++	default:
++		subject, hasSubject := itemsSubject(req)
++		if len(req.SenderInfo.ProcessChain) == 0 {
++			// Remote requests carry no process chain, so the sender comes first.
++			b.sender(req)
++			if hasSubject {
++				b.italic(subject)
++			}
++		} else if hasSubject {
++			b.bold(subject)
++		}
++	}
++	b.processChain(req.SenderInfo.ProcessChain)
++
++	return b.markup
++}
++
++// The body of one approval notification while it is being built. It carries
++// the handler's PID setting, so the rendering methods need no Handler.
++type bodyBuilder struct {
++	markup
++	showPIDs bool
++}
++
++// Appends the repository in bold and the commit subject in italics.
++func (b *bodyBuilder) gpgSubject(info *approval.GPGSignInfo) {
++	b.bold(info.RepoName)
++	b.text(": ")
++	b.italic(commitSubject(info.CommitMsg))
++}
++
++// Appends the key label in bold. If the key's attributes name a destination
++// host, an arrow and the host follow the label.
++func (b *bodyBuilder) sshSubject(key approval.ItemInfo) {
++	b.bold(key.Label)
++	if dest := key.Attributes["destination"]; dest != "" {
++		b.text(" → " + dest)
++	}
++}
++
++// Appends the process chain on a new line, starting with the requesting
++// process. Each process name is followed by its PID when the builder shows PIDs.
++// An empty chain appends nothing.
++func (b *bodyBuilder) processChain(chain []approval.ProcessInfo) {
++	for i, p := range chain {
++		if i == 0 {
++			b.text("\n")
++		} else {
++			b.text(" ← ")
++		}
++		b.text(p.Name)
++		if b.showPIDs {
++			b.textf("[%d]", p.PID)
++		}
++	}
++}
++
++// Appends who sent the request, followed by a colon. If the request names an
++// invoker, the sender is the invoker in bold, followed by "@", the client and
++// the PID. Otherwise the sender is the client in bold, followed by the PID
++// when it is nonzero.
++func (b *bodyBuilder) sender(req *approval.Request) {
++	switch {
++	case req.SenderInfo.InvokerName != "":
++		b.bold(req.SenderInfo.InvokerName)
++		b.textf("@%s[%d]", req.Client, req.SenderInfo.PID)
++	case req.SenderInfo.PID != 0:
++		b.bold(req.Client)
++		b.textf("[%d]", req.SenderInfo.PID)
++	default:
++		b.bold(req.Client)
++	}
++	b.text(": ")
++}
++
++// Returns the label, item count or search attributes that a secret request is
++// about. A search with no attributes is about "all". The second result is false
++// for request types that have no such subject.
++func itemsSubject(req *approval.Request) (string, bool) {
++	switch req.Type {
++	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
++		if len(req.Items) == 1 {
++			return req.Items[0].Label, true
++		}
++		return fmt.Sprintf("%d items", len(req.Items)), true
++	case approval.RequestTypeSearch:
++		if len(req.SearchAttributes) == 0 {
++			return "all", true
++		}
++		return searchAttrsText(req.SearchAttributes), true
++	}
++	return "", false
++}
++
++// Returns the search attributes as "k=v, k=v", sorted by key.
++func searchAttrsText(attrs map[string]string) string {
++	pairs := make([]string, 0, len(attrs))
++	for _, k := range slices.Sorted(maps.Keys(attrs)) {
++		pairs = append(pairs, k+"="+attrs[k])
++	}
++	return strings.Join(pairs, ", ")
++}
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 6253925..2c2a013 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -6,9 +6,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"log/slog"
+-	"maps"
+ 	"os/exec"
+-	"slices"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -28,7 +26,7 @@ const (
+ type Notifier interface {
+ 	// Notify sends a notification and returns its ID.
+ 	// The actions parameter takes alternating (id, label) pairs per the FreeDesktop spec.
+-	Notify(summary string, body *markup, icon string, actions []string) (uint32, error)
++	Notify(summary string, body markup, icon string, actions []string) (uint32, error)
+ 	// Close closes a notification by ID.
+ 	Close(id uint32) error
+ }
+@@ -159,7 +157,7 @@ func (n *DBusNotifier) processSignals(ch <-chan *dbus.Signal) {
+ 
+ // Notify sends a desktop notification with optional action buttons.
+ // If the D-Bus connection is dead, it reconnects and retries once.
+-func (n *DBusNotifier) Notify(summary string, body *markup, icon string, actions []string) (uint32, error) {
++func (n *DBusNotifier) Notify(summary string, body markup, icon string, actions []string) (uint32, error) {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+ 
+@@ -173,11 +171,11 @@ func (n *DBusNotifier) Notify(summary string, body *markup, icon string, actions
+ 	return id, err
+ }
+ 
+-func (n *DBusNotifier) doNotify(summary string, body *markup, icon string, actions []string, urgency byte) (uint32, error) {
++func (n *DBusNotifier) doNotify(summary string, body markup, icon string, actions []string, urgency byte) (uint32, error) {
+ 	return n.doNotifyFull(summary, body, icon, actions, urgency, -1)
+ }
+ 
+-func (n *DBusNotifier) doNotifyFull(summary string, body *markup, icon string, actions []string, urgency byte, expireTimeout int32) (uint32, error) {
++func (n *DBusNotifier) doNotifyFull(summary string, body markup, icon string, actions []string, urgency byte, expireTimeout int32) (uint32, error) {
+ 	obj := n.conn.Object(notifyDest, notifyPath)
+ 	call := obj.Call(
+ 		notifyInterface+".Notify",
+@@ -206,7 +204,7 @@ func (n *DBusNotifier) doNotifyFull(summary string, body *markup, icon string, a
+ 
+ // NotifyPersistent sends a critical notification that never auto-expires.
+ // Dismiss it with Close (CloseNotification).
+-func (n *DBusNotifier) NotifyPersistent(summary string, body *markup, icon string) (uint32, error) {
++func (n *DBusNotifier) NotifyPersistent(summary string, body markup, icon string) (uint32, error) {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+ 
+@@ -530,11 +528,10 @@ func (h *Handler) handleCancelled(req *approval.Request) {
+ 		invoker = "client"
+ 	}
+ 	summary := fmt.Sprintf("%s timed out", invoker)
+-	var body markup
+-	body.textf("Auto-approve similar requests for %s?", formatDurationShort(h.autoApproveDuration))
++	body := textMarkup(fmt.Sprintf("Auto-approve similar requests for %s?", formatDurationShort(h.autoApproveDuration)))
+ 	actions := []string{"auto_approve", "Auto-approve", "dismiss", "Dismiss"}
+ 
+-	newID, err := h.notifier.Notify(summary, &body, "dialog-question", actions)
++	newID, err := h.notifier.Notify(summary, body, "dialog-question", actions)
+ 	if err != nil {
+ 		slog.Error("failed to send auto-approve notification", "error", err, "request_id", req.ID)
+ 		return
+@@ -580,120 +577,3 @@ func commitSubject(msg string) string {
+ 	}
+ 	return msg
+ }
+-
+-func (h *Handler) formatBody(req *approval.Request) *markup {
+-	b := bodyBuilder{showPIDs: h.showPIDs}
+-
+-	switch req.Type {
+-	case approval.RequestTypeGPGSign:
+-		if req.GPGSignInfo == nil {
+-			return &b.markup
+-		}
+-		b.gpgSubject(req.GPGSignInfo)
+-	case approval.RequestTypeSSHSign:
+-		if len(req.Items) > 0 {
+-			b.sshSubject(req.Items[0])
+-		}
+-	default:
+-		subject, hasSubject := itemsSubject(req)
+-		if len(req.SenderInfo.ProcessChain) == 0 {
+-			// Remote requests carry no process chain, so the sender comes first.
+-			b.sender(req)
+-			if hasSubject {
+-				b.italic(subject)
+-			}
+-		} else if hasSubject {
+-			b.bold(subject)
+-		}
+-	}
+-	b.processChain(req.SenderInfo.ProcessChain)
+-
+-	return &b.markup
+-}
+-
+-// The body of one approval notification while it is being built. It carries
+-// the handler's choice of whether to show PIDs to the process chain.
+-type bodyBuilder struct {
+-	markup
+-	showPIDs bool
+-}
+-
+-// Appends the repository in bold and the commit subject in italics.
+-func (b *bodyBuilder) gpgSubject(info *approval.GPGSignInfo) {
+-	b.bold(info.RepoName)
+-	b.text(": ")
+-	b.italic(commitSubject(info.CommitMsg))
+-}
+-
+-// Appends the key label in bold. If the key's attributes name a destination
+-// host, an arrow and the host follow the label.
+-func (b *bodyBuilder) sshSubject(key approval.ItemInfo) {
+-	b.bold(key.Label)
+-	if dest := key.Attributes["destination"]; dest != "" {
+-		b.text(" → " + dest)
+-	}
+-}
+-
+-// Appends the process chain on a new line, starting with the requesting
+-// process. Each process name is followed by its PID when showPIDs is set.
+-// An empty chain appends nothing.
+-func (b *bodyBuilder) processChain(chain []approval.ProcessInfo) {
+-	for i, p := range chain {
+-		if i == 0 {
+-			b.text("\n")
+-		} else {
+-			b.text(" ← ")
+-		}
+-		b.text(p.Name)
+-		if b.showPIDs {
+-			b.textf("[%d]", p.PID)
+-		}
+-	}
+-}
+-
+-// Appends who sent the request, followed by a colon. With an invoker name, it
+-// appends the invoker in bold, an "@", the client and the PID in brackets.
+-// Without one, it appends the client in bold and the PID in brackets when the
+-// PID is nonzero.
+-func (b *bodyBuilder) sender(req *approval.Request) {
+-	switch {
+-	case req.SenderInfo.InvokerName != "":
+-		b.bold(req.SenderInfo.InvokerName)
+-		b.textf("@%s[%d]: ", req.Client, req.SenderInfo.PID)
+-	case req.SenderInfo.PID != 0:
+-		b.bold(req.Client)
+-		b.textf("[%d]: ", req.SenderInfo.PID)
+-	default:
+-		b.bold(req.Client)
+-		b.text(": ")
+-	}
+-}
+-
+-// Returns what a get, write, delete or search request is about. A single item
+-// is named by its label. Any other number of items is named by their count. A
+-// search is named by its attributes, or by "all" when it has none. The second
+-// result is false for every other request type.
+-func itemsSubject(req *approval.Request) (string, bool) {
+-	switch req.Type {
+-	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+-		if len(req.Items) == 1 {
+-			return req.Items[0].Label, true
+-		}
+-		return fmt.Sprintf("%d items", len(req.Items)), true
+-	case approval.RequestTypeSearch:
+-		if len(req.SearchAttributes) == 0 {
+-			return "all", true
+-		}
+-		return searchAttrsText(req.SearchAttributes), true
+-	}
+-	return "", false
+-}
+-
+-// Returns the search attributes as "k=v, k=v", sorted by key.
+-func searchAttrsText(attrs map[string]string) string {
+-	pairs := make([]string, 0, len(attrs))
+-	for _, k := range slices.Sorted(maps.Keys(attrs)) {
+-		pairs = append(pairs, k+"="+attrs[k])
+-	}
+-	return strings.Join(pairs, ", ")
+-}
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index c7b3453..7ff4d02 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -34,7 +34,7 @@ type notifyCall struct {
+ 	actions []string
+ }
+ 
+-func (m *mockNotifier) Notify(summary string, body *markup, icon string, actions []string) (uint32, error) {
++func (m *mockNotifier) Notify(summary string, body markup, icon string, actions []string) (uint32, error) {
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
+ 	if m.notifyErr != nil {
+@@ -45,7 +45,7 @@ func (m *mockNotifier) Notify(summary string, body *markup, icon string, actions
+ 	return m.nextID, nil
+ }
+ 
+-func (m *mockNotifier) NotifyPersistent(summary string, body *markup, icon string) (uint32, error) {
++func (m *mockNotifier) NotifyPersistent(summary string, body markup, icon string) (uint32, error) {
+ 	return m.Notify(summary, body, icon, nil)
+ }
+ 
+@@ -416,41 +416,9 @@ func TestHandler_FormatBody_GPGSign_PIDOnly(t *testing.T) {
+ 	}
+ }
+ 
+-// Covers a request crafted to look verified. Without escaping, a client could
+-// add a fake "Verified" label to the notification that carries the approve and
+-// deny buttons.
+-func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+-	h, mock, _ := newTestHandler()
+-
+-	// A crafted commit message that tries to close the <i> and inject a bold
+-	// "Verified" reassurance, plus a process comm that injects markup too.
+-	req := &approval.Request{
+-		ID:     "inject-1",
+-		Client: "user@host",
+-		Type:   approval.RequestTypeGPGSign,
+-		GPGSignInfo: &approval.GPGSignInfo{
+-			RepoName:  "repo<script>",
+-			CommitMsg: "docs: typo</i> <b>Verified · GNOME Keyring</b>",
+-		},
+-		SenderInfo: approval.SenderInfo{
+-			ProcessChain: []approval.ProcessInfo{{Name: "evil</b><b>git", PID: 9}},
+-		},
+-	}
+-
+-	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+-	body := mock.lastNotify().body
+-
+-	// No raw attacker-supplied tags survive.
+-	assert.NotContains(t, body, "<b>Verified", "injected bold reassurance must be escaped")
+-	assert.NotContains(t, body, "typo</i>", "injected closing tag must be escaped")
+-	assert.NotContains(t, body, "<script>", "injected repo markup must be escaped")
+-	assert.NotContains(t, body, "evil</b><b>git", "injected process-name markup must be escaped")
+-
+-	// The content is still present, escaped, inside our own tags.
+-	assert.Contains(t, body, "&lt;b&gt;Verified", "escaped commit text should be present")
+-	assert.Contains(t, body, "<b>repo&lt;script&gt;</b>", "our own <b> tag must remain literal")
+-}
+-
++// Covers request text crafted to look like markup. Without escaping, a client
++// could add a fake "Verified" label to the notification that carries the
++// approve and deny buttons.
+ func TestHandler_FormatBody_EscapesRequestText(t *testing.T) {
+ 	h, _, _ := newTestHandler()
+ 	chain := []approval.ProcessInfo{{Name: "<u>git", PID: 9}}
+@@ -460,6 +428,18 @@ func TestHandler_FormatBody_EscapesRequestText(t *testing.T) {
+ 		req  *approval.Request
+ 		want string
+ 	}{
++		{
++			name: "gpg repo, commit message and process chain",
++			req: &approval.Request{
++				Type: approval.RequestTypeGPGSign,
++				GPGSignInfo: &approval.GPGSignInfo{
++					RepoName:  "repo<script>",
++					CommitMsg: "docs: typo</i> <b>Verified · GNOME Keyring</b>",
++				},
++				SenderInfo: approval.SenderInfo{ProcessChain: []approval.ProcessInfo{{Name: "evil</b><b>git", PID: 9}}},
++			},
++			want: "<b>repo&lt;script&gt;</b>: <i>docs: typo&lt;/i&gt; &lt;b&gt;Verified · GNOME Keyring&lt;/b&gt;</i>\nevil&lt;/b&gt;&lt;b&gt;git",
++		},
+ 		{
+ 			name: "ssh destination",
+ 			req: &approval.Request{
+@@ -1037,9 +1017,7 @@ func TestDBusNotifier_NotifyReconnectsOnClosedConn(t *testing.T) {
+ 
+ 	// Notify should reconnect. It will fail because there's no notification
+ 	// daemon on the test bus, but it must NOT fail with ErrClosed.
+-	var body markup
+-	body.text("after reconnect")
+-	_, err := n.Notify("test", &body, "", nil)
++	_, err := n.Notify("test", textMarkup("after reconnect"), "", nil)
+ 	if errors.Is(err, dbus.ErrClosed) {
+ 		t.Errorf("Notify should have reconnected, but got ErrClosed: %v", err)
+ 	}
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+index 6881b3e..dc402fc 100644
+--- a/internal/notification/markup.go
++++ b/internal/notification/markup.go
+@@ -6,20 +6,34 @@ import (
+ )
+ 
+ // A notification body in the markup subset of the Desktop Notifications spec.
+-// Text written through it is escaped, so the only tags in the body are the
+-// ones it writes itself. Notifier takes bodies only in this type, so no body
+-// reaches the server unescaped.
++// Text written through it is escaped, so the only tags in the body are the ones
++// it writes itself. Every notifier takes bodies only in this type.
+ type markup struct {
+-	b strings.Builder
++	s string
+ }
+ 
++// A tag of the spec's markup subset that markup writes around text.
++type markupTag string
++
++const (
++	tagBold   markupTag = "b"
++	tagItalic markupTag = "i"
++)
++
+ // The escaper for markup text. It replaces only &, < and >, because servers
+ // such as GNOME Shell accept only named entities. They would show the numeric
+ // &#39; and &#34; that html.EscapeString writes as literal text.
+ var markupEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+ 
++// Returns a body that holds only the given text, escaped.
++func textMarkup(s string) markup {
++	var m markup
++	m.text(s)
++	return m
++}
++
+ func (m *markup) text(s string) {
+-	markupEscaper.WriteString(&m.b, s)
++	m.s += markupEscaper.Replace(s)
+ }
+ 
+ func (m *markup) textf(format string, args ...any) {
+@@ -27,23 +41,23 @@ func (m *markup) textf(format string, args ...any) {
+ }
+ 
+ func (m *markup) bold(s string) {
+-	m.tagged("b", s)
++	m.tagged(tagBold, s)
+ }
+ 
+ func (m *markup) italic(s string) {
+-	m.tagged("i", s)
++	m.tagged(tagItalic, s)
+ }
+ 
+-func (m *markup) tagged(tag, s string) {
+-	fmt.Fprintf(&m.b, "<%s>", tag)
++func (m *markup) tagged(tag markupTag, s string) {
++	m.s += "<" + string(tag) + ">"
+ 	m.text(s)
+-	fmt.Fprintf(&m.b, "</%s>", tag)
++	m.s += "</" + string(tag) + ">"
+ }
+ 
+-func (m *markup) empty() bool {
+-	return m.b.Len() == 0
++func (m markup) empty() bool {
++	return m.s == ""
+ }
+ 
+-func (m *markup) String() string {
+-	return m.b.String()
++func (m markup) String() string {
++	return m.s
+ }
+diff --git a/internal/notification/markup_test.go b/internal/notification/markup_test.go
+index 1de5f15..ef128d9 100644
+--- a/internal/notification/markup_test.go
++++ b/internal/notification/markup_test.go
+@@ -14,3 +14,16 @@ func TestMarkup_EscapesTextInsideOwnTags(t *testing.T) {
+ 		t.Errorf("got %q, want %q", got, want)
+ 	}
+ }
++
++func TestTextMarkup_EscapesWholeText(t *testing.T) {
++	if got, want := textMarkup("a<b>&").String(), "a&lt;b&gt;&amp;"; got != want {
++		t.Errorf("got %q, want %q", got, want)
++	}
++}
++
++func TestMarkup_ZeroValueIsEmptyBody(t *testing.T) {
++	var zero markup
++	if !zero.empty() || zero.String() != "" {
++		t.Errorf("zero markup should be the empty body, got %q", zero.String())
++	}
++}
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 8c41e0b..71a1fff 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -10,7 +10,7 @@ import (
+ 
+ // persistentNotifier sends persistent notifications and can dismiss them.
+ type persistentNotifier interface {
+-	NotifyPersistent(summary string, body *markup, icon string) (uint32, error)
++	NotifyPersistent(summary string, body markup, icon string) (uint32, error)
+ 	Close(id uint32) error
+ }
+ 
+@@ -77,7 +77,7 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ // Returns the body of the slow-upstream notification. It names the items, with
+ // a count when there is more than one. If the call has a process chain, the
+ // chain follows on its own line.
+-func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) *markup {
++func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) markup {
+ 	var m markup
+ 
+ 	switch len(ctx.Items) {
+@@ -92,7 +92,8 @@ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) *markup {
+ 		m.textf("%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
+ 	}
+ 
+-	// Process chain (Name ← Name convention, matching desktop.go)
++	// Appends the process chain on its own line, joined the way
++	// bodyBuilder.processChain joins it, without PIDs.
+ 	if len(ctx.SenderInfo.ProcessChain) > 0 {
+ 		if !m.empty() {
+ 			m.text("\n")
+@@ -105,5 +106,5 @@ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) *markup {
+ 		}
+ 	}
+ 
+-	return &m
++	return m
+ }

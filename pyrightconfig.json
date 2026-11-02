@@ -1,0 +1,6 @@
+{
+  "include": ["evals"],
+  "exclude": ["evals/fixtures"],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.12"
+}

@@ -1,0 +1,63 @@
+id: 508f359083
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261101-210501
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-01'
+findings:
+- id: b1-12
+  at:
+  - internal/proxy/prompter_test.go:68-73
+  - internal/proxy/prompter_test.go:77-97
+  - internal/proxy/prompter_test.go:152-165
+  - internal/proxy/prompter_test.go:174-185
+  reach:
+  - internal/proxy/prompter_test.go:60-195
+  row: repeated derivation
+  claim: 'Both tests build the same fixture inline: the backend and front test daemons with their cleanup,
+    the proxy connected between them under the "prompter-test" name, and a mockShellPrompter exported
+    and named on the front bus (12 identical lines at :77-88 and :174-185).'
+  fix: 'Add test helpers in prompter_test.go: startBuses(t) (backendAddr, frontAddr), connectProxy(t,
+    frontAddr, backendAddr) *Proxy, and startShellPrompter(t, frontAddr) *mockShellPrompter. Both tests
+    call them.'
+  decision: PLAN
+  score: 6
+  reason: The tell is met in full, but the lines are unchanged and do not cause a smell on the changed
+    lines.
+  same: []
+  triage:
+    id: b1-12
+    decision: PLAN
+    score: 6
+    reason: unchanged lines, not a cause of a changed-line smell
+    task: t6
+- id: b1-13
+  at:
+  - internal/proxy/prompter_test.go:132-136
+  - internal/proxy/prompter_test.go:197-206
+  - internal/proxy/prompter_test.go:208-217
+  reach:
+  - internal/proxy/prompter_test.go:132-136
+  - internal/proxy/prompter_test.go:197-217
+  row: inline generic machinery
+  claim: '"Receive from a channel or fail the test after 5s" is written three times in this file, and
+    again in prompt_test.go:128, daemon/daemon_test.go:171 and notification/desktop_bus_test.go:169,189.'
+  fix: Write one generic helper, recvWithin[T any](t, ch <-chan T, d time.Duration, what string) T, in
+    a shared test utility package. recvCall, recvReply and the inline select use it, and the other packages
+    adopt it later.
+  decision: PLAN
+  score: 5
+  reason: The lines are unchanged, and the fix spans packages.
+  same: []
+  triage:
+    id: b1-13
+    decision: PLAN
+    score: 5
+    reason: unchanged lines, spans packages
+    task: t6
+check: ok

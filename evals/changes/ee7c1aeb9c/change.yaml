@@ -1,0 +1,36 @@
+id: ee7c1aeb9c
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-11
+  at:
+  - internal/notification/desktop.go:378-389
+  - internal/notification/desktop.go:469-473
+  - internal/notification/desktop.go:533
+  reach:
+  - internal/notification/desktop.go:358-406
+  - internal/notification/desktop.go:465-547
+  row: split protocol
+  claim: Action keys ("default", "approve", "approve_and_auto_approve", "deny", "auto_approve", "dismiss")
+    are written into the actions list in sendNotification/handleCancelled and matched again as string
+    literals in handleAction; Action.ActionKey is a bare string.
+  fix: A typed actionKey with named constants used by both the writers and handleAction.
+  decision: PLAN
+  score: 7
+  reason: Unchanged lines.
+  same: []
+  triage:
+    id: b1-11
+    decision: PLAN
+    score: 7
+    reason: unchanged lines
+    task: t6
+check: ok

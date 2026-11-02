@@ -1,0 +1,39 @@
+id: c907bc7723
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: bad
+  note: ip obtaining with domain typed return value should be factored out
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - seb.py:41
+  reach:
+  - seb.py:36-42
+  row: unparsed input
+  claim: 'The ipify response body is used as the Psu-Ip-Address header without a status or format check.
+    On a 5xx, its error page becomes the header value: requests then raises InvalidHeader on a later API
+    call when the page has inner newlines, or the bank gets garbage. A network failure here also kills
+    the run, although the header only lifts a rate cap.'
+  fix: r = requests.get(…); r.raise_for_status(); ip = str(ipaddress.ip_address(r.text.strip())), so a
+    bad response fails in psu_headers with a clear error. Optionally, return {} with a stderr warning
+    on failure, so the run continues as unattended.
+  decision: FIX
+  score: 7
+  reason: An external body is passed on unvalidated. A bad response today fails later and confusingly,
+    or sends a wrong header. This is a small fix at the edge.
+  same: []
+  triage:
+    id: b1-10
+    decision: FIX
+    score: 7
+    reason: external body sent on as a header unchecked; fallback to {} on failure would be a feature
+      and is not done
+    task: t2
+check: ok

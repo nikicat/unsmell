@@ -1,0 +1,44 @@
+id: 1b22d8f29e
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: bad
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-9
+  at:
+  - src/evm/cache/event_signature_cache.rs:15
+  - src/evm/cache/event_signature_cache.rs:26
+  - src/evm/cache/event_signature_cache.rs:36-38
+  - src/evm/cache/event_signature_cache.rs:43
+  - src/bin/chainfold/signature_cache.rs:1-3
+  reach:
+  - src/evm/cache/event_signature_cache.rs:15
+  - src/evm/cache/event_signature_cache.rs:26
+  - src/evm/cache/event_signature_cache.rs:36-43
+  - src/bin/chainfold/signature_cache.rs:1-3
+  row: wrong-layer doc
+  claim: 'Several short docs say little or sit at another layer. :15 (changed) is close to the type''s
+    name read back. :26 is the name plus its mechanism. :36-38 is imperative and ends in its implementation
+    ("Equivalent to CacheDb::open(path)?.signatures()"). :43 gives a caller''s reason ("Useful for tests.").
+    The adapter''s module doc joins with a colon ("Adapter: implements…") and gives a caller''s reason
+    ("so the CLI reuses the same cache file").'
+  fix: 'Leave them as they are. Each is true. If rewritten, use Google style: :15 "The cached resolution
+    of one contract event.", :36 "Opens a standalone signature cache at path, creating the database and
+    running migrations as needed."'
+  decision: SKIP
+  score: 2
+  reason: Rewording correct docs scores 0 to 2. Only :15 is on a changed line, and it is not false.
+  same: []
+  triage:
+    id: b1-9
+    decision: SKIP
+    score: 2
+    reason: Rewording correct docs.
+    task: t6
+check: ok

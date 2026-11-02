@@ -1,0 +1,54 @@
+id: 630b690ff4
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t10
+judge: null
+labels: []
+findings:
+- id: b2-1
+  at:
+  - evals/changes.py:132-150
+  - evals/changes.py:155
+  - evals/changes.py:170-173
+  - evals/changes.py:192-201
+  - evals/changes.py:228-230
+  - evals/changes.py:237
+  - evals/changes.py:250
+  - evals/changes.py:298-323
+  - evals/changes.py:343-358
+  - evals/changes.py:368-378
+  - evals/changes.py:386-388
+  - evals/changes.py:424-444
+  reach:
+  - evals/changes.py:44-451
+  row: unparsed input
+  claim: change.yaml is loaded into a bare dict and read by key in every function (meta['seen'][0]['round'],
+    meta['labels'][-1]['label'], f['triage']['decision']); the load and dump of CHANGES / id / 'change.yaml'
+    is spelled 5 and 6 times, and first = meta['seen'][0] three times. summary, ancestors and tokens are
+    free functions that only read one change.
+  fix: 'A Change dataclass (id, fixture, seen: list[Sighting], judge, labels: list[Label], findings, after,
+    check) with Change.load(id), save(), dir, patch, has_patch, first, user_labels, newest_label, decisions,
+    summary(), tokens() and ancestors(); all_changes() returns list[Change]. The YAML format stays as
+    it is.'
+  decision: ASK
+  score: 8
+  reason: the full unparsed-input tell over the whole file; the fix rewrites most of it, so the user may
+    want it as its own commit
+  same:
+  - b2-2
+  - b2-3
+  - b2-4
+  triage:
+    id: b2-1
+    decision: ASK
+    score: 8
+    reason: it rewrites nearly every function of changes.py. It is stacked on the FIX tasks of changes.py
+      and its patch shows the proposal; patches only, so no question is asked
+    task: t10
+    after:
+    - t9
+after:
+- 972106f9d4
+check: no-apply

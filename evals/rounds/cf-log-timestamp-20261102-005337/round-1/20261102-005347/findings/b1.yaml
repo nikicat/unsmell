@@ -1,0 +1,140 @@
+read: [src/evm/cache.rs, src/evm/cache/log_cache.rs]
+unread: []
+findings:
+  - id: b1-1
+    at: [src/evm/cache.rs:241-246]
+    reach: [src/evm/cache.rs:241-246]
+    row: wrong-layer doc / long comment / duplicated knowledge
+    claim: >-
+      The SQL comment the changeset added above migration 6 (cache.rs:241-246) is six lines, and four
+      of them describe the reader in src/evm/history.rs rather than the column: "Lets the query path
+      stamp EvmEvent.timestamp directly, skipping the eth_getBlockByNumber header fetch" and "the reader
+      falls back to the cached block header". history.rs:402-403, :520-521 and :601-602 state the same
+      fallback, so the fact has two owners and the schema comment goes stale when history.rs changes.
+      "Nullable: most providers omit it, and rows ... — in both cases" joins three ideas with a colon
+      and a dash; "the query path" and "the reader" name nothing in cache.rs.
+    fix: >-
+      Three plain lines that state only the column's own facts:
+      "-- The block's Unix timestamp in seconds, when the provider sent it with the log in its
+      eth_getLogs response. This is a common but non-standard extension. The column is NULL when the
+      provider omitted it, and on rows written before this migration."
+      The use of the column (stamping EvmEvent.timestamp, skipping the header fetch) stays in history.rs only.
+    decision: FIX
+    score: 5
+    reason: >-
+      Long-comment cause (b), wrong subject: caller's reason and the reader's fallback. Duplicated fact
+      with b2 (history.rs). Transitional NULL on old rows is kept, as §5 asks. Cross-file candidate.
+    same: []
+  - id: b1-2
+    at: [src/evm/cache/log_cache.rs:444, src/evm/cache/log_cache.rs:164-165, src/evm/cache/log_cache.rs:191-192]
+    reach: [src/evm/cache/log_cache.rs:432-444]
+    row: unparsed input (position access) / split protocol
+    claim: >-
+      row_to_log reads the new column as `row.get(11)` (log_cache.rs:444), so the changeset had to append
+      block_timestamp as the 12th column in both SELECTs (log_cache.rs:165, :192) in the same order.
+      Every column of row_to_log depends on position, and the two SELECTs that feed it are 30 lines
+      apart; get_log_by_ref has no round-trip test for the new column.
+    fix: >-
+      row_to_log reads each column by name (`row.get("block_timestamp")?`, `row.get("block_number")?`, …),
+      so each SELECT only has to include the columns, not order them. SQL text stays written out in full (§5).
+      Alternatively keep positions and add a get_log_by_ref round-trip assertion on block_timestamp.
+    decision: ASK
+    score: 5
+    reason: >-
+      The tell is met on a changed line, but positional access is the convention everywhere in the
+      repo's rusqlite code (log_cache.rs:250, :281-284, :404-406) and name lookup is a style choice with a
+      small per-row cost on the hot get_logs_in_range path; two defensible designs.
+    same: []
+  - id: b1-3
+    at: [src/evm/cache.rs:36-38]
+    reach: [src/evm/cache.rs:36-37]
+    row: misleading doc (claim the code no longer makes)
+    claim: >-
+      CACHE_VERSION's doc says "Bump this when cache schema or semantics change", but the changeset added
+      a schema change (migration 6 at cache.rs:239-249, a new cached_logs column) without a bump, and it
+      is right not to: migrations() evolves the schema in place and NULL on old rows is handled. The doc
+      would lead the next author to throw away every cache for an additive column.
+    fix: >-
+      "/// Bump when a change makes existing cache rows wrong, so that old files are bypassed instead of
+      migrated. Schema additions go in [`migrations`]." (two lines, unchanged-line doc).
+    decision: PLAN
+    score: 5
+    reason: Unchanged line, not the root cause of a changed-line smell; the doc predates the changeset and the abi_json migration already set the same precedent.
+    same: []
+  - id: b1-4
+    at: [src/evm/cache/log_cache.rs:548-549, src/evm/cache/log_cache.rs:553]
+    reach: [src/evm/cache/log_cache.rs:548-553]
+    row: tautological comment / compressed doc
+    claim: >-
+      The comment in the new test logs_preserve_block_timestamp (log_cache.rs:548-549) restates the test
+      name and writes "NULL/None"; the trailing `// block_timestamp: None` at :553 restates make_test_log's
+      default at :495.
+    fix: Drop the first sentence's restatement or the whole comment; keep the trailing note only if the reader needs the fixture default.
+    decision: SKIP
+    score: 2
+    reason: The comments are correct; rewording a correct test comment scores 0-2.
+    same: []
+  - id: b1-5
+    at: [src/evm/cache/log_cache.rs:144, src/evm/cache/log_cache.rs:444, src/evm/cache/log_cache.rs:462]
+    reach: [src/evm/cache/log_cache.rs:116-468]
+    row: repeated derivation / primitive obsession
+    claim: >-
+      The changeset converts block_timestamp u64→i64 inline at log_cache.rs:144 and reads it as
+      Option<i64> then maps to u64 at :444/:462, the same hand cast used at 22 sites in the file.
+      rusqlite 0.34 implements fallible `ToSql for u64` and `FromSql for u64`, so
+      `log.block_timestamp` and `row.get::<_, Option<u64>>(…)` would do it and reject overflow instead of wrapping.
+    fix: >-
+      Pass u64 values to params! directly and read u64 with row.get, file-wide, deleting every `as i64` /
+      `as u64` storage cast in log_cache.rs.
+    decision: SKIP
+    score: 4
+    reason: >-
+      Smaller tidy-up; values never exceed i64::MAX in practice. Fixing only the two changed lines would
+      leave the file inconsistent; fixing all 22 sites churns >30 lines of unchanged code (-2).
+    same: []
+  - id: b1-6
+    at: [src/evm/cache/log_cache.rs:116, src/evm/cache/log_cache.rs:156-187, src/evm/cache/log_cache.rs:213-265, src/evm/cache/log_cache.rs:353]
+    reach: [src/evm/cache/log_cache.rs:90-374]
+    row: missing receiver / primitive obsession
+    claim: >-
+      Seven LogCache methods take `filter_hash: &[u8; 32]` as context besides their real input, including
+      insert_logs and both reads the changeset touched; a raw 32-byte array names nothing.
+    fix: >-
+      A per-filter handle (LogCache::filter(hash) -> FilterLogs { conn, hash }) or at least a FilterHash
+      newtype returned by compute_filter_hash.
+    decision: PLAN
+    score: 6
+    reason: Unchanged signatures, public API across modules; out of the changed lines.
+    same: []
+  - id: b1-7
+    at: [src/evm/cache/log_cache.rs:126-145]
+    reach: [src/evm/cache/log_cache.rs:126-146]
+    row: computing loop with effects
+    claim: >-
+      insert_logs' loop, which the changeset extended with a 13th param, both selects (skip logs without
+      block_hash, default missing block_number/log_index/transaction_index to 0) and executes the INSERT.
+    fix: filter_map the logs with a block_hash first, then execute over the result.
+    decision: SKIP
+    score: 3
+    reason: Unchanged lines; small tidy-up.
+    same: []
+  - id: b1-8
+    at: [src/evm/cache/log_cache.rs:296-310, src/evm/cache/log_cache.rs:41-63]
+    reach: [src/evm/cache/log_cache.rs:41-63, src/evm/cache/log_cache.rs:261-327]
+    row: inline generic machinery
+    claim: compact_ranges merges overlapping inclusive ranges by hand and compute_gaps computes their complement; both are interval-set operations written inline.
+    fix: A small interval-set helper (merge, difference) used by both, or an existing crate.
+    decision: SKIP
+    score: 3
+    reason: Unchanged lines, unrelated to the changeset; well tested as is.
+    same: []
+  - id: b1-9
+    at: [src/evm/cache.rs:123-131, src/evm/cache.rs:162-171]
+    reach: [src/evm/cache.rs:123-171]
+    row: long comment
+    claim: The cached_logs and scanned_ranges schema comments run 9 and 10 lines, mixing column docs with design history and caller behaviour.
+    fix: Per-column comments beside each column, design reasons kept to one or two lines.
+    decision: SKIP
+    score: 2
+    reason: Unchanged lines; schema documentation that is correct.
+    same: []

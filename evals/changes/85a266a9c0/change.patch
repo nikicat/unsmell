@@ -1,0 +1,19 @@
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..d7e437f 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -81,8 +81,12 @@ class Delta:
+ 
+ def clear(repo):
+     for item in repo.iterdir():
+-        if item.name != ".git":
+-            shutil.rmtree(item) if item.is_dir() else item.unlink()
++        if item.name == ".git":
++            continue
++        if item.is_dir() and not item.is_symlink():
++            shutil.rmtree(item)
++        else:
++            item.unlink()
+ 
+ 
+ def copy_tree(source, rev, repo):

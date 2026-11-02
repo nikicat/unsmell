@@ -1,0 +1,54 @@
+id: 1f22976fce
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-6
+  at:
+  - src/evm/history.rs:532-536
+  - src/evm/history.rs:392-397
+  - src/evm/history.rs:406
+  - src/evm/history.rs:599
+  - src/evm/history.rs:607
+  reach:
+  - src/evm/history.rs:70-73
+  - src/evm/history.rs:136
+  - src/evm/history.rs:251
+  - src/evm/history.rs:392-409
+  - src/evm/history.rs:531-619
+  row: missing receiver
+  claim: 'Every call of ensure_block_header_via (136, 251, 406, 599, 607) passes the same (provider, store)
+    pair. iter clones both into its stream closure at history.rs:392-397 only to pass them on. The changed
+    lines 406 and 607 are two of these calls.
+
+    '
+  fix: 'A `BlockHeaders<P> { provider: P, store: Arc<LogCache> }` with `async fn get(&self, block_number)
+    -> Result<BlockHeader, HistoryError>` (and log_timestamp from b2-1 as its method). It is built once
+    in with_options and held by EvmLogHistory and by the fetcher closure.
+
+    '
+  decision: PLAN
+  score: 6
+  reason: 'ensure_block_header_via itself is unchanged and is pub(crate). The fix touches construction
+    and every caller, so it goes beyond the changed lines.
+
+    '
+  same: []
+  triage:
+    id: b2-6
+    decision: ASK
+    score: 6
+    task: t6
+    after: t1
+    reason: t1's helper adds another fn taking (provider, store); a BlockHeaders receiver goes further
+      and reshapes pub(crate) ensure_block_header_via, so it is the second shape stacked on t1
+after:
+- 6d84aa15ce
+check: ok

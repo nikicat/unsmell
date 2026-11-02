@@ -1,0 +1,44 @@
+id: cbc929afe7
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - internal/notification/slow_upstream.go:88-106
+  reach:
+  - internal/notification/slow_upstream.go:80-111
+  - internal/notification/slow_upstream_test.go
+  row: bug
+  claim: formatSlowUpstreamBody sends item Label/Path and ProcessChain[].Name (comm, settable via prctl)
+    into a Notifications body without escaping, the same injection the changeset fixed in formatBody at
+    desktop.go:591-673. Its comment at slow_upstream.go:97 even says it matches desktop.go. A label containing
+    "&" or "<" also breaks body rendering today.
+  fix: Build the slow-upstream body with the markup builder of b1-1 (text() escapes), and add a slow_upstream_test
+    case with markup in a label and a process name.
+  decision: ASK
+  score: 9
+  reason: A real bug outside the changeset (slow_upstream.go is untouched). It shares root cause with
+    b1-1, so it could ride along as part of that fix, but it is a behaviour change in a file the diff
+    did not touch; the main agent decides between folding it into b1-1 (FIX) and a separate bug-fix patch.
+  same:
+  - b1-1
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 9
+    reason: real injection bug, but in a file the changeset did not touch; patches-only run, so it is
+      a stacked patch for the user to take or leave
+    task: t2
+    after:
+    - t1
+after:
+- 11fbded8a9
+check: ok

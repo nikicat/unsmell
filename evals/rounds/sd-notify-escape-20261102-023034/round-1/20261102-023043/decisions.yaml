@@ -1,0 +1,77 @@
+- id: b1-1
+  decision: FIX
+  score: 7
+  reason: "the escaping invariant belongs on a type; formatBody is the only site in the diff, and slow_upstream is handled by t2"
+  task: t1
+- id: b1-2
+  decision: ASK
+  score: 9
+  reason: "real injection bug, but in a file the changeset did not touch; patches-only run, so it is a stacked patch for the user to take or leave"
+  task: t2
+  after: [t1]
+- id: b1-3
+  decision: FIX
+  score: 7
+  reason: the subject text is edited in lockstep in two places on changed lines
+  task: t1
+- id: b1-4
+  decision: PLAN
+  score: 5
+  reason: "the nested switch predates the changeset; t1 removes the added detail role"
+  task: t3
+  after: [t1]
+- id: b1-5
+  decision: FIX
+  score: 6
+  reason: removed with the esc alias
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 5
+  reason: the closures become methods with name-free docs
+  task: t1
+- id: b1-7
+  decision: FIX
+  score: 6
+  reason: "the Vuln 7 referent is undefined in the repo, and the why is stated twice"
+  task: t1
+- id: b1-8
+  decision: FIX
+  score: 5
+  reason: pin before t1 moves the escaping
+  task: t1
+- id: b1-9
+  decision: PLAN
+  score: 5
+  reason: unchanged lines
+  task: t4
+- id: b1-10
+  decision: PLAN
+  score: 7
+  reason: unchanged lines
+  task: t5
+- id: b1-11
+  decision: PLAN
+  score: 7
+  reason: unchanged lines
+  task: t6
+- id: b1-12
+  decision: PLAN
+  score: 6
+  reason: "unchanged line, and the fix crosses into internal/sshagent"
+  task: t7
+- id: b1-13
+  decision: PLAN
+  score: 5
+  reason: unchanged lines
+  task: t8
+- id: b1-14
+  decision: PLAN
+  score: 5
+  reason: unchanged lines
+  task: t9
+- id: b1-15
+  decision: PLAN
+  score: 5
+  reason: "unchanged lines and the exported Notifier interface"
+  task: t10

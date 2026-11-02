@@ -1,0 +1,38 @@
+id: 4852184f9e
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t11
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-5
+  at:
+  - src/evm/cache/log_cache.rs:144
+  - src/evm/cache/log_cache.rs:444
+  - src/evm/cache/log_cache.rs:462
+  reach:
+  - src/evm/cache/log_cache.rs:116-468
+  row: repeated derivation / primitive obsession
+  claim: The changeset converts block_timestamp u64→i64 inline at log_cache.rs:144 and reads it as Option<i64>
+    then maps to u64 at :444/:462, the same hand cast used at 22 sites in the file. rusqlite 0.34 implements
+    fallible `ToSql for u64` and `FromSql for u64`, so `log.block_timestamp` and `row.get::<_, Option<u64>>(…)`
+    would do it and reject overflow instead of wrapping.
+  fix: Pass u64 values to params! directly and read u64 with row.get, file-wide, deleting every `as i64`
+    / `as u64` storage cast in log_cache.rs.
+  decision: SKIP
+  score: 4
+  reason: Smaller tidy-up; values never exceed i64::MAX in practice. Fixing only the two changed lines
+    would leave the file inconsistent; fixing all 22 sites churns >30 lines of unchanged code (-2).
+  same: []
+  triage:
+    id: b1-5
+    decision: SKIP
+    score: 4
+    task: t11
+    reason: consistency needs all 22 cast sites
+check: ok

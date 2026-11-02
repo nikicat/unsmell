@@ -1,0 +1,47 @@
+id: 2d94fc3d9e
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - internal/proxy/prompter.go:55
+  - internal/proxy/prompter.go:112-115
+  - internal/proxy/prompter.go:188-193
+  reach:
+  - internal/proxy/prompter.go:53-125
+  - internal/proxy/prompter.go:181-194
+  row: algebraic blindness
+  claim: When RequestName is not primary (prompter.go:112-115), the constructor still returns a non-nil
+    bridge that owns no name and exports nothing. The field owned exists only so close() knows whether
+    to release, and active/closed (b1-1) existed beside it. Returning (nil, nil) there, as the same-bus
+    case at :76-80 already does for 'nothing to bridge', would mean every returned bridge owns the name.
+  fix: Stacked on b1-1. On a non-primary reply, newPrompterBridge logs and returns (nil, nil). Delete
+    the field owned. close() always calls ReleaseName after unexporting the callbacks (still outside mu).
+    The constructor doc's nil case reads 'Returns nil when there is nothing to bridge or another process
+    already owns the name.'
+  decision: FIX
+  score: 5
+  reason: Removes an inert-object state and a flag that tracks it. The only consumer is proxy.go, which
+    already handles a nil prompter, so the change is not visible outside the package.
+  same:
+  - b1-1
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 5
+    reason: an inert bridge with owned=false is a second state; nil already means nothing to bridge. Stacked,
+      since it starts from t1's folded constructor
+    task: t3
+    after:
+    - t1
+after:
+- ead6dc04d1
+check: ok

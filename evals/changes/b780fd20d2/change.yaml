@@ -1,0 +1,33 @@
+id: b780fd20d2
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-13
+  at:
+  - internal/notification/desktop.go:422
+  reach:
+  - internal/notification/desktop.go:421-437
+  row: misplaced rule
+  claim: notificationMeta is a Handler method that never uses its receiver; it maps a RequestType to a
+    summary and icon.
+  fix: A free function (or a method on approval.RequestType in this package's terms, e.g. notificationMeta(t
+    approval.RequestType)) taking only the type.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines.
+  same: []
+  triage:
+    id: b1-13
+    decision: PLAN
+    score: 5
+    reason: unchanged lines
+    task: t8
+check: ok

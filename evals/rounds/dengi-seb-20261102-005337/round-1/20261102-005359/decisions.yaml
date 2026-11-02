@@ -1,0 +1,24 @@
+# Cross-file agent not run: the changeset is one batch (b1), so no finding can span two batches.
+- {id: b1-1, decision: FIX, score: 7, reason: PSU global rebound by main is temporal coupling; full tell, task: t1}
+- {id: b1-2, decision: FIX, score: 6, reason: key file read at import; settings read in two places at two times, task: t1}
+- {id: b1-3, decision: FIX, score: 7, reason: argv text passed past the edge and re-read per account, task: t1}
+- {id: b1-4, decision: FIX, score: 7, reason: session read by key in two functions; expiry rule and account key outside it, task: t1}
+- {id: b1-5, decision: FIX, score: 5, reason: load_session hides interactive authorization and a file write, task: t1}
+- {id: b1-6, decision: FIX, score: 6, reason: redirect read by key; cancel gives a KeyError traceback, task: t1}
+- {id: b1-7, decision: ASK, score: 6, reason: changes stored key or CLI behaviour; two defensible designs; patch shows option A (require an IBAN), task: t5, after: t1}
+- {id: b1-8, decision: FIX, score: 7, reason: main mixes steps with SQL and positional unwraps; reach overlaps b1-1 and b1-3, task: t1}
+- {id: b1-9, decision: SKIP, score: 4, reason: small correct loop, task: t6}
+- {id: b1-10, decision: FIX, score: 7, reason: "external body sent on as a header unchecked; fallback to {} on failure would be a feature and is not done", task: t2}
+- {id: b1-11, decision: SKIP, score: 4, reason: typed error with no handler is a feature, task: t7}
+- {id: b1-12, decision: SKIP, score: 3, reason: both fixed by Enable Banking, task: t8}
+- {id: b1-13, decision: ASK, score: 5, reason: adds a generated column; existing dengi.db is not migrated, task: t4}
+- {id: b1-14, decision: FIX, score: 7, reason: private key and bank data unprotected in the tree they are written to, task: t3}
+- {id: b1-15, decision: SKIP, score: 4, reason: comment move only; t1 must carry the comment along when it moves the filter, task: t9}
+- {id: b1-16, decision: SKIP, score: 4, reason: short duplicated fact; t1 carries the resume comment along, task: t9}
+- {id: b1-17, decision: SKIP, score: 3, reason: correct doc, rewording, task: t10}
+- {id: b1-18, decision: SKIP, score: 4, reason: rewording of a correct doc, task: t10}
+- {id: b1-19, decision: SKIP, score: 3, reason: rewording, task: t10}
+- {id: b1-20, decision: SKIP, score: 3, reason: rewording, task: t10}
+- {id: b1-21, decision: SKIP, score: 1, reason: not a smell, task: t11}
+- {id: b1-22, decision: SKIP, score: 2, reason: restructure out of proportion, task: t12}
+- {id: b1-23, decision: SKIP, score: 4, reason: dropping an env var is a CLI change for small gain, task: t13}

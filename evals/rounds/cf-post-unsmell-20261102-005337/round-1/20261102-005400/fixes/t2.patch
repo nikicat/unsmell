@@ -1,0 +1,18 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..7a21c70 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -17,9 +17,11 @@ use crate::evm::types::{ChainId, Topic};
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+     pub signature: String,
+-    /// `topic0` — the keccak256 hash of the signature.
++    /// The keccak256 hash of `signature`. Logs of this event carry it as
++    /// topic 0.
+     pub topic0: Topic,
+-    /// JSON of the matched ABI event item, when populated.
++    /// The JSON of this event's entry in the contract's ABI. It is None on
++    /// rows cached before the `abi_json` column was added.
+     pub abi_json: Option<String>,
+ }
+ 

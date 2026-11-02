@@ -1,0 +1,87 @@
+id: 1f4303c719
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - src/evm/cache/event_signature_cache.rs:17-24
+  - src/bin/chainfold/signature_cache.rs:31-35
+  reach:
+  - src/evm/cache/event_signature_cache.rs:15-24
+  - src/evm/cache/event_signature_cache.rs:48-103
+  - src/bin/chainfold/signature_cache.rs:28-57
+  - src/signatures.rs:47-55
+  - src/evm/cache.rs:32
+  - src/evm.rs:33
+  row: duplication
+  claim: 'The changeset turned EventSignatureRow into a struct (:17-24) with exactly the fields of `signatures::ResolvedEvent`
+    (src/signatures.rs:48-55): signature, topic0, abi_json, each with the same meaning and the same None
+    rule for abi_json. Two types now hold one record, and the adapter copies it field by field (signature_cache.rs:31-35)
+    and unpacks it again for insert (:52-54). The two copies change for the same reason.
+
+    '
+  fix: 'Options. (a) One type: ResolvedEvent (with topic0: Topic, see b1-3) is the record; get_event_signature
+    returns Option<ResolvedEvent> and insert takes &ResolvedEvent; EventSignatureRow and its re-exports
+    are deleted; the adapter''s get/put just map errors. evm::cache then depends on crate::signatures
+    (its module doc already links that trait). (b) Keep both: `impl From<EventSignatureRow> for ResolvedEvent`
+    next to ResolvedEvent, adapter get becomes `opt.map(ResolvedEvent::from)`. I''d pick (a).
+
+    '
+  decision: ASK
+  score: 6
+  reason: two defensible designs; both change public exported types (EventSignatureRow is re-exported
+    from chainfold::evm)
+  same:
+  - b1-3
+  - b1-4
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 6
+    reason: two defensible designs, public re-exported type. With b1-3 discarded, ResolvedEvent keeps
+      topic0 as [u8; 32]; "patches only" asks nothing, so the patch shows option (a) and the question
+      stays open
+    task: t3
+    after: t1+t2
+- id: b1-4
+  at:
+  - src/evm/cache/event_signature_cache.rs:79-87
+  reach:
+  - src/evm/cache/event_signature_cache.rs:79-103
+  - src/evm/cache/event_signature_cache.rs:117-168
+  - src/bin/chainfold/signature_cache.rs:47-56
+  row: data clump
+  claim: 'insert_event_signature takes six values, and the last three (signature, topic0, abi_json, :84-86,
+    :85 changed) are an EventSignatureRow, the type the changeset just named; the adjacent `event_name:
+    &str, signature: &str` are transposable. The tests then compare the fetched row field by field (:134-136,
+    :167) although the changeset derived PartialEq/Eq on the row, which nothing uses.
+
+    '
+  fix: '`insert_event_signature(chain_id, address, event_name, row: &EventSignatureRow)` (or `&ResolvedEvent`
+    under b1-2 option a); tests build the expected row once and `assert_eq!(fetched, row)`.
+
+    '
+  decision: ASK
+  score: 5
+  reason: its final parameter type depends on the b1-2 answer; public method signature
+  same:
+  - b1-2
+  triage:
+    id: b1-4
+    decision: ASK
+    score: 5
+    reason: its parameter type depends on b1-2; linked by same
+    task: t3
+    after: t1+t2
+check: ok
+after:
+- 9ad3f87381
+- 28689d8a97

@@ -1,0 +1,4 @@
+- id: b1
+  paths:
+    - src/evm/cache/event_signature_cache.rs   # tests inline
+    - src/bin/chainfold/signature_cache.rs     # its only external caller

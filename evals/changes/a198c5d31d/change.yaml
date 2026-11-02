@@ -1,0 +1,40 @@
+id: a198c5d31d
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: bad
+  note: long comment with implementation details
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - seb.py:2-6
+  reach:
+  - seb.py:2-6
+  row: compressed doc
+  claim: 'In the module doc, a semicolon joins two ideas at line 5. The doc leaves out the outcome a user
+    meets first: when no valid session is stored, the run asks for a Smart-ID login and needs the pasted
+    redirect URL. It also says nothing about exiting on a bad redirect.'
+  fix: '"""Fetches the SEB LT account history through Enable Banking.
+
+    Usage: uv run seb [date_from YYYY-MM-DD]
+
+    Upserts the booked transactions into dengi.db. Without date_from, each account resumes from its last
+    stored booking day. When no valid session is stored, it asks you to log in with Smart-ID and to paste
+    the URL you land on. It exits when that URL does not belong to this login."""'
+  decision: FIX
+  score: 5
+  reason: A missing user-visible effect and exit, plus a compressed-doc tell.
+  same: []
+  triage:
+    id: b1-10
+    decision: FIX
+    score: 5
+    reason: the module doc leaves out the interactive login and its exit
+    task: t2
+check: ok

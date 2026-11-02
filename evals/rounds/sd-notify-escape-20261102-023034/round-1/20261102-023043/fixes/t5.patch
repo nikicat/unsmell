@@ -1,0 +1,80 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..32d4c65 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -159,17 +159,29 @@ func (n *DBusNotifier) processSignals(ch <-chan *dbus.Signal) {
+ // Notify sends a desktop notification with optional action buttons.
+ // If the D-Bus connection is dead, it reconnects and retries once.
+ func (n *DBusNotifier) Notify(summary, body, icon string, actions []string) (uint32, error) {
++	var id uint32
++	err := n.withReconnect("notify call", func() (err error) {
++		id, err = n.doNotify(summary, body, icon, actions, 2) // urgency: critical
++		return err
++	})
++	return id, err
++}
++
++// Runs op with n.mu held. If op fails on a closed connection, reconnects and
++// runs op once more. Errors when the reconnect fails, wrapping op's error
++// under opName.
++func (n *DBusNotifier) withReconnect(opName string, op func() error) error {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+ 
+-	id, err := n.doNotify(summary, body, icon, actions, 2) // urgency: critical
++	err := op()
+ 	if err != nil && errors.Is(err, dbus.ErrClosed) {
+ 		if reconnErr := n.reconnect(); reconnErr != nil {
+-			return 0, fmt.Errorf("notify call: %w (reconnect failed: %v)", err, reconnErr)
++			return fmt.Errorf("%s: %w (reconnect failed: %v)", opName, err, reconnErr)
+ 		}
+-		id, err = n.doNotify(summary, body, icon, actions, 2)
++		err = op()
+ 	}
+-	return id, err
++	return err
+ }
+ 
+ func (n *DBusNotifier) doNotify(summary, body, icon string, actions []string, urgency byte) (uint32, error) {
+@@ -206,33 +218,20 @@ func (n *DBusNotifier) doNotifyFull(summary, body, icon string, actions []string
+ // NotifyPersistent sends a critical notification that never auto-expires.
+ // Dismiss it with Close (CloseNotification).
+ func (n *DBusNotifier) NotifyPersistent(summary, body, icon string) (uint32, error) {
+-	n.mu.Lock()
+-	defer n.mu.Unlock()
+-
+-	id, err := n.doNotifyFull(summary, body, icon, nil, 2, 0) // critical, never expire
+-	if err != nil && errors.Is(err, dbus.ErrClosed) {
+-		if reconnErr := n.reconnect(); reconnErr != nil {
+-			return 0, fmt.Errorf("notify call: %w (reconnect failed: %v)", err, reconnErr)
+-		}
+-		id, err = n.doNotifyFull(summary, body, icon, nil, 2, 0)
+-	}
++	var id uint32
++	err := n.withReconnect("notify call", func() (err error) {
++		id, err = n.doNotifyFull(summary, body, icon, nil, 2, 0) // critical, never expire
++		return err
++	})
+ 	return id, err
+ }
+ 
+ // Close closes a notification by ID.
+ // If the D-Bus connection is dead, it reconnects and retries once.
+ func (n *DBusNotifier) Close(id uint32) error {
+-	n.mu.Lock()
+-	defer n.mu.Unlock()
+-
+-	err := n.doClose(id)
+-	if err != nil && errors.Is(err, dbus.ErrClosed) {
+-		if reconnErr := n.reconnect(); reconnErr != nil {
+-			return fmt.Errorf("close notification: %w (reconnect failed: %v)", err, reconnErr)
+-		}
+-		err = n.doClose(id)
+-	}
+-	return err
++	return n.withReconnect("close notification", func() error {
++		return n.doClose(id)
++	})
+ }
+ 
+ func (n *DBusNotifier) doClose(id uint32) error {

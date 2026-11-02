@@ -1,0 +1,34 @@
+id: 1f77d125bb
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t15
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-9
+  at:
+  - src/evm/history.rs:926-930
+  reach:
+  - src/evm/history.rs:926-930
+  row: speculative generality
+  claim: '`_unused_warmup` with `#[allow(dead_code)]` exists to silence unused-constant warnings "during
+    phase work", but warm_cache already uses all of BH_0, BH_100, BH_101 and BH_200.
+
+    '
+  fix: Delete the function and its comment.
+  decision: SKIP
+  score: 3
+  reason: Dead test code on unchanged lines. The gain is small.
+  same: []
+  triage:
+    id: b2-9
+    decision: SKIP
+    score: 3
+    task: t15
+    reason: dead fixture on unchanged lines
+check: ok

@@ -1,0 +1,54 @@
+id: 5ed62ccca3
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-005337
+  round: 1
+  change: plan
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - internal/notification/desktop_test.go:790-802
+  reach:
+  - internal/notification/desktop_test.go:790-802
+  row: inline generic machinery
+  claim: contains/stringContains reimplement strings.Contains (pre-existing, unchanged lines); the file
+    now imports testify, so assert.Contains is also at hand.
+  fix: Delete both helpers and use strings.Contains (or assert.Contains) at their ~20 call sites.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines; not the cause of a smell on changed lines.
+  same: []
+  triage:
+    id: b1-10
+    decision: PLAN
+    score: 5
+    reason: Unchanged lines. Entry proposed in fixes/plan.patch (TODO.md), not merged in a patches-only
+      run.
+    task: plan
+- id: b1-12
+  at:
+  - internal/notification/desktop.go:627
+  reach:
+  - internal/notification/desktop.go:627
+  - internal/sshagent/proxy.go:73
+  row: split protocol
+  claim: The "destination" attribute key is written in sshagent/proxy.go:73 and read by literal in desktop.go:627;
+    nothing ties the two spellings.
+  fix: An exported constant (or accessor) on the approval side, for example approval.AttrSSHDestination,
+    used by both writer and reader.
+  decision: PLAN
+  score: 7
+  reason: The read is on an unchanged line (only :628 changed); spans packages.
+  same: []
+  triage:
+    id: b1-12
+    decision: PLAN
+    score: 7
+    reason: Read is on an unchanged line and the fix spans packages. Entry proposed in fixes/plan.patch.
+    task: plan
+check: ok

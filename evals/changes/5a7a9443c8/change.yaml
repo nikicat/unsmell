@@ -1,0 +1,40 @@
+id: 5a7a9443c8
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-8
+  at:
+  - src/bin/chainfold/signature_cache.rs:37
+  - src/bin/chainfold/signature_cache.rs:56
+  reach:
+  - src/bin/chainfold/signature_cache.rs:28-57
+  row: repeated derivation
+  claim: The CacheError to SignatureError mapping .map_err(|e| SignatureError::Cache(e.to_string())) is
+    written in both trait methods. It also flattens the error to a String, so the source chain is lost.
+    These are unchanged lines.
+  fix: 'Give the mapping one name in the adapter (fn cache_error(e: CacheError) -> SignatureError). A
+    typed SignatureError::Cache(Box<dyn Error + Send + Sync>) that keeps the source is a separate, larger
+    change.'
+  decision: PLAN
+  score: 5
+  reason: unchanged lines and not the cause of a smell on changed lines
+  same: []
+  triage:
+    id: b1-8
+    decision: PLAN
+    score: 5
+    reason: unchanged lines, not the cause of a changed-line smell
+    task: t4
+    after:
+    - t1
+after:
+- bc19c04051
+check: ok

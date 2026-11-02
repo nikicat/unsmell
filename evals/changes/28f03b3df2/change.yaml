@@ -1,0 +1,34 @@
+id: 28f03b3df2
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - src/bin/chainfold/signature_cache.rs:37
+  - src/bin/chainfold/signature_cache.rs:56
+  reach:
+  - src/bin/chainfold/signature_cache.rs:37
+  - src/bin/chainfold/signature_cache.rs:56
+  - src/signatures.rs:38
+  row: repeated derivation
+  claim: '`.map_err(|e| SignatureError::Cache(e.to_string()))` is written twice and drops the error source'
+  fix: 'SignatureError::Cache wraps CacheError with #[from]; the adapter uses `?`/`map_err(Into::into)`'
+  decision: SKIP
+  score: 4
+  reason: unchanged lines; two copies; changing the error variant's payload is an API change
+  same: []
+  triage:
+    id: b1-10
+    decision: SKIP
+    score: 4
+    reason: unchanged lines; changing the error payload is an API change for a small gain
+    task: t8
+check: ok

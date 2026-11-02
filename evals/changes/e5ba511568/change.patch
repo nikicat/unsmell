@@ -1,0 +1,55 @@
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..157235f 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -430,18 +430,18 @@ impl LogCache {
+ // ============================================================
+ 
+ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+-    let block_number: i64 = row.get(0)?;
+-    let log_index: i64 = row.get(1)?;
+-    let address_bytes: Vec<u8> = row.get(2)?;
+-    let topic0: Option<Vec<u8>> = row.get(3)?;
+-    let topic1: Option<Vec<u8>> = row.get(4)?;
+-    let topic2: Option<Vec<u8>> = row.get(5)?;
+-    let topic3: Option<Vec<u8>> = row.get(6)?;
+-    let data: Vec<u8> = row.get(7)?;
+-    let block_hash: Vec<u8> = row.get(8)?;
+-    let tx_hash: Option<Vec<u8>> = row.get(9)?;
+-    let tx_index: i64 = row.get(10)?;
+-    let block_timestamp: Option<i64> = row.get(11)?;
++    let block_number: i64 = row.get("block_number")?;
++    let log_index: i64 = row.get("log_index")?;
++    let address_bytes: Vec<u8> = row.get("address")?;
++    let topic0: Option<Vec<u8>> = row.get("topic0")?;
++    let topic1: Option<Vec<u8>> = row.get("topic1")?;
++    let topic2: Option<Vec<u8>> = row.get("topic2")?;
++    let topic3: Option<Vec<u8>> = row.get("topic3")?;
++    let data: Vec<u8> = row.get("data")?;
++    let block_hash: Vec<u8> = row.get("block_hash")?;
++    let tx_hash: Option<Vec<u8>> = row.get("transaction_hash")?;
++    let tx_index: i64 = row.get("transaction_index")?;
++    let block_timestamp: Option<i64> = row.get("block_timestamp")?;
+ 
+     let mut topics = Vec::new();
+     for bytes in [topic0, topic1, topic2, topic3].into_iter().flatten() {
+@@ -557,6 +557,19 @@ mod tests {
+         assert_eq!(got[1].block_timestamp, None);
+     }
+ 
++    #[test]
++    fn log_by_ref_preserves_block_timestamp() {
++        let store = LogCache::open_in_memory().unwrap();
++        let mut with_ts = make_test_log(100, 0, BLOCK_HASH_A);
++        with_ts.block_timestamp = Some(1_700_000_123);
++        let without_ts = make_test_log(101, 0, BLOCK_HASH_B);
++        store.insert_logs(&FH, &[with_ts, without_ts]).unwrap();
++        let got = store.get_log_by_ref(&FH, &BLOCK_HASH_A, 0).unwrap().unwrap();
++        assert_eq!(got.block_timestamp, Some(1_700_000_123));
++        let got = store.get_log_by_ref(&FH, &BLOCK_HASH_B, 0).unwrap().unwrap();
++        assert_eq!(got.block_timestamp, None);
++    }
++
+     #[test]
+     fn logs_skip_pending_without_block_hash() {
+         let store = LogCache::open_in_memory().unwrap();

@@ -1,0 +1,40 @@
+id: 449262c2db
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - src/evm/cache/log_cache.rs:444
+  - src/evm/cache/log_cache.rs:165
+  - src/evm/cache/log_cache.rs:192
+  reach:
+  - src/evm/cache/log_cache.rs:432-468
+  row: unparsed input
+  claim: row_to_log decodes a cached_logs row by position (row.get(0) to row.get(11)), so the column order
+    of the two SELECT lists at log_cache.rs:164-165 and 191-192 is a schema that it relies on without
+    saying so. The changeset extended that coupling. It appended block_timestamp to both lists and read
+    it back as row.get(11).
+  fix: row_to_log reads each column by name (row.get("block_timestamp")?, row.get("block_number")?, and
+    so on), which rusqlite supports. Both SELECT statements stay written out in full. No shared column-list
+    constant and no generated SQL.
+  decision: FIX
+  score: 6
+  reason: The positional access tell (row[0]) is met in full on a line the changeset added. The root cause
+    is the other positional reads in the same function, about 12 lines.
+  same: []
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 6
+    reason: the changeset added row.get(11), extending a positional schema dependency on two SELECT lists;
+      reading by name removes it without touching the SQL
+    task: t3
+check: ok

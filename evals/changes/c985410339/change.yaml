@@ -1,0 +1,119 @@
+id: c985410339
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t6
+judge: null
+labels: []
+findings:
+- id: b2-15
+  at:
+  - evals/changes.py:243-283
+  reach:
+  - evals/changes.py:243-283
+  row: mixed altitude
+  claim: worktree builds the rounds in a scratch repo (250-265), syncs the review repo to it (266-277)
+    and stacks the parent patches and the change on top (278-282), each as inline git detail. root=None
+    then root = root or REVIEW.
+  fix: 'Three named helpers: build_rounds(change, build) returning the scratch repo, sync(repo, built),
+    stage(change, repo). root defaults to REVIEW in the signature.'
+  decision: FIX
+  score: 6
+  reason: a 40-line function whose steps are separated by blocks of detail
+  same:
+  - b2-16
+  triage:
+    id: b2-15
+    decision: FIX
+    score: 6
+    reason: a 40-line function whose steps are separated by blocks of detail
+    task: t6
+    after: &id001
+    - t5
+- id: b2-16
+  at:
+  - evals/changes.py:243-248
+  reach:
+  - evals/changes.py:243-248
+  - evals/README.md:85-87
+  row: misleading doc
+  claim: worktree's doc says the repo is 'always the same directory', but check passes root=CACHE/'check'.
+    It leaves out the effect a caller must know, that uncommitted edits in the review repo are discarded
+    (reset --hard, clean -fdx), and the exit check relies on, CalledProcessError when a patch does not
+    apply. It narrates mechanism ('built in a scratch repo and fetched into it') and joins ideas with
+    a colon. The name says worktree, but no git worktree is involved. README.md:85 states the same layout
+    and says the earlier rounds are commits; the code stages them on base.
+  fix: 'Rename to review_repo(change, root=REVIEW). Doc: "Returns a repo under root that shows the change
+    as the skill saw it. HEAD is the fixture''s base, the index holds the changeset under review and the
+    earlier rounds, and the working tree adds the change. Uncommitted edits in that repo are discarded.
+    Errors with CalledProcessError when a patch does not apply." README states the same once, correctly.'
+  decision: FIX
+  score: 9
+  reason: the doc states something false and leaves out an effect and an exit
+  same:
+  - b2-15
+  triage:
+    id: b2-16
+    decision: FIX
+    score: 9
+    reason: the doc states something false and leaves out an effect and an exit
+    task: t6
+    after: *id001
+- id: b2-17
+  at:
+  - evals/changes.py:292-297
+  - evals/changes.py:429
+  - evals/changes.py:432
+  reach:
+  - evals/changes.py:286-297
+  - evals/changes.py:429
+  - evals/changes.py:432
+  row: boolean blindness
+  claim: show(meta, rebuild) uses the bool only to pick whether to select the change first (worktree plus
+    writing CURRENT); main passes rebuild=bool(a.id). The doc says 'unless it is already there', which
+    is the caller's promise, and leaves out that it makes the change current. REVIEW / 'repo' at 297 derives
+    the review repo again (worktree builds it as root / 'repo').
+  fix: 'Two functions: select(change) builds the review repo and writes CURRENT, show(change) only prints.
+    next and show ID call both, show alone calls show. A REVIEW_REPO constant names the path once.'
+  decision: FIX
+  score: 6
+  reason: a bool param that only picks a branch, and a doc missing an effect
+  same: []
+  triage:
+    id: b2-17
+    decision: FIX
+    score: 6
+    reason: a bool param that only picks a branch, and a doc missing an effect
+    task: t6
+    after: *id001
+- id: cross-7
+  at:
+  - evals/README.md:85-87
+  - evals/changes.py:244-248
+  reach:
+  - evals/README.md:85-87
+  - evals/changes.py:243-248
+  row: duplicated knowledge
+  claim: The review repo's layout is stated in README.md:85-87 and in worktree's doc at changes.py:244-248.
+    The README says the earlier rounds are commits; the code stages them on top of the fixture's base.
+    The doc's own copy says the repo is "always the same directory", which check's root=CACHE/"check"
+    makes false.
+  fix: 'worktree''s doc (renamed review_repo, per b2-16) owns the layout and states it correctly: HEAD
+    is the fixture''s base, the index holds the changeset and the earlier rounds, the working tree adds
+    the change. The README states it once in the same terms, or points to the tool''s help.'
+  decision: FIX
+  score: 9
+  reason: one fact in two batches, both copies false in a different way
+  same:
+  - b2-16
+  triage:
+    id: cross-7
+    decision: FIX
+    score: 9
+    reason: one fact in two batches, both copies false in a different way
+    task: t6
+    after: *id001
+after:
+- c4632c0179
+check: ok

@@ -1,0 +1,4 @@
+# Go, 2 files, 119 lines: a bug fix in the D-Bus proxy. Small tier.
+source = "~/src/secrets-dispatcher"
+commit = "095fb48"
+check = "go build ./... && go vet ./..."

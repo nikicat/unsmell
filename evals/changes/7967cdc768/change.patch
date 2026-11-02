@@ -1,0 +1,186 @@
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index e246a16..e8c240f 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -19,10 +19,11 @@
+ 
+ use std::sync::{Arc, Mutex};
+ 
++use alloy::primitives::B256;
+ use rusqlite::Connection;
+-use rusqlite::types::{ToSql, ToSqlOutput};
++use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+ 
+-use crate::evm::types::{ChainId, FilterHash};
++use crate::evm::types::{ChainId, FilterHash, Topic};
+ 
+ mod erc20_cache;
+ mod event_signature_cache;
+@@ -55,6 +56,26 @@ impl ToSql for FilterHash {
+     }
+ }
+ 
++/// `Topic` persists as its 32 raw bytes in a `BLOB` column. Like the impls
++/// above, this one lives in the persistence layer so the domain type stays
++/// `SQLite`-free.
++impl ToSql for Topic {
++    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
++        Ok(ToSqlOutput::from(self.as_slice()))
++    }
++}
++
++/// Reads a `Topic` back from its 32-byte `BLOB`.
++///
++/// Errors when the value is not a `BLOB`, or with
++/// [`FromSqlError::InvalidBlobSize`](rusqlite::types::FromSqlError::InvalidBlobSize)
++/// when the blob is not 32 bytes long.
++impl FromSql for Topic {
++    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
++        <[u8; 32]>::column_result(value).map(|bytes| Self::new(B256::from(bytes)))
++    }
++}
++
+ // ============================================================
+ // Versioning
+ // ============================================================
+@@ -290,6 +311,24 @@ mod tests {
+     use super::*;
+     use crate::evm::ChainId;
+     use alloy::primitives::Address;
++    use rusqlite::types::FromSqlError;
++
++    #[test]
++    fn topic_round_trips_through_a_blob_and_rejects_other_lengths() {
++        let conn = Connection::open_in_memory().unwrap();
++        let topic = Topic::new(B256::repeat_byte(0xAB));
++        let read: Topic = conn
++            .query_row("SELECT ?1", [topic], |row| row.get(0))
++            .unwrap();
++        assert_eq!(read, topic);
++
++        let short = conn.query_row("SELECT x'0102'", [], |row| row.get::<_, Topic>(0));
++        assert!(matches!(
++            short,
++            Err(rusqlite::Error::FromSqlConversionFailure(_, _, e))
++                if matches!(e.downcast_ref(), Some(FromSqlError::InvalidBlobSize { .. }))
++        ));
++    }
+ 
+     #[test]
+     fn versioned_path_inserts_version_before_extension() {
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..b862c0e 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -7,7 +7,8 @@
+ //! `SignatureCache`) to avoid colliding with the
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
++use rusqlite::OptionalExtension;
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+@@ -17,9 +18,11 @@ use crate::evm::types::{ChainId, Topic};
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+     pub signature: String,
+-    /// `topic0` — the keccak256 hash of the signature.
++    /// The keccak256 hash of the signature. A log of this event carries it as
++    /// its first topic.
+     pub topic0: Topic,
+-    /// JSON of the matched ABI event item, when populated.
++    /// The JSON of the matched ABI event item. `None` for rows written before
++    /// the cache stored it.
+     pub abi_json: Option<String>,
+ }
+ 
+@@ -56,24 +59,19 @@ impl EventSignatureCache {
+             "SELECT signature, topic0, abi_json FROM event_signatures
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+         )?;
+-        let mut rows = stmt.query_map(
+-            rusqlite::params![chain_id, address.as_slice(), event_name],
+-            |row| {
+-                let sig: String = row.get(0)?;
+-                let topic: Vec<u8> = row.get(1)?;
+-                let abi: Option<String> = row.get(2)?;
+-                Ok((sig, topic, abi))
+-            },
+-        )?;
+-        match rows.next() {
+-            Some(Ok((sig, topic, abi))) if topic.len() == 32 => Ok(Some(EventSignatureRow {
+-                signature: sig,
+-                topic0: Topic::from(B256::from_slice(&topic)),
+-                abi_json: abi,
+-            })),
+-            Some(Err(e)) => Err(e.into()),
+-            _ => Ok(None),
+-        }
++        let row = stmt
++            .query_row(
++                rusqlite::params![chain_id, address.as_slice(), event_name],
++                |row| {
++                    Ok(EventSignatureRow {
++                        signature: row.get(0)?,
++                        topic0: row.get(1)?,
++                        abi_json: row.get(2)?,
++                    })
++                },
++            )
++            .optional()?;
++        Ok(row)
+     }
+ 
+     pub fn insert_event_signature(
+@@ -95,7 +93,7 @@ impl EventSignatureCache {
+                 address.as_slice(),
+                 event_name,
+                 signature,
+-                topic0.as_slice(),
++                topic0,
+                 abi_json,
+             ],
+         )?;
+@@ -109,10 +107,12 @@ impl EventSignatureCache {
+ 
+ #[cfg(test)]
+ mod tests {
++    use alloy::primitives::B256;
++
+     use super::*;
+ 
+     const ADDR: Address = Address::repeat_byte(0x42);
+-    const TOPIC0: B256 = B256::repeat_byte(0xDD);
++    const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
+ 
+     #[test]
+     fn signature_round_trip_with_abi() {
+@@ -123,7 +123,7 @@ mod tests {
+                 &ADDR,
+                 "Transfer",
+                 "Transfer(address,address,uint256)",
+-                Topic::from(TOPIC0),
++                TOPIC0,
+                 Some("{\"type\":\"event\"}"),
+             )
+             .unwrap();
+@@ -132,7 +132,7 @@ mod tests {
+             .unwrap()
+             .unwrap();
+         assert_eq!(row.signature, "Transfer(address,address,uint256)");
+-        assert_eq!(row.topic0, Topic::from(TOPIC0));
++        assert_eq!(row.topic0, TOPIC0);
+         assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
+     }
+ 
+@@ -156,7 +156,7 @@ mod tests {
+                 &ADDR,
+                 "Approval",
+                 "Approval()",
+-                Topic::from(TOPIC0),
++                TOPIC0,
+                 None,
+             )
+             .unwrap();

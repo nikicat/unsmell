@@ -1,0 +1,385 @@
+id: c4632c0179
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t5
+judge: null
+labels: []
+findings:
+- id: b1-2
+  at:
+  - evals/run.py:149
+  - evals/run.py:156-159
+  - evals/run.py:162-164
+  - evals/run.py:168-171
+  - evals/run.py:186-188
+  reach:
+  - evals/run.py:142-188
+  - evals/changes.py:105-116
+  row: unnamed tuple
+  claim: The report and each round are dicts with implicit keys, written at run.py:149 and :156-158 and
+    read back by key at :163, :168-170 and :187-188. converged re-derives Delta.empty from the counts
+    at :169. The progress and summary lines are formatted inline in evaluate and main. changes.py:105-116
+    reads the same keys from report.json.
+  fix: Round and Report dataclasses in run.py. Report has converged and oscillated as properties, a __str__
+    for the summary line, and save(path) and load(path) for report.json. Round has a __str__ for the progress
+    line. evaluate returns a Report, main prints it, and changes.py reads report.json through Report.load.
+  decision: FIX
+  score: 7
+  reason: dict with implicit keys whose schema a second module also depends on
+  same:
+  - b1-5
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 7
+    reason: dict with implicit keys whose schema a second module also depends on
+    task: t5
+    after: &id001
+    - t4
+- id: b1-5
+  at:
+  - evals/run.py:132-134
+  - evals/run.py:145-152
+  - evals/run.py:171
+  reach:
+  - evals/run.py:100
+  - evals/run.py:122-171
+  - evals/changes.py:103-121
+  row: split protocol
+  claim: The layout of a run directory (repo/, skill.sha256, round-N.json, the round-N/ record directory
+    derived from log.with_suffix(""), report.json) is written by run.py and read by changes.py:103-121,
+    each spelling the names itself.
+  fix: A RunDir dataclass in run.py with the path of the run and properties or methods for repo, skill_hash,
+    report, round_log(n) and round_record(n). run_skill takes the round's paths from it instead of deriving
+    the record directory from the log name, and changes.extract reads through it.
+  decision: FIX
+  score: 7
+  reason: names that a writer and a reader in two modules must spell the same way
+  same:
+  - b1-2
+  - b1-6
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 7
+    reason: names that a writer and a reader in two modules must spell the same way
+    task: t5
+    after: *id001
+- id: b1-6
+  at:
+  - evals/run.py:150
+  - evals/run.py:160-161
+  reach:
+  - evals/run.py:149-161
+  - evals/changes.py:118
+  row: repeated derivation
+  claim: '`git(repo, "update-ref", f"refs/rounds/{n}", git(repo, "commit-tree", tree, "-m", f"round {n}").strip())`
+    is written for round 0 and again for each round. changes.py:118 builds the same ref name.'
+  fix: One function record_round(repo, n, tree) and one round_ref(n) beside the run layout of b1-5. evaluate
+    calls record_round for round 0 and in the loop, and changes.py uses round_ref.
+  decision: FIX
+  score: 6
+  reason: a derivation written twice in one function, and a ref name a second module reads
+  same:
+  - b1-5
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 6
+    reason: a derivation written twice in one function, and a ref name a second module reads
+    task: t5
+    after: *id001
+- id: b1-7
+  at:
+  - evals/run.py:122
+  - evals/run.py:142
+  - evals/run.py:185
+  reach:
+  - evals/run.py:122-188
+  row: missing receiver
+  claim: The skill arguments are per-process context. main's closure captures args.rounds and args.args
+    once and hands them to every evaluate call, and evaluate passes args straight down to run_skill. The
+    parameter is named `args`, the same name as the argparse namespace it comes from (args.args).
+  fix: An Eval dataclass(rounds, skill_args) built once in main. evaluate and run_skill become its methods,
+    and main calls pool.map(eval.evaluate, fixtures).
+  decision: FIX
+  score: 6
+  reason: both tells met, a closure captures the value and one sibling passes it straight to the other
+  same: []
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 6
+    reason: both tells met, a closure captures the value and one sibling passes it straight to the other
+    task: t5
+    after: *id001
+- id: b1-22
+  at:
+  - evals/run.py:147
+  reach:
+  - evals/run.py:147-148
+  row: garbled sentence
+  claim: '"Which skill text the rounds ran, so that their changes can be traced to it." is a question
+    without its question mark, not a sentence.'
+  fix: The line moves into the helper that b1-23 extracts, as its doc. For example, "Records the hash
+    of the SKILL.md that the rounds run, so that their changes can be traced to it."
+  decision: FIX
+  score: 5
+  reason: a comment that does not parse
+  same:
+  - b1-23
+  triage:
+    id: b1-22
+    decision: FIX
+    score: 5
+    reason: a comment that does not parse
+    task: t5
+    after: *id001
+- id: b1-23
+  at:
+  - evals/run.py:142-172
+  reach:
+  - evals/run.py:142-172
+  row: mixed altitude
+  claim: 'evaluate orders named steps (materialize, run_skill, snapshot, Delta.between) between inline
+    detail: the spec parse, the workdir name, the skill hash, two update-ref chains, the shell check,
+    the round dict, the progress line format and the verdicts. All five roles are written inline.'
+  fix: With b1-1, b1-2, b1-5 and b1-6 in place, evaluate reads as its steps. It loads the fixture, materializes
+    it, records the skill version, and then loops. Each round runs the skill, snapshots, diffs, runs the
+    fixture's check, builds a Round, records the round ref and prints the Round. At the end it saves the
+    Report.
+  decision: FIX
+  score: 7
+  reason: a function with five inline roles, and the end shape the other findings reach together
+  same:
+  - b1-2
+  - b1-6
+  - b1-22
+  triage:
+    id: b1-23
+    decision: FIX
+    score: 7
+    reason: a function with five inline roles, and the end shape the other findings reach together
+    task: t5
+    after: *id001
+- id: b2-9
+  at:
+  - evals/changes.py:105
+  - evals/changes.py:115-119
+  reach:
+  - evals/changes.py:105-119
+  - evals/run.py:122-171
+  row: split protocol
+  claim: 'report.json, round-N.json and skill.sha256 are written by run.py (evaluate, run_skill) and read
+    here by key: report[''fixture''], report[''rounds''], r[''round''], .get(''result''). Nothing ties
+    the writer''s keys to the reader''s.'
+  fix: 'A Report dataclass in run.py (fixture, workdir, rounds: list[Round], converged, oscillated) with
+    save() and load(path), used by evaluate and extract.'
+  decision: ASK
+  score: 7
+  reason: the fix spans run.py and changes.py and changes how run.py builds its report
+  same: []
+  triage:
+    id: b2-9
+    decision: FIX
+    score: 7
+    reason: both modules are in the changeset and have no other callers, so the shared Report type is
+      not a public interface. Stacked on the Fixture task because both rewrite evaluate
+    task: t5
+    after: *id001
+- id: b2-8
+  at:
+  - evals/changes.py:106-120
+  - evals/changes.py:208
+  - evals/changes.py:251-252
+  - evals/changes.py:263
+  - evals/changes.py:329
+  reach:
+  - evals/changes.py:101-120
+  - evals/changes.py:208
+  - evals/changes.py:250-265
+  - evals/changes.py:329
+  row: split protocol
+  claim: The layout of rounds/<run>/ (meta.yaml with its fixture key, round-N.patch, round-N.md) is written
+    by extract and read by worktree, judge and show, each spelling the file names and keys again.
+  fix: A Rounds dataclass (run, fixture, skill, count) with save/load of meta.yaml and patch(n) and report(n)
+    paths; extract writes through it and the readers read through it.
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, three readers'
+  same:
+  - b2-13
+  - b2-15
+  triage:
+    id: b2-8
+    decision: FIX
+    score: 7
+    reason: 'split protocol tell met in full: one writer, three readers'
+    task: t5
+    after: *id001
+- id: b2-11
+  at:
+  - evals/changes.py:89-98
+  - evals/changes.py:125
+  - evals/changes.py:143-149
+  reach:
+  - evals/changes.py:89-98
+  - evals/changes.py:125-150
+  row: unparsed input
+  claim: 'decisions.yaml''s after is a string or a list (the skill writes ''after: t1''), and it is parsed
+    at its use in extract (146), not where tasks() reads the file. tasks() yields unnamed (task, members)
+    tuples, and extract keeps an unnamed (cid, after) tuple per task.'
+  fix: 'tasks() returns list[Task], a dataclass (name, findings, after: list[str]) that parses after once;
+    extract maps task name to change id.'
+  decision: FIX
+  score: 7
+  reason: raw input passed past its first reader, plus two unnamed tuples
+  same:
+  - b2-12
+  - b2-13
+  triage:
+    id: b2-11
+    decision: FIX
+    score: 7
+    reason: raw input passed past its first reader, plus two unnamed tuples
+    task: t5
+    after: *id001
+- id: b2-12
+  at:
+  - evals/changes.py:90-91
+  reach:
+  - evals/changes.py:89-91
+  row: misleading doc
+  claim: 'tasks'' doc says it yields (task, findings, decisions), but it yields 2-tuples: the task name
+    and its findings, each joined with its decision under ''triage''.'
+  fix: With Task from b2-11, the doc reads "Returns the tasks of one skill run directory (SKILL.md §3.0).
+    Each finding carries its decision entry under triage."
+  decision: FIX
+  score: 9
+  reason: the doc states something false
+  same:
+  - b2-11
+  triage:
+    id: b2-12
+    decision: FIX
+    score: 9
+    reason: the doc states something false
+    task: t5
+    after: *id001
+- id: b2-13
+  at:
+  - evals/changes.py:101-151
+  reach:
+  - evals/changes.py:101-151
+  - evals/changes.py:415
+  row: mixed altitude
+  claim: extract writes a round's files, copies the record, computes each change id, loads or initialises
+    change.yaml, records a sighting and writes it, then links stacked changes, all inline in two nested
+    loops. It returns ids with duplicates, which main dedups with set() at 415.
+  fix: 'extract orders named steps: Rounds.save (b2-8), a record_change(record, task) that returns the
+    Change after recording its sighting (Change.seen_in), and link_stacked(tasks). It returns a set of
+    ids.'
+  decision: FIX
+  score: 6
+  reason: steps and details mixed in a 50-line function with a loop that computes and writes
+  same:
+  - b2-8
+  - b2-11
+  - b2-14
+  triage:
+    id: b2-13
+    decision: FIX
+    score: 6
+    reason: steps and details mixed in a 50-line function with a loop that computes and writes
+    task: t5
+    after: *id001
+- id: b2-14
+  at:
+  - evals/changes.py:102
+  reach:
+  - evals/changes.py:102
+  row: missing effect in doc
+  claim: 'extract''s doc says it stores the rounds, but its main outcome is the change dataset: it creates
+    or updates changes/<id>/change.yaml and change.patch.'
+  fix: '"Adds the changes of one run to the dataset and stores its rounds. Returns the ids of the changes
+    it saw."'
+  decision: FIX
+  score: 5
+  reason: states a missing outcome
+  same:
+  - b2-13
+  triage:
+    id: b2-14
+    decision: FIX
+    score: 5
+    reason: states a missing outcome
+    task: t5
+    after: *id001
+- id: cross-3
+  at:
+  - evals/run.py:132-134
+  - evals/run.py:145-152
+  - evals/run.py:156-158
+  - evals/run.py:171
+  - evals/changes.py:103-121
+  reach:
+  - evals/run.py:100
+  - evals/run.py:122-188
+  - evals/changes.py:101-151
+  row: split protocol
+  claim: run.py writes a run directory (repo/, skill.sha256, round-N.json, the round-N/ record directory
+    derived from log.with_suffix(""), and report.json with keys fixture, workdir, rounds, round, cost_usd,
+    ...), and changes.py:103-121 reads it back, spelling "repo", "skill.sha256", f"round-{n}.json", "round-{n}"
+    and "report.json" again and reading report["fixture"], report["rounds"], r["round"] and .get("result")
+    by key. Nothing ties the writer's names and keys to the reader's.
+  fix: A RunDir dataclass in run.py that owns the layout (repo, skill_hash, report, round_log(n), round_record(n)),
+    and Round and Report dataclasses with Report.save(path) and Report.load(path). run.py writes through
+    them, changes.extract reads through them, and a round-trip test covers Report.
+  decision: FIX
+  score: 7
+  reason: file names and dict keys that a writer in one module and a reader in another must spell alike
+  same:
+  - b1-2
+  - b1-5
+  - b2-9
+  triage:
+    id: cross-3
+    decision: FIX
+    score: 7
+    reason: file names and dict keys that a writer in one module and a reader in another must spell alike
+    task: t5
+    after: *id001
+- id: cross-4
+  at:
+  - evals/run.py:150
+  - evals/run.py:160-161
+  - evals/changes.py:118
+  reach:
+  - evals/run.py:149-161
+  - evals/changes.py:115-121
+  row: split protocol
+  claim: The round ref name f"refs/rounds/{n}" is written by evaluate at run.py:150 and :160 and read
+    by changes.py:118, each spelling it. README.md:17-18 states the same name.
+  fix: round_ref(n) beside the run layout of cross-3 (a RunDir method or module function in run.py), with
+    record_round(repo, n, tree) writing the commit and ref. evaluate calls record_round for round 0 and
+    each round; changes.py reads through round_ref.
+  decision: FIX
+  score: 6
+  reason: one literal written in one module and read in another, plus a derivation written twice in the
+    writer
+  same:
+  - b1-6
+  - b1-5
+  triage:
+    id: cross-4
+    decision: FIX
+    score: 6
+    reason: one literal written in one module and read in another, plus a derivation written twice in
+      the writer
+    task: t5
+    after: *id001
+after:
+- c2a20bd2e2
+check: ok

@@ -1,0 +1,20 @@
+id: b2b3318e07
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: plan
+  triage:
+    id: plan
+    decision: PLAN
+    task: t9
+    reason: unanswered ASK b1-2/b1-4 and PLANs b1-11, b1-12, b1-13 written under "## unsmell run 2026-11-02";
+      removes the Tier 1 "EventSignatureRow → named struct" entry
+check: ok

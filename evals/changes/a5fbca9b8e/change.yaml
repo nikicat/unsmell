@@ -1,0 +1,36 @@
+id: a5fbca9b8e
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-11
+  at:
+  - src/evm/cache/event_signature_cache.rs:36-46
+  reach:
+  - src/evm/cache/event_signature_cache.rs:36-46
+  row: speculative generality
+  claim: 'EventSignatureCache::open has no caller in the repo, and open_in_memory is used only by this
+    file''s tests. Their docs open with the function''s own name ("Open …"), use the imperative, restate
+    the body ("Equivalent to `CacheDb::open(path)?.signatures()`") and name a caller ("Useful for tests.").
+
+    '
+  fix: 'delete open; make open_in_memory #[cfg(test)] (or have tests call CacheDb::open_in_memory()?.signatures())
+    and drop its doc'
+  decision: PLAN
+  score: 5
+  reason: dead public API on unchanged lines; removing a pub fn of the library is outside changed lines
+  same: []
+  triage:
+    id: b1-11
+    decision: PLAN
+    score: 5
+    reason: dead public API on unchanged lines
+    task: t4
+check: ok

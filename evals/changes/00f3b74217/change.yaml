@@ -1,0 +1,38 @@
+id: 00f3b74217
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: bad
+  note: intention is good but new comment reads bad, plus it exposes implementation details
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - src/evm/cache.rs:36-38
+  reach:
+  - src/evm/cache.rs:36-37
+  row: misleading doc (claim the code no longer makes)
+  claim: 'CACHE_VERSION''s doc says "Bump this when cache schema or semantics change", but the changeset
+    added a schema change (migration 6 at cache.rs:239-249, a new cached_logs column) without a bump,
+    and it is right not to: migrations() evolves the schema in place and NULL on old rows is handled.
+    The doc would lead the next author to throw away every cache for an additive column.'
+  fix: '"/// Bump when a change makes existing cache rows wrong, so that old files are bypassed instead
+    of migrated. Schema additions go in [`migrations`]." (two lines, unchanged-line doc).'
+  decision: PLAN
+  score: 5
+  reason: Unchanged line, not the root cause of a changed-line smell; the doc predates the changeset and
+    the abi_json migration already set the same precedent.
+  same: []
+  triage:
+    id: b1-3
+    decision: PLAN
+    score: 5
+    task: t4
+    reason: the CACHE_VERSION doc at cache.rs:36 is on unchanged lines and was already inexact before
+      migration 6
+check: ok

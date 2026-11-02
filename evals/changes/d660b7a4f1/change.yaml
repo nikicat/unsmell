@@ -1,0 +1,113 @@
+id: d660b7a4f1
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t7
+judge: null
+labels: []
+findings:
+- id: b2-5
+  at:
+  - evals/changes.py:158-164
+  - evals/changes.py:175-177
+  - evals/changes.py:182-186
+  reach:
+  - evals/changes.py:158-186
+  row: repeated derivation
+  claim: The Jaccard share of two changes' tokens is written twice (175 and 183-185). prior also calls
+    tokens(m['id']) twice per candidate, and tokens reads both files from disk on every call, so judge
+    reads every labelled change's files once per change it judges.
+  fix: One similarity(a, b) function over cached token sets (functools.cache on tokens, or Change.tokens
+    as a cached_property), used by prior and neighbours.
+  decision: FIX
+  score: 7
+  reason: a derivation written twice, with repeated I/O
+  same:
+  - b2-6
+  - b2-27
+  triage:
+    id: b2-5
+    decision: FIX
+    score: 7
+    reason: a derivation written twice, with repeated I/O
+    task: t7
+    after: &id001
+    - t1
+    - t5
+- id: b2-7
+  at:
+  - evals/changes.py:180-186
+  - evals/changes.py:192-193
+  - evals/changes.py:202
+  reach:
+  - evals/changes.py:180-186
+  - evals/changes.py:192-193
+  row: bug
+  claim: judge ID re-judges a change that already has a label, and neighbours does not exclude the change
+    itself, so its own label is shown to the judge as the first, most similar example (overlap 1.0). prior
+    excludes meta['id'] and the change's own runs; neighbours excludes neither.
+  fix: neighbours (or judge's labelled list) leaves out the change being judged, and the changes from
+    the same runs, as prior does.
+  decision: FIX
+  score: 9
+  reason: the answer leaks into the prompt, so a re-judge measures nothing
+  same:
+  - b2-5
+  triage:
+    id: b2-7
+    decision: FIX
+    score: 9
+    reason: the answer leaks into the prompt, so a re-judge measures nothing
+    task: t7
+    after: *id001
+- id: b2-20
+  at:
+  - evals/changes.py:189-225
+  reach:
+  - evals/changes.py:189-225
+  row: mixed altitude
+  claim: judge selects the labelled and to-do changes inline, builds the schema inline, and its closure
+    one() builds a 9-line prompt inline, calls claude, writes the verdict and prints. one() captures model,
+    schema, labelled and skill and passes model and schema straight to claude on every call.
+  fix: A Judge dataclass (model, skill, labelled) with prompt(change) and label(change) methods; judge
+    builds it once and maps label over the to-do changes.
+  decision: FIX
+  score: 6
+  reason: steps and details mixed, and context captured by a closure and passed down
+  same:
+  - b2-7
+  triage:
+    id: b2-20
+    decision: FIX
+    score: 6
+    reason: steps and details mixed, and context captured by a closure and passed down
+    task: t7
+    after: *id001
+- id: b2-27
+  at:
+  - evals/changes.py:167-177
+  reach:
+  - evals/changes.py:167-177
+  - evals/changes.py:312-313
+  row: unnamed return
+  claim: prior returns (change, share) by reversing a (share, change) tuple with best[::-1]; the caller
+    unpacks it positionally. The doc joins its None case with a semicolon, and 0.33 is an unnamed threshold.
+  fix: Return a Match(change, share) NamedTuple or None; name the threshold; the doc says "Returns None
+    when no labelled change shares a third of its words." as its own sentence.
+  decision: FIX
+  score: 5
+  reason: unnamed tuple at a call site
+  same:
+  - b2-5
+  triage:
+    id: b2-27
+    decision: FIX
+    score: 5
+    reason: unnamed tuple at a call site
+    task: t7
+    after: *id001
+after:
+- 1090471aa2
+- c4632c0179
+check: no-apply

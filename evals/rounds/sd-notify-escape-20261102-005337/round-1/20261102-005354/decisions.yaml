@@ -1,0 +1,67 @@
+- id: b1-1
+  decision: ASK
+  score: 6
+  reason: Two defensible shapes (markup writer type vs. esc at each call with named helpers); patches-only run, so no question is asked and the patch shows the proposal.
+  task: t3
+  after: [t1, t2]
+- id: b1-2
+  decision: FIX
+  score: 9
+  reason: Verified slow_upstream.go:86-106 writes labels and comm names raw into a Notify body; same bug class, root cause of the changeset's fix (§6).
+  task: t2
+- id: b1-3
+  decision: FIX
+  score: 7
+  reason: Verified; the two sub-formats repeat the subject rule and the changeset escaped both copies.
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 6
+  reason: Verified; closures added by the changeset, writeChain always gets the same argument.
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 6
+  reason: Verified; the comment's field list omits Client, InvokerName and destination, and sits on an alias.
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 6
+  reason: Verified; "Vuln 7" resolves nowhere in the repo and the threat model is repeated.
+  task: t1
+- id: b1-7
+  decision: FIX
+  score: 5
+  reason: Exact expected body is stronger and shorter.
+  task: t1
+- id: b1-8
+  decision: FIX
+  score: 5
+  reason: Pins every escaped branch before t1 reshapes formatBody (§6 pin before you move).
+  task: t1
+- id: b1-9
+  decision: SKIP
+  score: 2
+  reason: testify is already a repo dependency; a neighbour's style is not a defect.
+- id: b1-10
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines. Entry proposed in fixes/plan.patch (TODO.md), not merged in a patches-only run.
+  task: plan
+- id: b1-11
+  decision: FIX
+  score: 9
+  reason: Overruled PLAN. t1 rewrites the block for b1-3, so the false "parent → child" comment becomes changed lines.
+  task: t1
+- id: b1-12
+  decision: PLAN
+  score: 7
+  reason: Read is on an unchanged line and the fix spans packages. Entry proposed in fixes/plan.patch.
+  task: plan
+- id: b1-13
+  decision: SKIP
+  score: 4
+  reason: Pre-existing map order; under threshold. The t1 tests use one search attribute so they stay deterministic.
+- id: b1-14
+  decision: DISCARD
+  reason: The summary is plain text per the Desktop Notifications spec; escaping would show entities literally.

@@ -1,0 +1,32 @@
+id: dengi-seb-20261102-005337-1-t7
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t7
+judge: null
+labels: []
+findings:
+- id: b1-11
+  at:
+  - seb.py:45-49
+  reach:
+  - seb.py:45-49
+  row: concept mixing
+  claim: call() is the HTTP transport, and it also ends the process with sys.exit on any non-2xx. No caller
+    can react. For example, a session that the bank revoked before its valid_until gets a 401 and exits,
+    when it could re-authorize.
+  fix: Raise a typed ApiError(status, body) from call(). main catches it and exits with the same message.
+    Re-authorizing on 401 is a separate feature.
+  decision: SKIP
+  score: 4
+  reason: Exiting is acceptable for a single-command script. A typed error with no caller that handles
+    it is a feature (§5), not a smell fix.
+  same: []
+  triage:
+    id: b1-11
+    decision: SKIP
+    score: 4
+    reason: typed error with no handler is a feature
+    task: t7
+check: ok

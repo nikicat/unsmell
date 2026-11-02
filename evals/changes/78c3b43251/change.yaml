@@ -1,0 +1,53 @@
+id: 78c3b43251
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - src/evm/cache/event_signature_cache.rs:15-24
+  - src/bin/chainfold/signature_cache.rs:31-35
+  - src/bin/chainfold/signature_cache.rs:52-54
+  reach:
+  - src/evm/cache/event_signature_cache.rs:15-24
+  - src/evm/cache/event_signature_cache.rs:48-103
+  - src/bin/chainfold/signature_cache.rs:5-8
+  - src/bin/chainfold/signature_cache.rs:28-56
+  row: duplication
+  claim: The changeset added struct EventSignatureRow (event_signature_cache.rs:17-24) with the same three
+    fields as ResolvedEvent (signatures.rs:48-55), differing only in topic0 (Topic vs [u8; 32]). The adapter
+    copies one into the other field by field in both directions and round-trips topic0 through B256 at
+    signature_cache.rs:33 and :53. The field docs repeat ResolvedEvent's doc.
+  fix: 'Option A: the cache returns and stores ResolvedEvent directly (evm::cache may depend on the standalone
+    signatures module), EventSignatureRow is deleted, and the adapter only maps keys and errors. This
+    drops Topic for topic0 in the cache. Option B: keep EventSignatureRow and add From<EventSignatureRow>
+    for ResolvedEvent and From<&ResolvedEvent> for EventSignatureRow in the lib, next to the row (the
+    bin cannot, by the orphan rule). The adapter then calls .map(Into::into). signatures.rs cannot take
+    Topic, because its module doc makes it independent of the rest of chainfold. I would pick A, because
+    one record type then serves both layers.'
+  decision: ASK
+  score: 7
+  reason: duplicated record type with a hand conversion in both directions; two designs are defensible
+    and both touch the pub API
+  same:
+  - b1-2
+  - b1-6
+  triage:
+    id: b1-1
+    decision: ASK
+    score: 7
+    reason: 'two designs, both touch pub API. Recommend option B (From impls beside the row in the lib):
+      keeps Topic in the cache layer, which option A would undo'
+    task: t2
+    after:
+    - t1
+after:
+- bc19c04051
+check: ok

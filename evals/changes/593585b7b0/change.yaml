@@ -1,0 +1,30 @@
+id: 593585b7b0
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-19
+judge: null
+labels: []
+findings:
+- id: b1-19
+  at:
+  - evals/run.py:88-91
+  reach:
+  - evals/run.py:88-91
+  row: misleading name
+  claim: copy_tree's doc says it writes the files of source at rev, but git archive leaves out export-ignore
+    paths and rewrites export-subst files.
+  fix: check the tree out with a temporary index (GIT_INDEX_FILE plus git --work-tree=repo read-tree and
+    checkout-index) instead of git archive
+  decision: SKIP
+  score: 3
+  reason: true for every fixture source today
+  same: []
+  triage:
+    id: b1-19
+    decision: SKIP
+    score: 3
+    reason: true for every fixture source today
+    task: skip-b1-19
+check: ok

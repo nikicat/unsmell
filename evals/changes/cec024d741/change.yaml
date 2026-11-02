@@ -1,0 +1,36 @@
+id: cec024d741
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t9
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-15
+  at:
+  - internal/proxy/prompter.go:201
+  - internal/proxy/prompter.go:161
+  reach:
+  - internal/proxy/prompter.go:159-162
+  - internal/proxy/prompter.go:199-202
+  row: speculative generality
+  claim: prompterCallback.logger is set in exportCallback (prompter.go:161) and never read
+  fix: delete the field and its initialiser
+  decision: PLAN
+  score: 5
+  reason: dead field on unchanged lines
+  same: []
+  triage:
+    id: b1-15
+    decision: PLAN
+    score: 5
+    reason: unchanged lines
+    task: t9
+check: ok

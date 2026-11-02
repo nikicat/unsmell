@@ -1,0 +1,31 @@
+id: dengi-seb-20261102-005337-1-t8
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t8
+judge: null
+labels: []
+findings:
+- id: b1-12
+  at:
+  - seb.py:19
+  - seb.py:30
+  reach:
+  - seb.py:19
+  - seb.py:30
+  row: split protocol
+  claim: The API host "api.enablebanking.com" is spelled in API (:19) and again as the JWT aud claim (:30).
+  fix: Derive aud from API with urlparse(API).hostname, or name the host once in a constant that both
+    use.
+  decision: SKIP
+  score: 3
+  reason: Both literals are fixed by Enable Banking and change together rarely.
+  same: []
+  triage:
+    id: b1-12
+    decision: SKIP
+    score: 3
+    reason: both fixed by Enable Banking
+    task: t8
+check: ok

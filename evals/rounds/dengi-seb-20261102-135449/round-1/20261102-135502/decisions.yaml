@@ -1,0 +1,139 @@
+- id: b1-1
+  decision: FIX
+  score: 8
+  reason: key, session and ledger sit in the repo directory and are not ignored
+  task: t2
+- id: cross-2
+  decision: FIX
+  score: 8
+  reason: same fix as b1-1
+  task: t2
+- id: b1-2
+  decision: FIX
+  score: 7
+  reason: 'full tell: client context in module globals, PSU set by main through `global`'
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 7
+  reason: argv date never validated and re-read per account; CLI shape unchanged
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 6
+  reason: session file written in one function and read in another; load_session may log in
+  task: t1
+- id: b1-7
+  decision: FIX
+  score: 6
+  reason: 'verified: q[''code''][0] raises KeyError when the redirect carries error= with the right state'
+  task: t1
+- id: b1-8
+  decision: FIX
+  score: 5
+  reason: pagination mechanism mixed with progress output; progress stays, in the caller
+  task: t1
+- id: b1-9
+  decision: FIX
+  score: 7
+  reason: three inline queries on (db, iban) in main, fetchone()[0] twice; queries stay written out
+  task: t1
+- id: b1-13
+  decision: FIX
+  score: 5
+  reason: module doc omits the login the user meets; usage line goes to argparse
+  task: t1
+- id: b1-14
+  decision: FIX
+  score: 5
+  reason: resume rule stated twice
+  task: t1
+- id: b1-15
+  decision: FIX
+  score: 5
+  reason: doc says the function marks the request; it returns headers
+  task: t1
+- id: b1-3
+  decision: ASK
+  score: 6
+  reason: pydantic-settings is a new dependency and makes EB_APP_ID required
+  task: t3
+  after:
+  - t1
+- id: b1-18
+  decision: ASK
+  score: 6
+  reason: where user data lives is user-visible; joins the settings task
+  task: t3
+  after:
+  - t1
+- id: b1-5
+  decision: ASK
+  score: 7
+  reason: response schema belongs to pydantic, a new dependency
+  task: t4
+  after:
+  - t1
+- id: b1-10
+  decision: ASK
+  score: 6
+  reason: Enable Banking documents uid as valid only while its session is AUTHORIZED, and identification_hash as the cross-session id; so a no-IBAN account is re-keyed on every login (a bug). The fix renames
+    a stored column, so the user decides
+  task: t5
+  after:
+  - t1
+- id: b1-11
+  decision: ASK
+  score: 6
+  reason: stored schema change; CREATE TABLE IF NOT EXISTS will not upgrade an existing dengi.db
+  task: t6
+- id: b1-12
+  decision: FIX
+  score: 9
+  reason: 'confirmed false: Enable Banking documents description as ''Arbitrary transaction categorization description''; the comment-only fix keeps the stored column. Building tx_code from code/sub_code
+    only is a stored-schema alternative left to the user'
+  task: t7
+- id: b1-17
+  decision: ASK
+  score: 5
+  reason: package layout and entry point change
+  task: t8
+  after:
+  - t1
+- id: cross-1
+  decision: ASK
+  score: 5
+  reason: same as b1-17
+  task: t8
+  after:
+  - t1
+- id: b1-16
+  decision: SKIP
+  score: 4
+  reason: true, adds little
+  task: t9
+  after:
+  - t1
+- id: b1-19
+  decision: SKIP
+  score: 3
+  reason: aud is fixed by the JWT spec; UTC spelling cosmetic
+  task: t10
+  after:
+  - t1
+- id: cross-3
+  decision: DISCARD
+  score: 0
+  reason: schema.sql:2 comment says nothing about the iban/uid fallback and has no line reference; the inventory misled the agent
+- id: cross-4
+  decision: DISCARD
+  score: 0
+  reason: "a query naming its own schema's columns is not a smell (\xA75)"
+- id: cross-5
+  decision: DISCARD
+  score: 0
+  reason: by the agent's own reasoning each site states a different fact
+- id: cross-6
+  decision: DISCARD
+  score: 0
+  reason: three different facts sharing a word

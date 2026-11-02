@@ -1,0 +1,48 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..674c71b 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -48,9 +48,10 @@ REVIEW = CACHE / "review"
+ # The id of the change in the review repo, which show and label use when given none.
+ CURRENT = REVIEW / "current"
+ LABELS = ("good", "bad", "neutral", "unsure")  # unsure: looked at, but cannot judge it
+-# ANSI SGR codes for show's output; NO_COLOR or a pipe turns them off.
++# ANSI SGR codes for show's output.
+ COLORS = {"FIX": "32", "ASK": "33", "PLAN": "36", "KEEP": "35", "SKIP": "90", "DISCARD": "90",
+           "good": "32", "bad": "31", "neutral": "33", "unsure": "90"}
++# NO_COLOR or a pipe turns the colors off.
+ TTY = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+ 
+ 
+@@ -67,7 +68,10 @@ def dump(path, data):
+ 
+ 
+ def change_id(patch):
+-    """Returns the id of a patch: a hash of its files and changed lines, whitespace aside."""
++    """Returns the id of a patch.
++
++    The id is a hash of the patch's files and changed lines, whitespace aside.
++    """
+     lines = [l if l.startswith(("+++", "---")) else l[0] + " ".join(l[1:].split())
+              for l in patch.splitlines() if l[:1] in "+-"]
+     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
+@@ -255,7 +259,8 @@ def worktree(meta, root=None):
+     if build.exists():
+         shutil.rmtree(build)
+     built = materialize(fixture, tomllib.loads((fixture / "fixture.toml").read_text()), build)
+-    git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
++    # HEAD is the fixture's base. It is round 0 minus the changeset under review.
++    git(built, "tag", "base")
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+     git(built, "tag", "round-0")
+@@ -275,7 +280,8 @@ def worktree(meta, root=None):
+     git(repo, "checkout", "-q", "-f", "--detach", "FETCH_HEAD")
+     git(repo, "reset", "-q", "--soft", "base")
+     shutil.rmtree(build)
+-    for parent in ancestors(meta):  # staged with the changeset, so that git diff shows only what this change adds
++    # The ancestors are staged with the changeset, so that git diff shows only what this change adds.
++    for parent in ancestors(meta):
+         git(repo, "apply", "--index", str(CHANGES / parent / "change.patch"))
+     patch = CHANGES / meta["id"] / "change.patch"
+     if patch.read_text().strip():

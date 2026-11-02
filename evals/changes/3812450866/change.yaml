@@ -1,0 +1,50 @@
+id: '3812450866'
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: bad
+  note: it should be fixed in other place - reject txs without iban
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-5
+  at:
+  - seb.py:97
+  - schema.sql:2
+  reach:
+  - seb.py:97
+  - schema.sql:2
+  - schema.sql:22
+  - schema.sql:25
+  row: misleading name
+  claim: The txn.iban column holds the Enable Banking account uid when the account has no IBAN, so the
+    name says less than the column holds. This is PLAUSIBLE and needs checking against the Enable Banking
+    docs. As far as I recall, uid is scoped to one session, and the stable cross-session identifier is
+    identification_hash. If so, the rows of an IBAN-less account split under a new key after each re-authorization
+    (180 days at most), and the resume query at seb.py:100 finds nothing for them.
+  fix: Account.key (b1-4) falls back to identification_hash instead of uid. The column is renamed to account,
+    with a comment saying it holds the IBAN or the Enable Banking identification_hash.
+  decision: ASK
+  score: 8
+  reason: It is a bug if uid is session-scoped, and the rename changes the stored schema, which someone
+    outside the changeset can notice.
+  same:
+  - b1-4
+  triage:
+    id: b1-5
+    decision: ASK
+    score: 9
+    reason: 'a confirmed bug. Per the Enable Banking docs, uid is valid only while its session is authorized,
+      and identification_hash matches the account across sessions. Still ASK, because the fix renames
+      a stored column and rekeys rows. Without t6 or an ALTER, an existing dengi.db fails with ''no such
+      column: account'''
+    task: t5
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

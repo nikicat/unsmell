@@ -1,0 +1,142 @@
+id: bc19c04051
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - src/evm/cache/event_signature_cache.rs:79-87
+  reach:
+  - src/evm/cache/event_signature_cache.rs:79-103
+  - src/evm/cache/event_signature_cache.rs:119-129
+  - src/evm/cache/event_signature_cache.rs:152-162
+  - src/bin/chainfold/signature_cache.rs:47-56
+  row: data clump
+  claim: insert_event_signature takes signature, topic0 and abi_json as three loose parameters (six in
+    total), and these are exactly the fields of EventSignatureRow, which the changeset introduced. The
+    reader returns the struct and the writer takes its parts. The changeset already changed this pub signature
+    at :85 (&B256 to Topic).
+  fix: 'insert_event_signature(chain_id, address, event_name, row: &EventSignatureRow), binding row.signature,
+    row.topic0 and row.abi_json. The tests and the adapter build the row (or a &ResolvedEvent, if b1-1
+    takes option A).'
+  decision: FIX
+  score: 7
+  reason: the full data-clump tell, the struct already exists, and the only callers are the adapter and
+    the tests in this batch
+  same:
+  - b1-1
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 7
+    reason: the changeset already changed this signature; only callers are the adapter and tests
+    task: t1
+- id: b1-3
+  at:
+  - src/evm/cache/event_signature_cache.rs:59-76
+  - src/evm/cache/event_signature_cache.rs:98
+  reach:
+  - src/evm/cache/event_signature_cache.rs:10
+  - src/evm/cache/event_signature_cache.rs:48-77
+  - src/evm/cache/event_signature_cache.rs:98
+  - src/evm/cache.rs:20-56
+  row: unparsed input
+  claim: get_event_signature reads the DB row by position into an unnamed (String, Vec<u8>, Option<String>)
+    tuple (:61-65). It checks the topic0 blob length inline in the match guard (:69, literal 32) and builds
+    Topic via B256::from_slice. A blob of the wrong length silently becomes Ok(None), so it looks like
+    a cache miss. The match over rows.next() is a hand-rolled OptionalExtension::optional on a primary-key
+    lookup (PK chain_id, address, event_name at cache.rs:253). The changeset rewrote the assembly arm
+    at :69-73.
+  fix: 'Add impl FromSql and ToSql for Topic in src/evm/cache.rs, beside the ToSql impls for ChainId and
+    FilterHash (the FromSql decodes a 32-byte BLOB and errors otherwise). The body then becomes stmt.query_row(params,
+    |row| Ok(EventSignatureRow { signature: row.get(0)?, topic0: row.get(1)?, abi_json: row.get(2)? })).optional()?.
+    It uses rusqlite::OptionalExtension, as src/matcher/anchor_store_sqlite.rs:52 does. The insert binds
+    topic0 directly instead of topic0.as_slice() at :98. Behaviour: a malformed topic0 blob now errors
+    instead of reading as a miss.'
+  decision: FIX
+  score: 7
+  reason: positional row access, validation after the closure, an inline decision in the assembly, and
+    a misplaced decode rule whose owner by repo convention is cache.rs
+  same: []
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 7
+    reason: 'FromSql/ToSql for Topic beside the existing ChainId/FilterHash impls in cache.rs; behaviour:
+      a malformed topic0 blob errors instead of reading as a miss'
+    task: t1
+- id: b1-4
+  at:
+  - src/evm/cache/event_signature_cache.rs:115
+  - src/evm/cache/event_signature_cache.rs:126
+  - src/evm/cache/event_signature_cache.rs:135
+  - src/evm/cache/event_signature_cache.rs:159
+  reach:
+  - src/evm/cache/event_signature_cache.rs:114-168
+  row: repeated derivation
+  claim: The changeset wraps the test const TOPIC0 (a B256) in Topic::from at each of its three uses (:126,
+    :135, :159). Topic::new is a const fn, so the const can be a Topic itself.
+  fix: 'const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD)); each use passes TOPIC0 directly'
+  decision: FIX
+  score: 5
+  reason: one conversion written three times on changed lines, with a one-line fix
+  same: []
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 5
+    reason: one conversion written three times on changed lines
+    task: t1
+- id: b1-5
+  at:
+  - src/evm/cache/event_signature_cache.rs:20
+  reach:
+  - src/evm/cache/event_signature_cache.rs:20
+  row: tautological comment
+  claim: The topic0 field doc that the changeset added opens with the field's own name ("`topic0` — the
+    keccak256 hash of the signature."), and an em-dash appositive stands in for a sentence.
+  fix: /// The keccak256 hash of `signature`.
+  decision: FIX
+  score: 5
+  reason: a doc opening with its declaration's name on a changed line; the mechanical check requires the
+    fix
+  same:
+  - b1-1
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 5
+    reason: doc opening with its field name, on a changed line
+    task: t1
+- id: b1-6
+  at:
+  - src/evm/cache/event_signature_cache.rs:22-23
+  reach:
+  - src/evm/cache/event_signature_cache.rs:22
+  row: algebraic blindness
+  claim: The abi_json field doc that the changeset added says "when populated", which says less than the
+    code. None marks a row written before the abi_json column existed (cache.rs:259-262), or a row inserted
+    with None. ResolvedEvent.abi_json (signatures.rs:51-53) and the migration comment already state this
+    transitional fact, so the row now has a third, vaguer copy.
+  fix: 'Point to the owner rather than restating it: "/// The JSON of the matched ABI event item. None
+    on rows written before the column was added." Or, if b1-1 takes option A, the field goes away with
+    the struct.'
+  decision: FIX
+  score: 5
+  reason: a doc that says less than the code about what None means, on a changed line
+  same:
+  - b1-1
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 5
+    reason: doc says less than the code about what None means
+    task: t1
+check: ok

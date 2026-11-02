@@ -1,0 +1,69 @@
+id: 7925d2e113
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - internal/proxy/prompter.go:56-57
+  - internal/proxy/prompter.go:103-107
+  - internal/proxy/prompter.go:183
+  reach:
+  - internal/proxy/prompter.go:53-58
+  - internal/proxy/prompter.go:96-125
+  - internal/proxy/prompter.go:181-183
+  row: oversized lock
+  claim: 'the changeset removed watchFrontPrompter/awaitFrontPrompter (HEAD prompter.go:128-175), whose
+    goroutine called b.activate() concurrently with close(); what served only that path survives: the
+    active and closed fields (prompter.go:56-57), activate''s closed||active guard and its lock (prompter.go:103-107),
+    the closed write in close (prompter.go:183) and the doc sentence ''Idempotent, and a no-op after close()''
+    (prompter.go:99). activate now has one caller, newPrompterBridge at prompter.go:90, before the bridge
+    is returned, and active always equals owned'
+  fix: delete the active and closed fields, the guard and the mu.Lock/Unlock in activate, b.closed = true
+    in close, and the idempotency sentence; mu then guards callbacks and owned only (owned goes too if
+    b1-2 is taken)
+  decision: FIX
+  score: 6
+  reason: dead code left by a narrowing; behaviour-preserving, private type, single caller verified by
+    grep
+  same:
+  - b1-5
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 6
+    reason: 'checked: activate''s only caller is newPrompterBridge:90, before b escapes, so closed and
+      active can never be true there'
+    task: t1
+- id: b1-5
+  at:
+  - internal/proxy/prompter.go:96-101
+  reach:
+  - internal/proxy/prompter.go:96-101
+  row: narrating doc comment
+  claim: the activate doc, whose lines 100-101 the changeset rewrote, opens with its own name, narrates
+    ('then exports the bridge'), names the mechanism ('DoNotQueue'), carries the caller's timing ('BEFORE
+    any client triggers an unlock'), keeps the dead 'Idempotent, and a no-op after close()' (b1-1), hedges
+    with 'somehow', and states no error contract
+  fix: Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the bridge there. Leaves
+    the name to its owner, and the bridge inactive, when another connection already holds it. Errors when
+    the claim or the export fails.
+  decision: FIX
+  score: 6
+  reason: removes a dead claim and narration, states the missing error contract; shares a task with b1-1
+  same:
+  - b1-1
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 6
+    reason: shares lines with b1-1; the idempotency sentence dies with the guard
+    task: t1
+check: ok

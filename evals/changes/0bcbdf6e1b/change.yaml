@@ -1,0 +1,38 @@
+id: 0bcbdf6e1b
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-13
+  at:
+  - src/evm/cache/erc20_cache.rs:114-121
+  - src/evm/cache/erc20_cache.rs:151-158
+  reach:
+  - src/evm/cache/erc20_cache.rs:100-160
+  row: repeated derivation
+  claim: 'erc20_cache repeats the shape b1-1 removes: read a BLOB as Vec<u8>, guard `bytes.len() == 32`,
+    copy into an array, and map a wrong length to Ok(None), here for U256.
+
+    '
+  fix: a FromSql-based U256 column decode (newtype or helper) in src/evm/cache.rs used by both queries,
+    like b1-1's Topic impl
+  decision: PLAN
+  score: 5
+  reason: outside this batch and outside changed lines; same class as b1-1
+  same:
+  - b1-1
+  triage:
+    id: b1-13
+    decision: PLAN
+    score: 5
+    reason: outside the changeset; overrules the survey's same-link to b1-1 for tasking, since it is the
+      same class on other code (U256 in erc20_cache), not the same code
+    task: t6
+check: ok

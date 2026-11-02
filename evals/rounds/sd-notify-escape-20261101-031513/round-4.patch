@@ -1,0 +1,130 @@
+diff --git a/TODO.md b/TODO.md
+index 6a4f281..2d2fd65 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -47,3 +47,10 @@
+ - [ ] `internal/notification/slow_upstream.go:slowUpstreamSummary` is a fourth per-request-type `switch`. Include it in the per-type table planned in the second-pass entry above.
+ - [ ] `internal/notification/slow_upstream.go`: the `SlowUpstreamNotifier` doc gives the caller's reason (pinentry context), which `internal/proxy/slow_upstream.go:23` also states. The `NotifySlowUpstream` doc lists the body contents, which `formatSlowUpstreamBody` owns. Cut both down to the item's own contract.
+ - [ ] `internal/notification/desktop.go:146` reads the D-Bus signal body by position (`sig.Body[0]`, `sig.Body[1]`). The `NotifyPersistent` doc names the D-Bus method `CloseNotification`, and "alternating (id, label) pairs" is stated at both `:30` and `:190`. Decode the signal into a named struct and give each fact one owner.
++
++## Unsmell run 2026-11-01 (fourth pass): markup escaping follow-ups
++
++- [ ] `internal/notification/markup.go:text` escapes `&`, `<` and `>` but lets `\n` through, and both bodies (`body.go:bodyBuilder.processChain`, `slow_upstream.go:formatSlowUpstreamBody`) use `\n` as their line separator. A label or process name with a newline can fake an extra body line, such as a spoofed process-chain line. Give `markup` a `newline()` method for structural breaks, and have `text` replace newlines in untrusted text. This changes what notifications show.
++- [ ] `internal/notification/body.go:formatBody` treats `req.Items[0]` as "the SSH key" of an SSH sign request by position. `approval.Request` does not say so. Give the request a named accessor (or a typed SSH field) next to the planned `"destination"` constant.
++- [ ] `internal/notification/body.go:formatBody`: a GPG request with a nil `GPGSignInfo` returns an empty body and drops the process chain, while an SSH request with no items still shows the chain. Decide whether the chain should always be shown.
++- [ ] `internal/notification/slow_upstream.go:11`: the `persistentNotifier` doc lists its two methods ("sends … and can dismiss them"). Rewrite it as the seam's place: what the slow-upstream notifier needs from `DBusNotifier`, so tests can replace it.
+diff --git a/internal/notification/body.go b/internal/notification/body.go
+index ab07019..078f460 100644
+--- a/internal/notification/body.go
++++ b/internal/notification/body.go
+@@ -79,10 +79,9 @@ func (b *bodyBuilder) processChain(chain []approval.ProcessInfo) {
+ 	}
+ }
+ 
+-// Appends who sent the request, followed by a colon. If the request names an
+-// invoker, the sender is the invoker in bold, followed by "@", the client and
+-// the PID. Otherwise the sender is the client in bold, followed by the PID
+-// when it is nonzero.
++// Appends the request's sender and a colon. A request that names an invoker
++// shows "invoker@client[pid]" with the invoker in bold. Otherwise it shows
++// "client[pid]" with the client in bold, or only "client" when the PID is 0.
+ func (b *bodyBuilder) sender(req *approval.Request) {
+ 	switch {
+ 	case req.SenderInfo.InvokerName != "":
+@@ -97,9 +96,9 @@ func (b *bodyBuilder) sender(req *approval.Request) {
+ 	b.text(": ")
+ }
+ 
+-// Returns the label, item count or search attributes that a secret request is
+-// about. A search with no attributes is about "all". The second result is false
+-// for request types that have no such subject.
++// Returns the label, item count or search attributes that a GetSecret, Delete,
++// Write or Search request is about. A search with no attributes is about "all".
++// The second result is false for every other request type.
+ func itemsSubject(req *approval.Request) (string, bool) {
+ 	switch req.Type {
+ 	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+index dc402fc..a9454f0 100644
+--- a/internal/notification/markup.go
++++ b/internal/notification/markup.go
+@@ -12,7 +12,7 @@ type markup struct {
+ 	s string
+ }
+ 
+-// A tag of the spec's markup subset that markup writes around text.
++// A tag of the spec's markup subset that a body wraps around escaped text.
+ type markupTag string
+ 
+ const (
+@@ -20,9 +20,9 @@ const (
+ 	tagItalic markupTag = "i"
+ )
+ 
+-// The escaper for markup text. It replaces only &, < and >, because servers
+-// such as GNOME Shell accept only named entities. They would show the numeric
+-// &#39; and &#34; that html.EscapeString writes as literal text.
++// Replaces only &, < and >, because servers such as GNOME Shell accept only
++// named entities. html.EscapeString also writes &#39; and &#34;, and those
++// servers would show them as literal text.
+ var markupEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+ 
+ // Returns a body that holds only the given text, escaped.
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 71a1fff..a64e197 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -33,9 +33,9 @@ func newSlowUpstreamNotifier(notifier persistentNotifier) *SlowUpstreamNotifier
+ 
+ // NotifySlowUpstream shows a notification with the secret label(s) and
+ // optional process chain, then returns a function that dismisses it.
+-func (s *SlowUpstreamNotifier) NotifySlowUpstream(ctx proxy.UpstreamCallContext) func() {
+-	summary := slowUpstreamSummary(ctx.RequestType)
+-	body := formatSlowUpstreamBody(ctx)
++func (s *SlowUpstreamNotifier) NotifySlowUpstream(call proxy.UpstreamCallContext) func() {
++	summary := slowUpstreamSummary(call.RequestType)
++	body := formatSlowUpstreamBody(call)
+ 
+ 	id, err := s.notifier.NotifyPersistent(summary, body, "dialog-password")
+ 	if err != nil {
+@@ -77,28 +77,25 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ // Returns the body of the slow-upstream notification. It names the items, with
+ // a count when there is more than one. If the call has a process chain, the
+ // chain follows on its own line.
+-func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) markup {
++func formatSlowUpstreamBody(call proxy.UpstreamCallContext) markup {
+ 	var m markup
+ 
+-	switch len(ctx.Items) {
+-	case 0:
+-	case 1:
+-		m.text(itemDisplayLabel(ctx.Items[0]))
+-	default:
+-		labels := make([]string, len(ctx.Items))
+-		for i, item := range ctx.Items {
+-			labels[i] = itemDisplayLabel(item)
+-		}
+-		m.textf("%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
++	labels := make([]string, len(call.Items))
++	for i, item := range call.Items {
++		labels[i] = itemDisplayLabel(item)
++	}
++	m.text(strings.Join(labels, ", "))
++	if len(call.Items) > 1 {
++		m.textf(" (%d items)", len(call.Items))
+ 	}
+ 
+-	// Appends the process chain on its own line, joined the way
+-	// bodyBuilder.processChain joins it, without PIDs.
+-	if len(ctx.SenderInfo.ProcessChain) > 0 {
++	// The chain uses the separator of bodyBuilder.processChain. Unlike that
++	// method, this chain shows no PIDs and starts a new line only after labels.
++	if len(call.SenderInfo.ProcessChain) > 0 {
+ 		if !m.empty() {
+ 			m.text("\n")
+ 		}
+-		for i, p := range ctx.SenderInfo.ProcessChain {
++		for i, p := range call.SenderInfo.ProcessChain {
+ 			if i > 0 {
+ 				m.text(" \u2190 ")
+ 			}

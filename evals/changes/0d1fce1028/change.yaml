@@ -1,0 +1,187 @@
+id: 0d1fce1028
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-005337
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: bad
+  note: esc -> html.EscapeString added verbosity; refactoring should go further, current one is partial
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - internal/notification/desktop.go:636-648
+  - internal/notification/desktop.go:661-673
+  reach:
+  - internal/notification/desktop.go:632-675
+  row: duplication
+  claim: 'The default branch renders the request subject twice, once per sub-format: the same case list
+    (GetSecret, Delete, Write / Search), the same "label or N items" and "search attrs or all" rules,
+    differing only in <b> vs <i>. The changeset had to add esc() to both copies (desktop.go:638 and :663,
+    :644 and :669), which is the "two sites you edit together" tell.'
+  fix: One helper `requestSubject(req *approval.Request) string` that returns the escaped subject text
+    (the item label, "N items", the search attrs, "all", or "" for other types). The chain format wraps
+    it in <b>…</b> and the fallback format in <i>…</i>, each only when non-empty.
+  decision: FIX
+  score: 7
+  reason: Duplicated rule, tell met in full; behaviour-preserving; about 20 lines.
+  same: []
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 7
+    reason: Verified; the two sub-formats repeat the subject rule and the changeset escaped both copies.
+    task: t1
+- id: b1-4
+  at:
+  - internal/notification/desktop.go:593-615
+  reach:
+  - internal/notification/desktop.go:582-678
+  row: mixed altitude
+  claim: The changeset opens formatBody with 30 lines of helper definitions (an alias and two closures)
+    before its switch, so the function reads as setup detail before its decision. writeChain is always
+    called with req.SenderInfo.ProcessChain (desktop.go:621, 631, 649), so its parameter adds nothing;
+    escapedSearchAttrs captures only req.SearchAttributes. Neither needs to be a closure. Both closure
+    comments open with their own names.
+  fix: 'Lift both to package-level functions next to commitSubject: `writeProcessChain(b *strings.Builder,
+    chain []approval.ProcessInfo, showPIDs bool)` and `formatSearchAttrs(attrs map[string]string) string`,
+    each with a one-line doc that starts with its verb ("Appends…", "Returns…"). If b1-1 is accepted they
+    take the markup writer instead of *strings.Builder; if b1-3 is fixed, formatSearchAttrs is called
+    from requestSubject.'
+  decision: FIX
+  score: 6
+  reason: Mixed altitude added by the diff (role pass item 3); mechanical; the closures' doc openings
+    fixed in the same move.
+  same: []
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 6
+    reason: Verified; closures added by the changeset, writeChain always gets the same argument.
+    task: t1
+- id: b1-5
+  at:
+  - internal/notification/desktop.go:585-591
+  reach:
+  - internal/notification/desktop.go:581-592
+  row: long comment
+  claim: 'A 6-line comment sits on `esc := html.EscapeString`, a local that only renames a standard function.
+    Cause (b), wrong subject: it carries formatBody''s contract and its threat model, and its field list
+    "(repo/commit/label/search attrs, and process comm …)" omits req.Client, InvokerName and the SSH destination,
+    which the code also escapes, so it already states less than the code. It also joins two ideas with
+    a semicolon and uses "must" phrasing. formatBody itself has no doc.'
+  fix: 'Delete the alias and call html.EscapeString directly (or the b1-1 writer). Put the contract on
+    formatBody as a plain doc, for example: "Returns the notification body for req, in the markup that
+    notification servers render. All client-controlled text is escaped, because the notification carries
+    approve and deny buttons and injected markup could make a request look trustworthy." Drop the field
+    list and the prctl aside (InvokerName''s spoofability is owned by approval/types.go:44).'
+  decision: FIX
+  score: 6
+  reason: The comment states less than the code (incomplete enumeration) and the contract lives on the
+    wrong item; residue alias removed with it.
+  same:
+  - b1-6
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 6
+    reason: Verified; the comment's field list omits Client, InvokerName and destination, and sits on
+      an alias.
+    task: t1
+- id: b1-6
+  at:
+  - internal/notification/desktop_test.go:419-423
+  reach:
+  - internal/notification/desktop_test.go:419-423
+  row: duplicated knowledge
+  claim: The test doc repeats the threat model of desktop.go:585-590 nearly verbatim ("carries approve/deny
+    buttons, so injected bold/italic text would aid a consent spoof"), opens with the test's own name,
+    runs 5 lines, and cites "Vuln 7", which no file in the repo defines (SECURITY.md has only reporting
+    instructions; docs/, .planning/ and TODO.md have no such entry).
+  fix: 'Delete the doc comment; the test name already says what it checks, and the reason is owned by
+    formatBody''s doc (b1-5). If a pointer is wanted, one line: "// Pins the escaping that formatBody
+    documents." No "Vuln 7".'
+  decision: FIX
+  score: 6
+  reason: One fact with two copies plus a reference a reader cannot resolve.
+  same:
+  - b1-5
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 6
+    reason: Verified; "Vuln 7" resolves nowhere in the repo and the threat model is repeated.
+    task: t1
+- id: b1-7
+  at:
+  - internal/notification/desktop_test.go:442-456
+  reach:
+  - internal/notification/desktop_test.go:442-457
+  row: duplication
+  claim: The new test checks one deterministic body (GPG path, no map, showPIDs false) with seven Contains/NotContains
+    fragments in three commented groups; :453 is a substring of :456, and the escaped process name is
+    only checked negatively, so "evil" could vanish and the test would still pass.
+  fix: 'One exact assertion of the whole body, for example `assert.Equal(t, "<b>repo&lt;script&gt;</b>:
+    <i>docs: typo&lt;/i&gt; &lt;b&gt;Verified · GNOME Keyring&lt;/b&gt;</i>\nevil&lt;/b&gt;&lt;b&gt;git",
+    mock.lastNotify().body)`, replacing the seven asserts and the three group comments.'
+  decision: FIX
+  score: 5
+  reason: Shorter and strictly stronger (closes the negative-only check on the process name); small.
+  same: []
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 5
+    reason: Exact expected body is stronger and shorter.
+    task: t1
+- id: b1-8
+  at:
+  - internal/notification/desktop_test.go:424-457
+  reach:
+  - internal/notification/desktop_test.go:419-457
+  row: test coverage
+  claim: The changeset escapes values on every branch of formatBody, but its regression test drives only
+    the GPG branch. The SSH label and destination (desktop.go:626, 628), item labels (:638, :663), search
+    attrs (:612) and the Client/InvokerName fallback (:653-657) can lose their escaping without a test
+    failing.
+  fix: 'Make the test table-driven: one case per formatBody branch (GPG, SSH, get-secret with chain, search
+    with chain, get-secret fallback with InvokerName), each with a hostile value and an exact expected
+    body (as in b1-7).'
+  decision: FIX
+  score: 5
+  reason: Pins a security fix that is otherwise only one-ninth covered; also the pin §6 asks for before
+    b1-1/b1-3/b1-4 reshape formatBody.
+  same:
+  - b1-7
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 5
+    reason: Pins every escaped branch before t1 reshapes formatBody (§6 pin before you move).
+    task: t1
+- id: b1-11
+  at:
+  - internal/notification/desktop.go:634
+  reach:
+  - internal/notification/desktop.go:634
+  row: misleading name
+  claim: The comment says the chain prints in "parent → child order", but SenderInfo.ProcessChain runs
+    from requestor to init (approval/types.go:46) and the body prints the requestor first, joined by "
+    ← ".
+  fix: '"// New format: the item label, then the process chain from the requestor up to its ancestors."'
+  decision: PLAN
+  score: 9
+  reason: A false comment, but on an unchanged line; if b1-3 rewrites this block it becomes changed lines
+    and should be fixed there.
+  same: []
+  triage:
+    id: b1-11
+    decision: FIX
+    score: 9
+    reason: Overruled PLAN. t1 rewrites the block for b1-3, so the false "parent → child" comment becomes
+      changed lines.
+    task: t1
+check: ok

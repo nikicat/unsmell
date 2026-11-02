@@ -1,0 +1,13 @@
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..406fdd5 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -550,7 +550,7 @@ mod tests {
+         let store = LogCache::open_in_memory().unwrap();
+         let mut with_ts = make_test_log(100, 0, BLOCK_HASH_A);
+         with_ts.block_timestamp = Some(1_700_000_123);
+-        let without_ts = make_test_log(101, 0, BLOCK_HASH_B); // block_timestamp: None
++        let without_ts = make_test_log(101, 0, BLOCK_HASH_B);
+         store.insert_logs(&FH, &[with_ts, without_ts]).unwrap();
+         let got = store.get_logs_in_range(&FH, 100, 101).unwrap();
+         assert_eq!(got[0].block_timestamp, Some(1_700_000_123));

@@ -1,0 +1,34 @@
+id: b2ec858b6d
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - src/bin/chainfold/signature_cache.rs:37
+  - src/bin/chainfold/signature_cache.rs:56
+  reach:
+  - src/bin/chainfold/signature_cache.rs:37
+  - src/bin/chainfold/signature_cache.rs:56
+  row: duplication
+  claim: The CacheError to SignatureError::Cache mapping closure is written twice. The orphan rule keeps
+    a From impl out of the bin.
+  fix: 'A private fn cache_error(e: CacheError) -> SignatureError in the adapter, used as .map_err(cache_error).'
+  decision: SKIP
+  score: 3
+  reason: Trivial and only twice, on unchanged lines. Under the threshold.
+  same: []
+  triage:
+    id: b1-7
+    decision: SKIP
+    score: 3
+    reason: Two short closures on unchanged lines.
+    task: t5
+check: ok

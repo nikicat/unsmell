@@ -1,0 +1,48 @@
+id: ce55207bab
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - internal/proxy/prompter.go:55
+  - internal/proxy/prompter.go:112-115
+  - internal/proxy/prompter.go:188-193
+  reach:
+  - internal/proxy/prompter.go:53-58
+  - internal/proxy/prompter.go:75-125
+  - internal/proxy/prompter.go:181-194
+  row: algebraic blindness
+  claim: when RequestName is refused (prompter.go:112-115) newPrompterBridge returns a non-nil bridge
+    that owns and exports nothing; owned exists only so close() can tell that inert bridge from a live
+    one. With the deferred activation removed by the changeset (HEAD prompter.go:128-175), an inert bridge
+    can never become live
+  fix: newPrompterBridge returns (nil, nil) when the claim is refused (keeping the log line); delete owned;
+    close() releases the name unconditionally; mu guards callbacks only
+  decision: ASK
+  score: 5
+  reason: a second, further shape stacked on b1-1; changes which state Proxy.prompter holds (nil instead
+    of an inert bridge), and a double Proxy.Close would issue a second, harmless ReleaseName
+  same:
+  - b1-1
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 5
+    reason: a further shape; it changes Proxy.prompter from an inert bridge to nil, which is a second
+      defensible design
+    task: t2
+    note: the patch also rewrites the newPrompterBridge doc and the proxy.go comment, which t3 and t4
+      touch; if t2 is taken with them, take t2's constructor doc
+    after:
+    - t1
+after:
+- 7925d2e113
+check: ok

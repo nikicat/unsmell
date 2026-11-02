@@ -1,0 +1,560 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 5900c2e..cbd057d 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -32,13 +32,14 @@ import re
+ import shutil
+ import subprocess
+ import sys
++from dataclasses import dataclass
+ from datetime import date
+ from pathlib import Path
+ 
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+ 
+-from run import CACHE, SKILL, Fixture, claude, git
++from run import CACHE, SKILL, Fixture, Report, RunDir, claude, git, round_ref
+ 
+ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+@@ -72,68 +73,127 @@ def change_id(patch):
+     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
+ 
+ 
++@dataclass(frozen=True)
++class Rounds:
++    """The stored rounds of one run in evals/rounds/<run>/, which rebuild a review worktree without the run directory."""
++
++    run: str
++
++    @property
++    def dir(self):
++        return ROUNDS / self.run
++
++    def save_meta(self, fixture, skill, count):
++        """Writes meta.yaml: the run's fixture, the hash of the SKILL.md it ran and its number of rounds."""
++        self.dir.mkdir(parents=True, exist_ok=True)
++        dump(self.dir / "meta.yaml", {"fixture": fixture, "skill": skill, "rounds": count})
++
++    def patch(self, n):
++        """Returns the path of the full patch of round n."""
++        return self.dir / f"round-{n}.patch"
++
++    def report(self, n):
++        """Returns the path of the skill's final message in round n."""
++        return self.dir / f"round-{n}.md"
++
++    def record(self, n):
++        """Returns the directory that keeps the skill's records of round n."""
++        return self.dir / f"round-{n}"
++
++
++@dataclass(frozen=True)
++class Task:
++    """One task of a skill run: the findings that one editor fixed in one patch."""
++
++    name: str
++    findings: list[dict]  # each with its entry of decisions.yaml under "triage"
++    after: list[str]  # the tasks whose changes this one is stacked on
++
++    @classmethod
++    def of(cls, name, findings):
++        """Returns the task called name. Its first finding with an `after` names the tasks it is stacked on."""
++        after = next((f["triage"]["after"] for f in findings if f["triage"].get("after")), [])
++        return cls(name, findings, re.findall(r"\w+", after) if isinstance(after, str) else after)
++
++
+ def tasks(record):
+-    """Yields (task, findings, decisions) for each task of one skill run directory (§3.0 of SKILL.md),
+-    each finding joined with its decision entry."""
++    """Returns the tasks of one skill run directory (SKILL.md §3.0). Each finding carries its decision entry under triage."""
+     findings = {f["id"]: f for p in sorted((record / "findings").glob("*.yaml"))
+                 for f in (load(p) or {}).get("findings") or []}
+     by_task = {}
+     for d in load(record / "decisions.yaml") or []:
+         if d.get("task"):
+             by_task.setdefault(d["task"], []).append({**findings.get(d["id"], {"id": d["id"]}), "triage": d})
+-    yield from by_task.items()
+-
+-
+-def extract(run_dir):
+-    """Stores the rounds of one run and returns the ids of the changes in them."""
+-    run_dir = run_dir.resolve()
+-    repo, run = run_dir / "repo", run_dir.name
+-    report = json.loads((run_dir / "report.json").read_text())
+-    out = ROUNDS / run
+-    out.mkdir(parents=True, exist_ok=True)
+-    skill = run_dir / "skill.sha256"
+-    dump(out / "meta.yaml", {
+-        "fixture": report["fixture"],
+-        "skill": skill.read_text().strip() if skill.exists() else "unknown",
+-        "rounds": len(report["rounds"]),
+-    })
+-    ids = []
+-    for r in report["rounds"]:
+-        n = r["round"]
+-        (out / f"round-{n}.patch").write_text(
+-            git(repo, "diff", "--binary", f"refs/rounds/{n - 1}", f"refs/rounds/{n}"))
+-        result = json.loads((run_dir / f"round-{n}.json").read_text() or "{}").get("result", "")
+-        (out / f"round-{n}.md").write_text(result)
+-        for record in sorted((run_dir / f"round-{n}").glob("*/decisions.yaml")):
+-            record = record.parent
+-            shutil.copytree(record, out / f"round-{n}" / record.name, dirs_exist_ok=True,
++    return [Task.of(name, members) for name, members in by_task.items()]
++
++
++def skill_runs(run, n):
++    """Returns the skill run directories of round n that hold decisions."""
++    return sorted(p.parent for p in run.round_record(n).glob("*/decisions.yaml"))
++
++
++def store_rounds(run, report):
++    """Stores the patch, the final message and the skill's records of each round of run in evals/rounds/."""
++    rounds = Rounds(run.name)
++    rounds.save_meta(report.fixture, run.skill(), len(report.rounds))
++    for n in (r.round for r in report.rounds):
++        rounds.patch(n).write_text(git(run.repo, "diff", "--binary", round_ref(n - 1), round_ref(n)))
++        rounds.report(n).write_text(run.round_result(n))
++        for record in skill_runs(run, n):
++            shutil.copytree(record, rounds.record(n) / record.name, dirs_exist_ok=True,
+                             ignore=shutil.ignore_patterns("index", "worktrees", "target"))
+-            by_task = {}
+-            for task, members in tasks(record):
+-                patch_file = record / "fixes" / f"{task}.patch"
+-                patch = patch_file.read_text() if patch_file.exists() else ""
+-                cid = change_id(patch) if patch.strip() else f"{run}-{n}-{task}"
+-                d = CHANGES / cid
+-                d.mkdir(parents=True, exist_ok=True)
+-                meta = load(d / "change.yaml") if (d / "change.yaml").exists() else {
+-                    "id": cid, "fixture": report["fixture"], "seen": [], "judge": None, "labels": []}
+-                seen = {"run": run, "round": n, "task": task}
+-                if seen not in meta["seen"]:
+-                    meta["seen"].append(seen)
+-                    # The findings and decisions of the first sighting, which the patch was made for.
+-                    meta.setdefault("findings", members)
+-                if not (d / "change.patch").exists():
+-                    (d / "change.patch").write_text(patch)
+-                dump(d / "change.yaml", meta)
+-                ids.append(cid)
+-                by_task[task] = (cid, next((f["triage"]["after"] for f in members if f["triage"].get("after")), None))
+-            # A stacked change (SKILL.md §3.0, step 4) is reviewed on top of the change it starts from.
+-            for cid, after in by_task.values():
+-                parents = [by_task[t][0] for t in (re.findall(r"\w+", after) if isinstance(after, str) else after or []) if t in by_task]
+-                if parents:
+-                    meta = load(CHANGES / cid / "change.yaml")
+-                    meta["after"] = parents
+-                    dump(CHANGES / cid / "change.yaml", meta)
++
++
++def record_change(record, task, fixture, sighting):
++    """Adds the change that task made in one skill run directory to the dataset, and returns its id.
++
++    sighting is an entry of the change's seen list. It names the run, round and task the change came from.
++    A change that the dataset already holds gains the sighting when it is new.
++    """
++    patch_file = record / "fixes" / f"{task.name}.patch"
++    patch = patch_file.read_text() if patch_file.exists() else ""
++    cid = change_id(patch) if patch.strip() else f"{sighting['run']}-{sighting['round']}-{task.name}"
++    d = CHANGES / cid
++    d.mkdir(parents=True, exist_ok=True)
++    meta = load(d / "change.yaml") if (d / "change.yaml").exists() else {
++        "id": cid, "fixture": fixture, "seen": [], "judge": None, "labels": []}
++    if sighting not in meta["seen"]:
++        meta["seen"].append(sighting)
++        # The findings and decisions of the first sighting, which the patch was made for.
++        meta.setdefault("findings", task.findings)
++    if not (d / "change.patch").exists():
++        (d / "change.patch").write_text(patch)
++    dump(d / "change.yaml", meta)
++    return cid
++
++
++def link_stacked(tasks, changes):
++    """Stacks each task's change on the changes of the tasks it starts from (SKILL.md §3.0, step 4).
++
++    changes maps a task's name to the id of its change. A stacked change is reviewed on top of its parents.
++    """
++    for task in tasks:
++        parents = [changes[t] for t in task.after if t in changes]
++        if parents:
++            path = CHANGES / changes[task.name] / "change.yaml"
++            meta = load(path)
++            meta["after"] = parents
++            dump(path, meta)
++
++
++def extract(path):
++    """Adds the changes of one run to the dataset and stores its rounds. Returns the ids of the changes it saw."""
++    run = RunDir(path.resolve())
++    report = Report.load(run.report)
++    store_rounds(run, report)
++    ids = set()
++    for n in (r.round for r in report.rounds):
++        for record in skill_runs(run, n):
++            found = tasks(record)
++            changes = {t.name: record_change(record, t, report.fixture,
++                                             {"run": run.name, "round": n, "task": t.name}) for t in found}
++            link_stacked(found, changes)
++            ids |= set(changes.values())
+     return ids
+ 
+ 
+@@ -191,7 +251,7 @@ def judge(ids, model, jobs):
+             "have been made, or made worse code) or neutral. Judge the code, not the skill's own report. "
+             "The skill's rules are below for reference; a change can follow them and still be bad.\n\n"
+             f"## Labelled examples, most similar first\n\n{examples or '(none yet)'}\n\n"
+-            f"## The round's own report\n\n{(ROUNDS / first['run'] / f'round-{first['round']}.md').read_text()[:6000]}\n\n"
++            f"## The round's own report\n\n{Rounds(first['run']).report(first['round']).read_text()[:6000]}\n\n"
+             f"## The findings and decisions the change was made for\n\n{yaml.safe_dump(meta['findings'], allow_unicode=True)}\n\n"
+             f"## The change to label\n\n```diff\n{(CHANGES / meta['id'] / 'change.patch').read_text()}```\n\n"
+             f"## The skill\n\n{skill}")
+@@ -235,18 +295,18 @@ def worktree(meta, root=None):
+     built in a scratch repo and fetched into it, so the review repo is reset, never recreated.
+     """
+     first = meta["seen"][0]
+-    rounds = ROUNDS / first["run"]
++    rounds = Rounds(first["run"])
+     root = root or REVIEW
+     build = root / "build"
+     if build.exists():
+         shutil.rmtree(build)
+-    built = Fixture.named(meta["fixture"]).materialize(build)
++    built = Fixture.named(meta["fixture"]).materialize(build / "repo")
+     git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+     git(built, "tag", "round-0")
+     for n in range(1, first["round"]):
+-        git(built, "apply", "--binary", str(rounds / f"round-{n}.patch"))
++        git(built, "apply", "--binary", str(rounds.patch(n)))
+         git(built, "add", "-A")
+         git(built, "commit", "-q", "-m", f"round {n}")
+     repo = root / "repo"
+@@ -312,7 +372,7 @@ def show(meta, rebuild=True):
+     print(f"\nStaged, the changeset under review (git diff --cached):\n{git(repo, 'diff', color, '--cached', '--stat').rstrip()}")
+     print(paint(f"\n  cd {repo} && git diff        # the change", "2"))
+     print(paint("  git diff --cached            # the changeset under review, which the findings call \"the change\"", "2"))
+-    print(paint(f"  report: {ROUNDS / first['run'] / f'round-{first['round']}.md'}", "2"))
++    print(paint(f"  report: {Rounds(first['run']).report(first['round'])}", "2"))
+     print(paint(f"  labels: {CHANGES / meta['id'] / 'change.yaml'}", "2"))
+     print("  evals/changes.py label good|bad|neutral|unsure [-f FINDING] -n NOTE")
+ 
+@@ -396,7 +456,7 @@ def main():
+ 
+     if a.cmd == "extract":
+         for run in a.runs:
+-            print(f"{run.name}: {len(set(extract(run)))} changes")
++            print(f"{run.name}: {len(extract(run))} changes")
+     elif a.cmd == "judge":
+         judge(a.ids, a.model, a.jobs)
+     elif a.cmd == "check":
+diff --git a/evals/run.py b/evals/run.py
+index 7a1f274..0296e43 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -12,7 +12,7 @@ import subprocess
+ import sys
+ import tomllib
+ from concurrent.futures import ThreadPoolExecutor
+-from dataclasses import dataclass, field
++from dataclasses import asdict, dataclass, field
+ from datetime import datetime
+ from pathlib import Path
+ 
+@@ -155,9 +155,8 @@ class Fixture:
+     def name(self):
+         return self.dir.name
+ 
+-    def materialize(self, workdir):
+-        """Returns a new repo whose HEAD is the fixture's base and whose working tree is its head."""
+-        repo = workdir / "repo"
++    def materialize(self, repo):
++        """Makes repo a new repo whose HEAD is the fixture's base and whose working tree is its head, and returns it."""
+         repo.mkdir(parents=True)
+         git(repo, "init", "-q", "-b", "main")
+         git(repo, "config", "user.email", "eval@unsmell")
+@@ -210,59 +209,174 @@ def claude(*args, stdin="", cwd=None, log=None):
+     return Reply(reply.get("result", ""), reply.get("structured_output"), reply.get("total_cost_usd", 0.0))
+ 
+ 
+-def run_skill(repo, log, args):
+-    """Runs one round of the skill in repo and returns its cost in USD.
++def round_ref(n):
++    """Returns the ref of the tree after round n. Round 0 is the fixture's head."""
++    return f"refs/rounds/{n}"
+ 
+-    Errors when the claude call fails. The log and the skill's record are kept either way.
+-    """
+-    try:
+-        return claude(f"/unsmell:unsmell {args}".strip(), "--plugin-dir", str(SKILL_REPO),
+-                      "--permission-mode", "auto", "--permission-prompts", "none",
+-                      # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
+-                      "--allowedTools", *ALLOWED, cwd=repo, log=log).cost_usd
+-    finally:
+-        # The skill's own record of the round (§3.0 of SKILL.md): batches, findings, decisions.
+-        record = repo / ".git" / "unsmell"
+-        if record.exists():
+-            shutil.move(record, log.with_suffix(""))
+-            git(repo, "worktree", "prune")  # editors' worktrees the skill left behind
+-
+-
+-def evaluate(fixture, rounds, args):
+-    workdir = CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}"
+-    repo = fixture.materialize(workdir)
+-    # Which skill text the rounds ran, so that their changes can be traced to it.
+-    (workdir / "skill.sha256").write_text(hashlib.sha256(SKILL.read_bytes()).hexdigest())
+-    trees, deltas, report = [snapshot(repo)], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
+-    converged = False
+-    git(repo, "update-ref", "refs/rounds/0", git(repo, "commit-tree", trees[0], "-m", "round 0").strip())
+-    for n in range(1, rounds + 1):
++
++def record_round(repo, n, tree):
++    """Points round n's ref in repo at a commit of tree."""
++    git(repo, "update-ref", round_ref(n), git(repo, "commit-tree", tree, "-m", f"round {n}").strip())
++
++
++@dataclass(frozen=True)
++class RunDir:
++    """The directory of one run of the rounds on one fixture, which changes.py extracts."""
++
++    path: Path
++
++    @classmethod
++    def new(cls, fixture):
++        """Returns the run directory for a run of fixture that starts now."""
++        return cls(CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}")
++
++    @property
++    def name(self):
++        return self.path.name
++
++    @property
++    def repo(self):
++        """The fixture's repo that the rounds run in."""
++        return self.path / "repo"
++
++    @property
++    def report(self):
++        return self.path / "report.json"
++
++    @property
++    def skill_hash(self):
++        return self.path / "skill.sha256"
++
++    def round_log(self, n):
++        """Returns the path of claude's output in round n."""
++        return self.path / f"round-{n}.json"
++
++    def round_record(self, n):
++        """Returns the directory of the skill's own records of round n (SKILL.md §3.0)."""
++        return self.path / f"round-{n}"
++
++    def record_skill(self):
++        """Records the hash of the SKILL.md that the rounds run, so that their changes can be traced to it."""
++        self.skill_hash.write_text(hashlib.sha256(SKILL.read_bytes()).hexdigest())
++
++    def skill(self):
++        """Returns the hash of the SKILL.md that the rounds ran, or "unknown" for a run that did not record it."""
++        return self.skill_hash.read_text().strip() if self.skill_hash.exists() else "unknown"
++
++    def round_result(self, n):
++        """Returns the skill's final message in round n, or "" when claude printed none."""
++        return json.loads(self.round_log(n).read_text() or "{}").get("result", "")
++
++
++@dataclass(frozen=True)
++class Round:
++    """What one round changed and cost. The fields are the keys of a round in report.json."""
++
++    round: int
++    cost_usd: float
++    added: int
++    removed: int
++    reversals: int
++    rework: int
++    check: bool
++    tree: str
++
++    @property
++    def changed(self):
++        return bool(self.added or self.removed)
++
++    def __str__(self):
++        return (f"round {self.round}: +{self.added} -{self.removed} reversals={self.reversals} "
++                f"rework={self.rework} check={'ok' if self.check else 'FAIL'} ${self.cost_usd:.2f}")
++
++
++@dataclass
++class Report:
++    """The outcome of one run, stored as its report.json."""
++
++    fixture: str
++    workdir: Path
++    rounds: list[Round] = field(default_factory=list)
++    error: str | None = None  # the round whose claude call failed, and why
++
++    @property
++    def converged(self):
++        """Whether the last round changed nothing."""
++        return bool(self.rounds) and not self.rounds[-1].changed
++
++    @property
++    def oscillated(self):
++        """Whether a round brought back lines that an earlier round removed."""
++        return any(r.reversals for r in self.rounds)
++
++    def save(self, path):
++        report = {"fixture": self.fixture, "workdir": str(self.workdir), "rounds": [asdict(r) for r in self.rounds]}
++        if self.error:
++            report["error"] = self.error
++        report |= {"converged": self.converged, "oscillated": self.oscillated}
++        path.write_text(json.dumps(report, indent=2))
++
++    @classmethod
++    def load(cls, path):
++        report = json.loads(path.read_text())
++        return cls(report["fixture"], Path(report["workdir"]), [Round(**r) for r in report["rounds"]],
++                   report.get("error"))
++
++    def __str__(self):
++        return (f"{self.fixture}: {'converged' if self.converged else 'did not converge'} in "
++                f"{len(self.rounds)} rounds, {'oscillated' if self.oscillated else 'no reversals'}. {self.workdir}")
++
++
++@dataclass(frozen=True)
++class Eval:
++    """The settings that every fixture of one invocation runs with."""
++
++    rounds: int  # the most rounds per fixture
++    skill_args: str  # the arguments each round passes to the skill
++
++    def run_skill(self, run, n):
++        """Runs round n of the skill in the run's repo and returns its cost in USD.
++
++        Errors when the claude call fails. The log and the skill's record are kept either way.
++        """
+         try:
+-            cost = run_skill(repo, workdir / f"round-{n}.json", args)
+-        except RuntimeError as e:
+-            report["error"] = f"round {n}: {e}"
+-            print(f"{fixture.name} round {n}: claude failed: {e}", flush=True)
+-            break
+-        trees.append(snapshot(repo))
+-        delta = Delta.between(repo, trees[-2], trees[-1])
+-        ok = fixture.run_check(repo).returncode == 0
+-        report["rounds"].append({
+-            "round": n, "cost_usd": cost, "added": len(delta.added), "removed": len(delta.removed),
+-            "reversals": delta.reversals(deltas), "rework": delta.rework(deltas), "check": ok, "tree": trees[-1],
+-        })
+-        git(repo, "update-ref", f"refs/rounds/{n}",
+-            git(repo, "commit-tree", trees[-1], "-m", f"round {n}").strip())
+-        print(f"{fixture.name} round {n}: +{len(delta.added)} -{len(delta.removed)} "
+-              f"reversals={report['rounds'][-1]['reversals']} rework={report['rounds'][-1]['rework']} check={'ok' if ok else 'FAIL'} ${cost:.2f}",
+-              flush=True)
+-        if delta.empty():
+-            converged = True
+-            break
+-        deltas.append(delta)
+-    report["converged"] = converged
+-    report["oscillated"] = any(r["reversals"] for r in report["rounds"])
+-    (workdir / "report.json").write_text(json.dumps(report, indent=2))
+-    return report
++            return claude(f"/unsmell:unsmell {self.skill_args}".strip(), "--plugin-dir", str(SKILL_REPO),
++                          "--permission-mode", "auto", "--permission-prompts", "none",
++                          # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
++                          "--allowedTools", *ALLOWED, cwd=run.repo, log=run.round_log(n)).cost_usd
++        finally:
++            record = run.repo / ".git" / "unsmell"
++            if record.exists():
++                shutil.move(record, run.round_record(n))
++                git(run.repo, "worktree", "prune")  # editors' worktrees the skill left behind
++
++    def evaluate(self, fixture):
++        """Runs the skill on fixture until a round changes nothing, and returns the report it saves in the run directory."""
++        run = RunDir.new(fixture)
++        repo = fixture.materialize(run.repo)
++        run.record_skill()
++        report = Report(fixture.name, run.path)
++        trees, deltas = [snapshot(repo)], []
++        record_round(repo, 0, trees[0])
++        for n in range(1, self.rounds + 1):
++            try:
++                cost = self.run_skill(run, n)
++            except RuntimeError as e:
++                report.error = f"round {n}: {e}"
++                print(f"{fixture.name} round {n}: claude failed: {e}", flush=True)
++                break
++            trees.append(snapshot(repo))
++            delta = Delta.between(repo, trees[-2], trees[-1])
++            done = Round(n, cost, len(delta.added), len(delta.removed), delta.reversals(deltas),
++                         delta.rework(deltas), check=fixture.run_check(repo).returncode == 0, tree=trees[-1])
++            report.rounds.append(done)
++            record_round(repo, n, done.tree)
++            print(f"{fixture.name} {done}", flush=True)
++            if not done.changed:
++                break
++            deltas.append(delta)
++        report.save(run.report)
++        return report
+ 
+ 
+ def main():
+@@ -276,10 +390,9 @@ def main():
+         sys.exit(f"{CONFIG} has no .credentials.json. Link it to your Claude login first, see evals/README.md.")
+     fixtures = [Fixture.load(f.resolve()) for f in args.fixtures]
+     with ThreadPoolExecutor(args.jobs) as pool:
+-        reports = pool.map(lambda f: evaluate(f, args.rounds, args.args), fixtures)
+-    for r in reports:
+-        print(f"{r['fixture']}: {'converged' if r['converged'] else 'did not converge'} in "
+-              f"{len(r['rounds'])} rounds, {'oscillated' if r['oscillated'] else 'no reversals'}. {r['workdir']}")
++        reports = pool.map(Eval(args.rounds, args.args).evaluate, fixtures)
++    for report in reports:
++        print(report)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/evals/test_run.py b/evals/test_run.py
+index f3c1cd5..ea2e4b3 100755
+--- a/evals/test_run.py
++++ b/evals/test_run.py
+@@ -1,9 +1,11 @@
+ #!/usr/bin/env python3
+-"""Checks the round diffing of run.py on a scratch repo. Run: python3 evals/test_run.py"""
++"""Checks the round diffing and the report of run.py in a scratch directory. Run: python3 evals/test_run.py"""
+ import tempfile
+ from pathlib import Path
+ 
+-from run import CACHE, Delta, git, snapshot
++import json
++
++from run import CACHE, Delta, Report, Round, git, snapshot
+ 
+ 
+ def test_reversal(root):
+@@ -25,8 +27,25 @@ def test_reversal(root):
+     assert git(repo, "status", "--porcelain") == "?? a.py\n", "snapshot must not stage"
+ 
+ 
++def test_report_round_trip(root):
++    rounds = [Round(1, 0.5, 3, 2, 0, 0, True, "t1"), Round(2, 0.25, 0, 0, 0, 0, False, "t2")]
++    report = Report("demo", root / "run", rounds, error=None)
++    path = root / "report.json"
++    report.save(path)
++    assert Report.load(path) == report
++    saved = json.loads(path.read_text())
++    assert list(saved) == ["fixture", "workdir", "rounds", "converged", "oscillated"], saved
++    assert list(saved["rounds"][0]) == ["round", "cost_usd", "added", "removed", "reversals", "rework", "check", "tree"]
++    assert saved["converged"] and not saved["oscillated"], saved
++    report.error = "round 3: claude failed"
++    report.save(path)
++    assert Report.load(path).error == report.error
++    assert list(json.loads(path.read_text()))[3] == "error"
++
++
+ if __name__ == "__main__":
+     CACHE.mkdir(parents=True, exist_ok=True)
+     with tempfile.TemporaryDirectory(dir=CACHE) as root:
+         test_reversal(Path(root))
++        test_report_round_trip(Path(root))
+     print("ok")

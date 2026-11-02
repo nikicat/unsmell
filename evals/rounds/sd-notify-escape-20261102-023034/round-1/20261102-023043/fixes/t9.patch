@@ -1,0 +1,277 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..edcd25b 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -23,16 +23,16 @@ const (
+ 	notifyInterface = "org.freedesktop.Notifications"
+ )
+ 
+-// Notifier defines the interface for sending desktop notifications.
++// Interface for sending desktop notifications.
+ type Notifier interface {
+-	// Notify sends a notification and returns its ID.
++	// Sends a notification and returns its ID.
+ 	// The actions parameter takes alternating (id, label) pairs per the FreeDesktop spec.
+ 	Notify(summary, body, icon string, actions []string) (uint32, error)
+-	// Close closes a notification by ID.
++	// Closes a notification by ID.
+ 	Close(id uint32) error
+ }
+ 
+-// Approver resolves approval requests.
++// Interface that resolves approval requests.
+ type Approver interface {
+ 	Approve(id string) error
+ 	Deny(id string) error
+@@ -40,14 +40,14 @@ type Approver interface {
+ 	ApproveAndAutoApprove(id string) error
+ }
+ 
+-// Action represents a user interaction with a notification button.
++// A user interaction with a notification button.
+ type Action struct {
+ 	NotificationID uint32
+ 	ActionKey      string // "approve" or "deny"
+ }
+ 
+-// DBusNotifier sends notifications via D-Bus and listens for action button clicks.
+-// It automatically reconnects if the session bus connection drops.
++// D-Bus notification sender that also listens for action button clicks.
++// It reconnects automatically if the session bus connection drops.
+ type DBusNotifier struct {
+ 	mu      sync.Mutex
+ 	conn    *dbus.Conn
+@@ -56,7 +56,7 @@ type DBusNotifier struct {
+ 	done    chan struct{}
+ }
+ 
+-// NewDBusNotifier creates a notifier using a private session bus connection and
++// Creates a notifier using a private session bus connection and
+ // starts listening for ActionInvoked signals.
+ func NewDBusNotifier() (*DBusNotifier, error) {
+ 	n := &DBusNotifier{
+@@ -74,7 +74,7 @@ func NewDBusNotifier() (*DBusNotifier, error) {
+ 	return n, nil
+ }
+ 
+-// connect establishes a private session bus connection and subscribes to
++// Establishes a private session bus connection and subscribes to
+ // ActionInvoked signals. Must be called with n.mu held (or during construction).
+ func (n *DBusNotifier) connect() error {
+ 	conn, err := dbus.ConnectSessionBus()
+@@ -95,8 +95,8 @@ func (n *DBusNotifier) connect() error {
+ 	return nil
+ }
+ 
+-// reconnect closes the dead connection and establishes a new one.
+-// It creates a fresh signals channel and restarts the processSignals goroutine
++// Closes the dead connection and establishes a new one.
++// Creates a fresh signals channel and restarts the processSignals goroutine
+ // (the old one exits when godbus closes its channel via Terminate).
+ // Must be called with n.mu held.
+ func (n *DBusNotifier) reconnect() error {
+@@ -112,12 +112,12 @@ func (n *DBusNotifier) reconnect() error {
+ 	return nil
+ }
+ 
+-// Actions returns a channel that receives action button clicks.
++// Returns a channel that receives action button clicks.
+ func (n *DBusNotifier) Actions() <-chan Action {
+ 	return n.actions
+ }
+ 
+-// Stop stops the signal listener goroutine and closes the D-Bus connection.
++// Stops the signal listener goroutine and closes the D-Bus connection.
+ func (n *DBusNotifier) Stop() {
+ 	close(n.done)
+ 	n.mu.Lock()
+@@ -156,8 +156,8 @@ func (n *DBusNotifier) processSignals(ch <-chan *dbus.Signal) {
+ 	}
+ }
+ 
+-// Notify sends a desktop notification with optional action buttons.
+-// If the D-Bus connection is dead, it reconnects and retries once.
++// Sends a desktop notification with optional action buttons.
++// Reconnects and retries once if the D-Bus connection is dead.
+ func (n *DBusNotifier) Notify(summary, body, icon string, actions []string) (uint32, error) {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+@@ -184,9 +184,9 @@ func (n *DBusNotifier) doNotifyFull(summary, body, icon string, actions []string
+ 		"secrets-dispatcher", // app_name
+ 		uint32(0),            // replaces_id (0 = new notification)
+ 		icon,                 // app_icon
+-		summary,              // summary
+-		body,                 // body
+-		actions,              // actions (alternating id, label pairs)
++		summary,
++		body,
++		actions, // actions (alternating id, label pairs)
+ 		map[string]dbus.Variant{
+ 			"urgency": dbus.MakeVariant(urgency),
+ 		},
+@@ -203,7 +203,7 @@ func (n *DBusNotifier) doNotifyFull(summary, body, icon string, actions []string
+ 	return id, nil
+ }
+ 
+-// NotifyPersistent sends a critical notification that never auto-expires.
++// Sends a critical notification that never auto-expires.
+ // Dismiss it with Close (CloseNotification).
+ func (n *DBusNotifier) NotifyPersistent(summary, body, icon string) (uint32, error) {
+ 	n.mu.Lock()
+@@ -219,8 +219,8 @@ func (n *DBusNotifier) NotifyPersistent(summary, body, icon string) (uint32, err
+ 	return id, err
+ }
+ 
+-// Close closes a notification by ID.
+-// If the D-Bus connection is dead, it reconnects and retries once.
++// Closes a notification by ID.
++// Reconnects and retries once if the D-Bus connection is dead.
+ func (n *DBusNotifier) Close(id uint32) error {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+@@ -244,8 +244,8 @@ func (n *DBusNotifier) doClose(id uint32) error {
+ 	return nil
+ }
+ 
+-// delayGroup schedules callbacks by key with a grace period.
+-// If Cancel is called before the timer fires, the callback is suppressed.
++// Key-based callback scheduler with a grace period.
++// Calling Cancel before the timer fires suppresses the callback.
+ type delayGroup struct {
+ 	mu     sync.Mutex
+ 	timers map[string]*time.Timer
+@@ -255,9 +255,9 @@ func newDelayGroup() *delayGroup {
+ 	return &delayGroup{timers: make(map[string]*time.Timer)}
+ }
+ 
+-// Schedule registers a callback to fire after delay. If a timer already exists
+-// for the key it is replaced. The callback is only invoked if the timer is
+-// still pending (not cancelled) when it fires.
++// Registers a callback to fire after delay, replacing any timer already set
++// for the key. The callback runs only if the timer is still pending (not
++// cancelled) when it fires.
+ func (g *delayGroup) Schedule(key string, delay time.Duration, fn func()) {
+ 	g.mu.Lock()
+ 	defer g.mu.Unlock()
+@@ -277,7 +277,7 @@ func (g *delayGroup) Schedule(key string, delay time.Duration, fn func()) {
+ 	})
+ }
+ 
+-// Cancel stops a pending timer and returns true if one was pending.
++// Stops a pending timer and reports whether one was pending.
+ func (g *delayGroup) Cancel(key string) bool {
+ 	g.mu.Lock()
+ 	timer, ok := g.timers[key]
+@@ -291,7 +291,7 @@ func (g *delayGroup) Cancel(key string) bool {
+ 	return ok
+ }
+ 
+-// Handler receives approval events and shows desktop notifications.
++// Approval event receiver that shows desktop notifications.
+ // It also processes notification action button clicks (Approve/Deny).
+ type Handler struct {
+ 	notifier            Notifier
+@@ -307,7 +307,7 @@ type Handler struct {
+ 	requests      map[uint32]string // notification ID -> request ID (reverse)
+ 	pending       *delayGroup       // notifications waiting for the grace period
+ 
+-	// cancelledRequests stores recently cancelled requests for auto-approve lookup.
++	// Recently cancelled requests kept for auto-approve lookup.
+ 	// Keys are request IDs, values expire after 5 minutes.
+ 	cancelledRequests map[string]cancelledEntry
+ }
+@@ -317,7 +317,6 @@ type cancelledEntry struct {
+ 	expiresAt time.Time
+ }
+ 
+-// NewHandler creates a notification handler.
+ // baseURL is the web UI URL opened when the user clicks the notification body.
+ // autoApproveDuration controls the label shown on the "Approve Nm" button and
+ // the body text of the post-timeout auto-approve notification.
+@@ -339,8 +338,8 @@ func NewHandler(notifier Notifier, approver Approver, baseURL string, showPIDs b
+ 	}
+ }
+ 
+-// ListenActions reads from the actions channel and resolves requests.
+-// It blocks until the channel is closed or ctx is cancelled.
++// Reads from the actions channel and resolves requests.
++// Blocks until the channel is closed or ctx is cancelled.
+ func (h *Handler) ListenActions(ctx context.Context, actions <-chan Action) {
+ 	for {
+ 		select {
+@@ -405,7 +404,7 @@ func (h *Handler) handleAction(action Action) {
+ 	slog.Info("resolved request from notification", "action", action.ActionKey, "request_id", reqID)
+ }
+ 
+-// OnEvent implements approval.Observer.
++// Implements approval.Observer.
+ func (h *Handler) OnEvent(event approval.Event) {
+ 	switch event.Type {
+ 	case approval.EventRequestCreated:
+@@ -418,7 +417,7 @@ func (h *Handler) OnEvent(event approval.Event) {
+ 	}
+ }
+ 
+-// notificationMeta returns the summary title and icon for a request based on its type.
++// Returns the summary title and icon for a request based on its type.
+ func (h *Handler) notificationMeta(req *approval.Request) (summary, icon string) {
+ 	switch req.Type {
+ 	case approval.RequestTypeGPGSign:
+@@ -436,7 +435,7 @@ func (h *Handler) notificationMeta(req *approval.Request) (summary, icon string)
+ 	}
+ }
+ 
+-// formatDurationShort formats a duration as a compact human-readable string (e.g. "2m", "90s").
++// Formats a duration as a compact human-readable string (e.g. "2m", "90s").
+ func formatDurationShort(d time.Duration) string {
+ 	if d <= 0 {
+ 		return "0s"
+@@ -571,7 +570,7 @@ func (h *Handler) handleResolved(requestID string) {
+ 	slog.Debug("closed desktop notification", "request_id", requestID, "notification_id", notifID)
+ }
+ 
+-// commitSubject returns the first line of a commit message.
++// Returns the first line of a commit message.
+ func commitSubject(msg string) string {
+ 	if before, _, ok := strings.Cut(msg, "\n"); ok {
+ 		return before
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..425649d 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -17,7 +17,7 @@ import (
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+-// mockNotifier records calls for testing.
++// Notifier fake that records calls for testing.
+ type mockNotifier struct {
+ 	mu        sync.Mutex
+ 	nextID    uint32
+@@ -89,7 +89,7 @@ func (m *mockNotifier) lastClosed() uint32 {
+ 	return m.closed[len(m.closed)-1]
+ }
+ 
+-// mockApprover records approve/deny calls.
++// Approver fake that records approve/deny calls.
+ type mockApprover struct {
+ 	mu       sync.Mutex
+ 	approved []string
+@@ -913,7 +913,7 @@ func TestHandler_DelayedNotification_CancelledAfterShown(t *testing.T) {
+ 	}
+ }
+ 
+-// startTestDBus launches a private dbus-daemon for integration tests.
++// Launches a private dbus-daemon for integration tests.
+ // Returns the bus address. Skips if dbus-daemon is not available.
+ func startTestDBus(t *testing.T) string {
+ 	t.Helper()
+@@ -948,7 +948,7 @@ func startTestDBus(t *testing.T) string {
+ 	return addr
+ }
+ 
+-// newTestDBusNotifier creates a DBusNotifier connected to a private test bus.
++// Creates a DBusNotifier connected to a private test bus.
+ func newTestDBusNotifier(t *testing.T) *DBusNotifier {
+ 	t.Helper()
+ 

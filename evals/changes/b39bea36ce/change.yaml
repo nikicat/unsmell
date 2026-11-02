@@ -1,0 +1,41 @@
+id: b39bea36ce
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-9
+  at:
+  - internal/proxy/prompter.go:96-102
+  - internal/proxy/prompter.go:65
+  - internal/proxy/prompter_test.go:147
+  reach:
+  - internal/proxy/prompter.go:90
+  - internal/proxy/prompter.go:96-102
+  row: misleading name
+  claim: 'activate means two things in the same comments: D-Bus activation of the gcr-prompter fallback
+    (prompter.go:65, 98; prompter_test.go:147) and prompterBridge.activate, which claims the name and
+    exports the bridge; with the deferred path removed it is a one-shot construction step'
+  fix: rename activate to claimSystemPrompter (or fold its body into newPrompterBridge); 'activate' in
+    prose then only means D-Bus activation
+  decision: SKIP
+  score: 4
+  reason: the name is not false, only overloaded; rename is low value
+  same: []
+  triage:
+    id: b1-9
+    decision: SKIP
+    score: 4
+    reason: the name is overloaded, not false
+    task: t6
+    after:
+    - t1
+after:
+- 7925d2e113
+check: ok

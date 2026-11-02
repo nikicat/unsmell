@@ -1,0 +1,54 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..f1933f6 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -2,7 +2,7 @@
+ //! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+ //! file for event-signature caching.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
+ use async_trait::async_trait;
+ use chainfold::evm::{ChainId, EventSignatureCache, Topic};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+@@ -30,7 +30,7 @@ impl SignatureCache for SqliteSignatureCache {
+             .map(|opt| {
+                 opt.map(|row| ResolvedEvent {
+                     signature: row.signature,
+-                    topic0: row.topic0.b256().into(),
++                    topic0: row.topic0.into(),
+                     abi_json: row.abi_json,
+                 })
+             })
+@@ -50,7 +50,7 @@ impl SignatureCache for SqliteSignatureCache {
+                 &Address::from(address),
+                 event_name,
+                 &entry.signature,
+-                Topic::from(B256::from(entry.topic0)),
++                Topic::from(entry.topic0),
+                 entry.abi_json.as_deref(),
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 3b81155..def2b31 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -105,6 +105,18 @@ impl From<Topic> for B256 {
+     }
+ }
+ 
++impl From<[u8; 32]> for Topic {
++    fn from(bytes: [u8; 32]) -> Self {
++        Self(B256::from(bytes))
++    }
++}
++
++impl From<Topic> for [u8; 32] {
++    fn from(topic: Topic) -> Self {
++        topic.0.into()
++    }
++}
++
+ impl std::fmt::Display for Topic {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         write!(f, "{:#x}", self.0)

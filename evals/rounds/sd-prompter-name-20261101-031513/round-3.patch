@@ -1,0 +1,87 @@
+diff --git a/TODO.md b/TODO.md
+index 51e6107..339b092 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -37,3 +37,16 @@
+ - [ ] `prompter_test.go` `promptCall.sender` is a `string` built as `string(senderOf(msg))` three times. Type it as `senderName` and build it in one helper.
+ - [ ] `forward.go` `nameHasOwner` doc explains the prompter bridge's reason for the call. That belongs to the bridge, not to the helper. Cut it to what the function reports.
+ - [ ] `e2e/gnome/vm/demo-driver-install.sh`: the comment near line 149 documents a `logout` function that does not exist; the comment near line 62 says `rd_agent` above `rd()`; the un-blank block (esc, idle-delay, ScreenSaver) appears twice (lines ~119 and ~158); `"$HOME/go/bin"` is spelled five times; the "swap in the fixed build until the prompter-bridge fix ships" note is repeated in `demo-driver.sh` and `demo.sh`.
++
++## Unsmell run 2026-11-01 (third pass): prompter bridge and demo installer
++
++- [ ] `internal/proxy/prompter.go` `newPrompterBridge` doc is four lines because one pointer carries three outcomes (nil, a bridge that serves nothing, a live bridge). It shrinks once the "two states behind one pointer" entry above is fixed. Three re-checks in a row disagreed on how to tell the nil case from the serves-nothing case. Both mean that another process owns the name, so the wording problem goes away once the return shape is fixed.
++- [ ] `internal/proxy/prompter.go` `prompterBridge` type doc (lines 23–46) is 24 lines of mechanism, history and a method list. Rewrite it as the bridge's place in the system in two or three sentences, and move the protocol walk-through to a design doc.
++- [ ] `internal/proxy/prompter.go` const-block doc (lines 12–15) opens with a sentence fragment and joins a second idea with a semicolon. `PromptDone` doc ends with gnome-keyring's reason for the call ("so it can tear the prompt down"), which belongs to the caller.
++- [ ] `internal/proxy/prompter_test.go` `mockShellPrompter` doc says the mock "can also drive the reverse Callback". It has no such method; the test calls the callback through `shellConn.Object`. `TestPrompterBridge` doc is seven lines; cut it to what the test covers.
++- [ ] `internal/proxy/forward.go:74` `nameHasOwner` turns a failed NameHasOwner call into false, so `newPrompterBridge` then tries to claim the name. Decide whether a failed check should be an error.
++- [ ] `e2e/gnome/vm/demo-driver-install.sh` header (lines 2–23) is 22 lines that narrate the phases. Line 5 says demo.sh relogs with `systemctl restart gdm`, but demo.sh:245–268 logs out through QMP and GDM TimedLogin. The "relogin is why recording is host-side" fact is repeated from demo.sh:28–30.
++- [ ] `demo-driver-install.sh` lines 33–85: `type_cmd`, `wait_for`, `owner_is`, `rd`, `place` and `open_window` are copies of `demo-driver.sh:21–75`. Move them into one sourced lib. In it, `open_window` should use `wait_for` instead of its own `seq 15` poll loop, and take the window rectangle so the four `open_window; sleep 1; place x y w h` sequences become one call.
++- [ ] `demo-driver-install.sh:141` and `demo-driver.sh:108` both build the rd_agent unlock batch (`waittext Unlock`, `type`, `key enter`, `waittext`/`clicktext <label>`) inline. Give it one helper, such as `unlock_and_click <label>`, in the shared lib.
++- [ ] The stash file `$HOME/secrets-dispatcher-fixed` is written by `demo.sh:153` and read by `demo-driver-install.sh:101`, `demo-driver.sh:88` and `demo.sh:313`. Give the path one owner. The owner-pid-and-readlink lookup in `demo-driver-install.sh:56–59` is also written in `demo.sh:304–308`.
++- [ ] `demo-driver-install.sh` comment style on unchanged lines: trailing comments on `type_cmd`, `wait_for`, `owner_is`, `open_window` and the comment above `place` open with the function's name; lines 91, 117, 125 and 132 join two ideas with a colon or semicolon; line 142's trailing comment is too long for the line; lines 144–145 have a comma splice.
+diff --git a/e2e/gnome/vm/demo-driver-install.sh b/e2e/gnome/vm/demo-driver-install.sh
+index dc3b30b..9632872 100755
+--- a/e2e/gnome/vm/demo-driver-install.sh
++++ b/e2e/gnome/vm/demo-driver-install.sh
+@@ -136,9 +136,8 @@ part2() {
+     sleep 1
+     type_cmd client "secret-tool lookup service demo   # locked: unlock, then APPROVE"
+     # The prompter bridge forwards the unlock prompt to gnome-shell, so the
+-    # unlock modal is in the shell actor tree and the locator can aim at it by
+-    # text. Type the password and press Enter, as in the try demo's unlock,
+-    # then click Approve on the notification.
++    # unlock dialog is in the shell actor tree and the locator extension can
++    # aim at it by text.
+     rd "$(printf 'waittext Unlock\ntype %s\nkey enter\nwaittext Approve\nclicktext Approve' "$pw")"
+     sleep 2 # the secret value prints (it lands right after the Approve click)
+     # Call out the payoff (plain glyphs only — the mono terminal font has no
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index bd3910f..496e1d0 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -47,23 +47,24 @@ const (
+ type prompterBridge struct {
+ 	frontConn   *dbus.Conn // session bus: gnome-shell owns the real prompter
+ 	backendConn *dbus.Conn // private bus: backend gnome-keyring lives here
+-	// Forwards Prompter calls to gnome-shell by name, so each prompt reaches
+-	// the gnome-shell running at that moment, even one started after a relogin.
++	// The route for Prompter calls to gnome-shell. It addresses gnome-shell by
++	// name, so each prompt reaches the gnome-shell running at that moment, even
++	// one started after a relogin.
+ 	toShell callForwarder
+ 	logger  *logging.Logger
+ 
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+-	// True once activate has claimed the name and exported the bridge. close
+-	// releases the name only then.
++	// True once prompterBridge.activate has claimed the name and exported the
++	// bridge. prompterBridge.close releases the name only then.
+ 	owned bool
+ }
+ 
+-// Returns a bridge for a backend bus that has no prompter of its own. The
+-// bridge takes SystemPrompter on the backend bus before it returns, even if
+-// gnome-shell's prompter is not up yet. Returns (nil, nil) when the backend bus
+-// already has a prompter. If another process takes the name after that check,
+-// the returned bridge serves no prompts. Errors as activate does.
++// Returns a bridge that holds org.gnome.keyring.SystemPrompter on the backend
++// bus and forwards unlock prompts to gnome-shell. It can be created before
++// gnome-shell's prompter is up. Returns (nil, nil) when the name already has an
++// owner on the backend bus, and a bridge that serves nothing when it cannot
++// claim the name.
+ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger) (*prompterBridge, error) {
+ 	if nameHasOwner(backendConn, systemPrompterName) {
+ 		// Same-bus / remote topology: the backend already reaches a real
+@@ -86,9 +87,8 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ }
+ 
+ // Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the
+-// bridge there, so unlock prompts reach gnome-shell. If a gcr-prompter or any
+-// other process already holds the name, the bridge leaves it and serves nothing.
+-// Errors when the name request or the export fails.
++// bridge there, so unlock prompts reach gnome-shell. If another process already
++// holds the name, the bridge serves nothing.
+ func (b *prompterBridge) activate() error {
+ 	reply, err := b.backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+ 	if err != nil {

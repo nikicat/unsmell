@@ -1,0 +1,128 @@
+diff --git a/TODO.md b/TODO.md
+index 4f8ee54..51e6107 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -23,3 +23,17 @@
+ - [ ] `systemPrompterPath` is an untyped string and gets converted with `dbus.ObjectPath(...)` at every use. Type the const as `dbus.ObjectPath`.
+ - [ ] `proxy.go:163–166` repeats `newPrompterBridge`'s `(nil, nil)` contract and the reason the fallback is bad. Cut it to the call's purpose.
+ - [ ] Doc comments that open with their own name, on unchanged lines: `prompter.go` `prompterBridge`, `BeginPrompting`, `PerformPrompt`, `StopPrompting`, `prompterCallback`, `PromptReady`, `PromptDone`; `prompter_test.go` `mockShellPrompter`, `mockKeyringCallback`, `TestPrompterBridge`; `forward.go` `callForwarder`, `forward`, `nameHasOwner`.
++
++## Unsmell run 2026-11-01 (second pass): prompter bridge cleanup
++
++- [ ] **Possible regression, check first.** `internal/proxy/prompter.go` `newPrompterBridge` now claims SystemPrompter on the backend bus at startup. In remote mode the backend is the user's own session bus. If the proxy starts before gnome-shell registers its prompter (the relogin race), the bridge takes the name on that bus and forwards to the remote side, and gnome-shell then finds the name taken. The deferred activation that this change removed guarded against that. The comment at `prompter.go:63` ("the backend already reaches a real prompter") only holds when gnome-shell is already up. Options: pass the topology (local takeover vs remote) into `newPrompterBridge` and bridge only for local takeover, or restore a watch for remote mode.
++- [ ] `prompter.go` type doc (lines 41–46) and `prompterCallback` doc say the Callback interface is PromptReady only. `prompterCallback` also forwards PromptDone. Fix the type doc, which owns this fact.
++- [ ] One fact, four copies: the exchange payload is forwarded verbatim and the dispatcher never sees the password (`prompter.go` type doc, `PerformPrompt`, `PromptReady`, `forward.go` `callForwarder`). Keep it on `callForwarder` and point to it from the others.
++- [ ] One fact, four copies: gnome-shell owns SystemPrompter on the session bus (`prompter.go` const-block doc, type doc, `frontConn` field comment, `prompter_test.go:14–15`). Keep it on the const block.
++- [ ] `prompter.go` `BeginPrompting` doc narrates in "we" form and leaves out that it errors with ErrFailed when the callback export fails. `PerformPrompt`, `StopPrompting`, `prompterCallback` docs and the `frontConn`/`backendConn` trailing comments and the comment in `unexportCallback` join ideas with semicolons or colons. Rewrite them as plain sentences, together with the name-opening entry above.
++- [ ] `prompter.go` `callbacks map[dbus.ObjectPath]bool` is a set whose value is always true. Use `map[dbus.ObjectPath]struct{}`.
++- [ ] `prompter.go` `prompterCallback.logger` is set in `exportCallback` and never read. Delete it.
++- [ ] `prompter_test.go` hand-rolls a receive with a 5-second timeout three times (`recvCall`, `recvReply`, and the inline select near line 131). Extract one generic `recvWithin[T](t, ch, what)` helper.
++- [ ] `prompter_test.go` `promptCall.sender` is a `string` built as `string(senderOf(msg))` three times. Type it as `senderName` and build it in one helper.
++- [ ] `forward.go` `nameHasOwner` doc explains the prompter bridge's reason for the call. That belongs to the bridge, not to the helper. Cut it to what the function reports.
++- [ ] `e2e/gnome/vm/demo-driver-install.sh`: the comment near line 149 documents a `logout` function that does not exist; the comment near line 62 says `rd_agent` above `rd()`; the un-blank block (esc, idle-delay, ScreenSaver) appears twice (lines ~119 and ~158); `"$HOME/go/bin"` is spelled five times; the "swap in the fixed build until the prompter-bridge fix ships" note is repeated in `demo-driver.sh` and `demo.sh`.
+diff --git a/e2e/gnome/vm/demo-driver-install.sh b/e2e/gnome/vm/demo-driver-install.sh
+index 469cf84..dc3b30b 100755
+--- a/e2e/gnome/vm/demo-driver-install.sh
++++ b/e2e/gnome/vm/demo-driver-install.sh
+@@ -135,9 +135,10 @@ part2() {
+     place 140 470 1100 260
+     sleep 1
+     type_cmd client "secret-tool lookup service demo   # locked: unlock, then APPROVE"
+-    # The prompter bridge forwards the unlock to gnome-shell's modal, so it's in
+-    # the shell actor tree and the locator can aim at it by text — same as the
+-    # try demo: type the password + Enter, then click Approve on the notification.
++    # The prompter bridge forwards the unlock prompt to gnome-shell, so the
++    # unlock modal is in the shell actor tree and the locator can aim at it by
++    # text. Type the password and press Enter, as in the try demo's unlock,
++    # then click Approve on the notification.
+     rd "$(printf 'waittext Unlock\ntype %s\nkey enter\nwaittext Approve\nclicktext Approve' "$pw")"
+     sleep 2 # the secret value prints (it lands right after the Approve click)
+     # Call out the payoff (plain glyphs only — the mono terminal font has no
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 599248b..bd3910f 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -45,19 +45,25 @@ const (
+ //     there and forwards PromptReady to gnome-keyring's real callback object
+ //     on the backend bus.
+ type prompterBridge struct {
+-	frontConn   *dbus.Conn    // session bus: gnome-shell owns the real prompter
+-	backendConn *dbus.Conn    // private bus: backend gnome-keyring lives here
+-	toShell     callForwarder // forwards Prompter calls to gnome-shell
+-	logger      *logging.Logger
++	frontConn   *dbus.Conn // session bus: gnome-shell owns the real prompter
++	backendConn *dbus.Conn // private bus: backend gnome-keyring lives here
++	// Forwards Prompter calls to gnome-shell by name, so each prompt reaches
++	// the gnome-shell running at that moment, even one started after a relogin.
++	toShell callForwarder
++	logger  *logging.Logger
+ 
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+-	owned     bool                     // claimed the name on the backend bus
++	// True once activate has claimed the name and exported the bridge. close
++	// releases the name only then.
++	owned bool
+ }
+ 
+-// Returns a bridge for a backend bus that has no prompter of its own. It calls
+-// activate at once, even before gnome-shell's prompter is up. Returns (nil, nil)
+-// when the backend bus already has a prompter.
++// Returns a bridge for a backend bus that has no prompter of its own. The
++// bridge takes SystemPrompter on the backend bus before it returns, even if
++// gnome-shell's prompter is not up yet. Returns (nil, nil) when the backend bus
++// already has a prompter. If another process takes the name after that check,
++// the returned bridge serves no prompts. Errors as activate does.
+ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger) (*prompterBridge, error) {
+ 	if nameHasOwner(backendConn, systemPrompterName) {
+ 		// Same-bus / remote topology: the backend already reaches a real
+@@ -68,11 +74,9 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 	b := &prompterBridge{
+ 		frontConn:   frontConn,
+ 		backendConn: backendConn,
+-		// Addressing gnome-shell by name lets each prompt reach the gnome-shell
+-		// that is running at that moment, even one started after a relogin.
+-		toShell:   callForwarder{dst: frontConn, dstName: systemPrompterName},
+-		logger:    logger,
+-		callbacks: make(map[dbus.ObjectPath]bool),
++		toShell:     callForwarder{dst: frontConn, dstName: systemPrompterName},
++		logger:      logger,
++		callbacks:   make(map[dbus.ObjectPath]bool),
+ 	}
+ 
+ 	if err := b.activate(); err != nil {
+@@ -84,6 +88,7 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ // Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the
+ // bridge there, so unlock prompts reach gnome-shell. If a gcr-prompter or any
+ // other process already holds the name, the bridge leaves it and serves nothing.
++// Errors when the name request or the export fails.
+ func (b *prompterBridge) activate() error {
+ 	reply, err := b.backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+ 	if err != nil {
+@@ -93,12 +98,11 @@ func (b *prompterBridge) activate() error {
+ 		b.logger.Info("could not claim system prompter on backend bus; unlock dialogs use the fallback", "reply", reply)
+ 		return nil
+ 	}
+-	b.owned = true
+ 	if err := b.backendConn.Export(b, dbus.ObjectPath(systemPrompterPath), prompterInterface); err != nil {
+ 		_, _ = b.backendConn.ReleaseName(systemPrompterName)
+-		b.owned = false
+ 		return fmt.Errorf("export prompter bridge: %w", err)
+ 	}
++	b.owned = true
+ 	b.logger.Info("prompter bridge active: keyring unlock prompts forwarded to the session prompter")
+ 	return nil
+ }
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index 67a31ca..6c7f67c 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -142,7 +142,7 @@ func TestPrompterBridge(t *testing.T) {
+ // Covers the relogin race, in which the proxy starts before gnome-shell
+ // registers its prompter. The bridge must own the backend SystemPrompter name
+ // from startup, and forward to gnome-shell once its prompter appears.
+-func TestPrompterBridgeClaimsBackendBeforePrompter(t *testing.T) {
++func TestPrompterBridgeClaimsBackendNameBeforeShellPrompter(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	backendCmd, backendAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "backend.sock"))
+ 	t.Cleanup(func() { backendCmd.Process.Kill(); backendCmd.Wait() })

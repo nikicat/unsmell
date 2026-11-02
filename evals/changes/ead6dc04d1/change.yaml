@@ -1,0 +1,190 @@
+id: ead6dc04d1
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - internal/proxy/prompter.go:56-57
+  - internal/proxy/prompter.go:90-125
+  - internal/proxy/prompter.go:183
+  reach:
+  - internal/proxy/prompter.go:53-125
+  - internal/proxy/prompter.go:181-194
+  row: temporal coupling
+  claim: activate now has one caller (newPrompterBridge, prompter.go:90). The changeset removed its second
+    caller, the watcher goroutine awaitFrontPrompter (HEAD prompter.go:152-175, call at HEAD :169). Its
+    lock (:103-104), its `closed || active` guard (:105-107), the fields active and closed (:56-57), the
+    `b.closed = true` in close (:183) and the doc sentence 'Idempotent, and a no-op after close()' (:99)
+    only served that async caller. activate runs before b is exported or returned, so nothing else can
+    hold b, close cannot have run, and active is always false when read.
+  fix: Fold activate into newPrompterBridge. After the topology check and the struct literal, the constructor
+    requests the name with DoNotQueue, handles the non-primary reply, exports b, releases the name and
+    errors if the export fails, and logs. No lock, no guard. Delete the fields active and closed, the
+    `b.closed = true` line in close, and the activate doc. The one surviving fact from that doc (DoNotQueue,
+    so an existing owner is left alone) becomes a one-line `//` comment at the RequestName call. If a
+    helper is wanted for length, it is an unguarded `claimName` with no doc beyond that comment, not a
+    second entry point.
+  decision: FIX
+  score: 6
+  reason: Dead state and a dead lock left by the changeset's removal of the watcher. Behaviour-preserving,
+    contained in one file, and it removes the activate doc's stale caps, the 'then' narration and the
+    'somehow' wording along with it.
+  same:
+  - b1-3
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 6
+    reason: activate's only other caller (awaitFrontPrompter) was removed by the changeset; its guard,
+      lock use and the active/closed fields are dead
+    task: t1
+- id: b1-5
+  at:
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:167-168
+  - internal/proxy/prompter_test.go:187-188
+  reach:
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:167-168
+  - internal/proxy/prompter_test.go:187-188
+  row: long comment
+  claim: The changeset rewrote the newPrompterBridge doc to 15 lines and the test doc to 8. Both have
+    cause (b), the wrong subject. They contain history ('does NOT wait for gnome-shell's front prompter
+    to appear first', 'without re-arming anything', 'is the relogin regression'), emphasis caps (NOT,
+    BEFORE, IMMEDIATELY), the D-Bus-activation mechanism below, and environment facts ('by which point
+    the interactive session — and thus gnome-shell — is up'). They also repeat the type doc's reason (Fact
+    A) and 'forwarding resolves by name' (Fact C, three copies, including the test comment at :187-188).
+    The constructor doc uses a 'must' precondition and colon joins, omits the error contract, and opens
+    with its own name. The test comments at :167-168 and :187-188 repeat Facts A and C again.
+  fix: Constructor doc becomes 'Returns a bridge that owns org.gnome.keyring.SystemPrompter on the backend
+    bus from the start, so gnome-keyring's unlock prompts reach gnome-shell even before gnome-shell's
+    prompter is up. Returns nil when the backend bus already has a prompter. Errors when the name cannot
+    be requested or the bridge cannot be exported.' (Adjust the nil sentence per b1-3.) Test doc becomes
+    'Checks that the bridge owns the backend prompter name before gnome-shell's prompter exists, and forwards
+    to it once it appears.' The comment at :167-168 is dropped, since the assertion message says it. The
+    comment at :187-188 becomes '// gnome-shell's prompter now gets the forwarded call.' The reason for
+    the immediate claim lives only in the type doc (b1-2).
+  decision: FIX
+  score: 6
+  reason: Shortens comments that narrate history, repeat a fact and use caps on changed lines, and adds
+    the missing error contract.
+  same:
+  - b1-2
+  - b1-1
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 6
+    reason: new 15- and 8-line docs carry history, caps and copies of facts the type doc and callForwarder
+      own; constructor doc lacks the error contract
+    task: t1
+- id: b1-9
+  at:
+  - e2e/gnome/vm/demo-driver-install.sh:138-139
+  reach:
+  - e2e/gnome/vm/demo-driver-install.sh:138-139
+  row: ambiguous noun
+  claim: The demo-driver comment '(which the bridge now re-establishes after the relogin)' describes the
+    deferred re-activation that the changeset removed (watchFrontPrompter/awaitFrontPrompter, HEAD prompter.go:130-175).
+    The bridge now claims the name at start and resolves gnome-shell by name per call, and it re-establishes
+    nothing.
+  fix: Drop the parenthetical, or write '(the bridge forwards to it by name, so it keeps working across
+    the relogin)'.
+  decision: FIX
+  score: 6
+  reason: A comment in another file describes a mechanism the changeset deleted. It is residue of the
+    changeset, so it is a root-cause fix outside the batch.
+  same: []
+  triage:
+    id: b1-9
+    decision: FIX
+    score: 6
+    reason: e2e comment describes the re-activation the changeset deleted; same fact as cross-2
+    task: t1
+- id: cross-2
+  at:
+  - internal/proxy/prompter.go:68-71
+  - internal/proxy/prompter_test.go:149-150
+  - internal/proxy/prompter_test.go:187-188
+  - e2e/gnome/vm/demo-driver-install.sh:138-139
+  - internal/proxy/forward.go:30-32
+  reach:
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:187-188
+  - e2e/gnome/vm/demo-driver-install.sh:138-139
+  row: duplicated knowledge
+  claim: 'That forwarding reaches gnome-shell by bus name at call time, and so survives a relogin, is
+    a property of callForwarder: it is addressed to dstName (forward.go:30-32), and toShell is built with
+    dstName systemPrompterName (prompter.go:85). The changeset restates it three times on changed lines
+    (prompter.go:68-71, prompter_test.go:149-150, :187-188). The e2e script at demo-driver-install.sh:138-139
+    still states the opposite: it says the bridge ''re-establishes'' itself after the relogin, the deferred
+    activation the changeset removed (HEAD prompter.go:130-175).'
+  fix: The fact lives in callForwarder's doc only (forward.go:30-32, already true) and, if wanted, in
+    the toShell field comment at prompter.go:50 ('forwards Prompter calls to gnome-shell, addressed by
+    name'). The three changed-line copies are dropped, as b1-5 words it. The demo-driver parenthetical
+    is dropped or reads '(forwarded by name, so it keeps working across the relogin)', as b1-9 words it.
+    One task with b1-5 and b1-9.
+  decision: FIX
+  score: 7
+  reason: Copies on changed lines, plus a stale contrary copy in another file left behind by the changeset's
+    deletion.
+  same:
+  - b1-5
+  - b1-9
+  triage:
+    id: cross-2
+    decision: FIX
+    score: 7
+    reason: by-name forwarding is owned by callForwarder; the changeset copied it three times
+    task: t1
+- id: cross-3
+  at:
+  - internal/proxy/prompter.go:63
+  - internal/proxy/prompter.go:69
+  - internal/proxy/prompter.go:32-33
+  - internal/proxy/prompter_test.go:149
+  - internal/proxy/prompter_test.go:167
+  - internal/proxy/proxy.go:164-165
+  - internal/proxy/prompter.go:113
+  - internal/proxy/prompter.go:123
+  - internal/proxy/prompter.go:136
+  reach:
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:167-168
+  - internal/proxy/proxy.go:164-167
+  row: ambiguous noun
+  claim: gnome-shell's SystemPrompter has four names across files. The changeset's new text calls it 'front
+    prompter' (prompter.go:63, prompter_test.go:167) and 'real prompter' (prompter.go:69, prompter_test.go:149).
+    proxy.go:164-165 and the log messages at prompter.go:113, :123 and :136 call it 'session prompter',
+    and the type doc calls it 'gnome-shell's real prompter' (prompter.go:32-33). 'prompter' alone also
+    names the gcr-prompter fallback and the bridge itself.
+  fix: Use one term in docs and comments, 'gnome-shell's prompter', the wording b1-5's rewrite already
+    uses. The changed lines get it through b1-5, and proxy.go:164-167 through cross-1's task. The log
+    messages are user-visible output on unchanged lines and stay as they are.
+  decision: FIX
+  score: 5
+  reason: The new names are on changed lines and are removed by b1-5's rewrite. This finding pins that
+    rewrite to the term the other files can share.
+  same:
+  - b1-5
+  - b1-2
+  triage:
+    id: cross-3
+    decision: FIX
+    score: 5
+    reason: the changeset introduced 'front prompter'/'real prompter' for gnome-shell's prompter; t1's
+      rewrite settles on one name. Log messages are left alone
+    task: t1
+check: ok

@@ -1,0 +1,4 @@
+- id: b1
+  paths:
+    - internal/proxy/prompter.go
+    - internal/proxy/prompter_test.go

@@ -1,0 +1,15 @@
+diff --git a/TODO.md b/TODO.md
+index 8a2ad07..e8c8f04 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -13,3 +13,10 @@
+ - [ ] Refactor
+ - [ ] Proxy webserver mode for development - load webapp from vite webserver instead of embedded html
+ - [ ] Notification burst eviction on GNOME: gnome-shell destroys an app's oldest notification (reason=expired) beyond MAX_NOTIFICATIONS_PER_SOURCE=3 — coalesce or cap concurrent approval notifications so a burst can't evict a pending approval (see docs/plans/onboarding-and-e2e.md US-7 model)
++
++## Smells planned by unsmell run 20261102-135503 (prompter bridge)
++
++- [ ] `internal/proxy/prompter.go` `prompterCallback.logger`: set in `exportCallback` and never read. Delete the field and its initializer.
++- [ ] `internal/proxy/prompter.go`, `prompter_test.go`: ten doc comments open with their declaration's own name (`prompterBridge`, `BeginPrompting`, `PerformPrompt`, `StopPrompting`, `prompterCallback`, `PromptReady`, `PromptDone`, the tests and mocks). Start each at its verb or noun phrase instead.
++- [ ] `internal/proxy/prompter_test.go`: both bridge tests build the same fixture inline (two buses, mock shell prompter, proxy, keyring connection), and the receive-with-timeout `select` is written three times. Extract fixture helpers and one generic `recvWithin[T]`.
++- [ ] `internal/proxy/signals.go:26` `newSignalForwarder(backendConn, frontConn, logger)` and `prompter.go` `newPrompterBridge(frontConn, backendConn, logger)` take the two `*dbus.Conn` in opposite orders, ten lines apart in `proxy.go`; a swap compiles. Pass one `busPair{front, backend}` value instead.

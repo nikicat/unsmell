@@ -1,0 +1,49 @@
+diff --git a/dengi/__init__.py b/dengi/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/schema.sql b/dengi/schema.sql
+similarity index 100%
+rename from schema.sql
+rename to dengi/schema.sql
+diff --git a/seb.py b/dengi/seb.py
+similarity index 98%
+rename from seb.py
+rename to dengi/seb.py
+index 3c4369b..a70d264 100644
+--- a/seb.py
++++ b/dengi/seb.py
+@@ -13,6 +13,7 @@ import uuid
+ from collections.abc import Iterable, Iterator
+ from dataclasses import dataclass
+ from datetime import date, datetime, timedelta, timezone
++from importlib.resources import files
+ from pathlib import Path
+ from urllib.parse import parse_qs, urlparse
+ 
+@@ -126,7 +127,7 @@ class Ledger:
+     def open(cls, path: Path) -> Ledger:
+         """Opens the ledger at the given path and creates its tables when they are missing."""
+         db = sqlite3.connect(path)
+-        db.executescript(Path(__file__).with_name("schema.sql").read_text())
++        db.executescript(files(__package__).joinpath("schema.sql").read_text())
+         return cls(db)
+ 
+     def last_booking_date(self, iban: str) -> date | None:
+diff --git a/pyproject.toml b/pyproject.toml
+index 1d24c88..bf28d93 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -8,11 +8,11 @@ dependencies = [
+ ]
+ 
+ [project.scripts]
+-seb = "seb:main"
++seb = "dengi.seb:main"
+ 
+ [build-system]
+ requires = ["hatchling"]
+ build-backend = "hatchling.build"
+ 
+ [tool.hatch.build.targets.wheel]
+-only-include = ["seb.py", "schema.sql"]
++packages = ["dengi"]

@@ -1,0 +1,478 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 1546139..2e8411b 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -5,16 +5,6 @@
+ # ///
+ """The dataset of changes that unsmell made in eval runs, and their labels.
+ 
+-Usage:
+-  evals/changes.py extract RUN_DIR...   split each round of a run into changes
+-  evals/changes.py judge [ID...]        propose a label for changes with none
+-  evals/changes.py check [ID...]        run the fixture's check on each change (a failure leaves check.log)
+-  evals/changes.py list                 list every change with its label, unlabelled ones marked
+-  evals/changes.py next                 open the next change no human has labelled
+-  evals/changes.py show [ID]            open a change in the review repo; no ID: print the current one
+-  evals/changes.py label [ID] LABEL [-f FINDING] [-n NOTE]   no ID: the current change
+-  evals/changes.py score RUN_DIR...     count a run's changes by label
+-
+ The tool tells whether the changes a run made were worth making. It splits
+ runs into changes, has a model propose a label for each, opens each one in
+ context for a person to label, and scores runs by those labels. The layout of
+@@ -32,6 +22,7 @@ import sys
+ from collections import Counter
+ from dataclasses import dataclass
+ from datetime import date
++from enum import StrEnum
+ from operator import attrgetter
+ from pathlib import Path
+ from typing import NamedTuple
+@@ -49,10 +40,9 @@ REVIEW = CACHE / "review"
+ REVIEW_REPO = REVIEW / "repo"
+ # The id of the change in the review repo, which show and label use when given none.
+ CURRENT = REVIEW / "current"
+-LABELS = ("good", "bad", "neutral", "unsure")  # unsure: looked at, but cannot judge it
+-# ANSI SGR codes for show's output; NO_COLOR or a pipe turns them off.
+-COLORS = {"FIX": "32", "ASK": "33", "PLAN": "36", "KEEP": "35", "SKIP": "90", "DISCARD": "90",
+-          "good": "32", "bad": "31", "neutral": "33", "unsure": "90"}
++# The by of a label that a person gave, and the default of label --by.
++USER = "user"
++# Whether show paints its output with ANSI SGR codes, which NO_COLOR or a pipe turns off.
+ TTY = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+ 
+ 
+@@ -60,6 +50,62 @@ def paint(text, code):
+     return f"\x1b[{code}m{text}\x1b[0m" if TTY and code else str(text)
+ 
+ 
++class Label(StrEnum):
++    """A verdict on whether a change was worth making, given by a person or proposed by the judge."""
++
++    GOOD = "good"
++    BAD = "bad"
++    NEUTRAL = "neutral"
++    UNSURE = "unsure"
++
++    @property
++    def meaning(self):
++        """What the label says about a change, in the words of the judge's prompt."""
++        return {Label.GOOD: "worth making", Label.BAD: "should not have been made, or made worse code",
++                Label.NEUTRAL: "neither better nor worse", Label.UNSURE: "looked at, but cannot judge it"}[self]
++
++    @property
++    def color(self):
++        """The ANSI SGR code that show paints the label in."""
++        return {Label.GOOD: "32", Label.BAD: "31", Label.NEUTRAL: "33", Label.UNSURE: "90"}[self]
++
++    @classmethod
++    def verdicts(cls):
++        """Returns the labels the judge may give.
++
++        The judge may not give unsure, which means that a person looked at the change and cannot judge it.
++        """
++        return [l for l in cls if l is not cls.UNSURE]
++
++
++class Decision(StrEnum):
++    """A triage bucket that the skill puts a finding in (SKILL.md §5)."""
++
++    FIX = "FIX"
++    ASK = "ASK"
++    PLAN = "PLAN"
++    KEEP = "KEEP"
++    SKIP = "SKIP"
++    DISCARD = "DISCARD"
++
++    @property
++    def color(self):
++        """The ANSI SGR code that show paints the decision in."""
++        return {Decision.FIX: "32", Decision.ASK: "33", Decision.PLAN: "36", Decision.KEEP: "35",
++                Decision.SKIP: "90", Decision.DISCARD: "90"}[self]
++
++
++class CheckStatus(StrEnum):
++    """The outcome of a fixture's check on a change, stored as check in change.yaml."""
++
++    OK = "ok"
++    FAIL = "fail"
++    NO_APPLY = "no-apply"
++
++
++LABEL_USAGE = f"evals/changes.py label [ID] {'|'.join(Label)} [-f FINDING] [-n NOTE]"
++
++
+ def load(path):
+     return yaml.safe_load(path.read_text())
+ 
+@@ -203,6 +249,36 @@ def all_changes():
+     return sorted((load(p) for p in CHANGES.glob("*/change.yaml")), key=lambda m: m["id"])
+ 
+ 
++def pending(changes, ids, done):
++    """Returns the changes in ids, or with no ids the changes for which done is false."""
++    return [m for m in changes if (m["id"] in ids if ids else not done(m))]
++
++
++def by_user(label):
++    """Tells whether a person gave a label entry of change.yaml."""
++    return label["by"].startswith(USER)
++
++
++def newest_label(change):
++    """Returns the change's newest label entry, or None when it has none."""
++    return change["labels"][-1] if change["labels"] else None
++
++
++def newest_user_label(change):
++    """Returns the newest label entry that a person gave the change, or None when no person labelled it."""
++    return next((l for l in reversed(change["labels"]) if by_user(l)), None)
++
++
++def has_patch(change):
++    """Tells whether the change's editor made a patch."""
++    return bool((CHANGES / change["id"] / "change.patch").read_text().strip())
++
++
++def decisions(change):
++    """Returns the decisions of the change's findings, sorted and joined by /."""
++    return "/".join(sorted({f["triage"]["decision"] for f in change["findings"]}))
++
++
+ @functools.cache
+ def tokens(cid):
+     """The words of a change's changed lines and of its findings' claims, for comparing changes."""
+@@ -243,7 +319,7 @@ def prior(meta):
+     """
+     mine = tokens(meta["id"])
+     others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and from_other_runs(meta, m)
+-              and any(l["by"].startswith("user") for l in m["labels"])]
++              and any(by_user(l) for l in m["labels"])]
+     best = max((Match(m, similarity(mine, tokens(m["id"]))) for m in others),
+                key=attrgetter("share"), default=None)
+     return best if best and best.share >= MATCH_SHARE else None
+@@ -268,12 +344,13 @@ class Judge:
+         """Returns the prompt that asks the model to label one change."""
+         first = meta["seen"][0]
+         examples = "\n\n".join(
+-            f"### Example {o['id']}: labelled {o['labels'][-1]['label']}\n"
+-            f"Note: {o['labels'][-1].get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
++            f"### Example {o['id']}: labelled {newest_label(o)['label']}\n"
++            f"Note: {newest_label(o).get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
+             for o in neighbours(meta, self.labelled))
++        verdicts = ", ".join(f"{l} ({l.meaning})" for l in Label.verdicts())
+         return (
+-            "You label one change that a refactoring skill made, as good (worth making), bad (should not "
+-            "have been made, or made worse code) or neutral. Judge the code, not the skill's own report. "
++            f"You label one change that a refactoring skill made, as one of {verdicts}. "
++            "Judge the code, not the skill's own report. "
+             "The skill's rules are below for reference; a change can follow them and still be bad.\n\n"
+             f"## Labelled examples, most similar first\n\n{examples or '(none yet)'}\n\n"
+             f"## The round's own report\n\n{Rounds(first['run']).report(first['round']).read_text()[:6000]}\n\n"
+@@ -287,7 +364,7 @@ class Judge:
+         A failed call prints why and costs 0.
+         """
+         schema = {"type": "object", "required": ["label", "confidence", "reason"], "properties": {
+-            "label": {"enum": list(LABELS)},
++            "label": {"enum": [l.value for l in Label.verdicts()]},
+             "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+         try:
+             reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", self.model,
+@@ -306,26 +383,21 @@ class Judge:
+ def judge(ids, model, jobs):
+     """Proposes a label for each change in ids, or with no ids for each change that has no label and no proposal."""
+     metas = all_changes()
+-    labelled = [m for m in metas if m["labels"] and m["labels"][-1]["label"] != "unsure"]
+-    todo = [m for m in metas if (m["id"] in ids if ids else not m["judge"] and not m["labels"])]
++    labelled = [m for m in metas if (l := newest_label(m)) and l["label"] != Label.UNSURE]
++    todo = pending(metas, ids, lambda m: m["judge"] or m["labels"])
+     with ThreadPoolExecutor(jobs) as pool:
+         cost = sum(pool.map(Judge(model, SKILL.read_text(), labelled).label, todo))
+     print(f"judged {len(todo)} changes for ${cost:.2f}")
+ 
+ 
+ def summary(meta):
+-    decisions = sorted({f["triage"]["decision"] for f in meta["findings"]})
+-    return f"{'/'.join(decisions)}: {meta['findings'][0].get('claim', '')[:100]}"
++    return f"{decisions(meta)}: {meta['findings'][0].get('claim', '')[:100]}"
+ 
+ 
+ def ancestors(meta):
+     """Returns the ids of the changes that meta is stacked on, directly or not, each before its dependents."""
+-    order = []
+-    for parent in meta.get("after", []):
+-        for cid in [*ancestors(load(CHANGES / parent / "change.yaml")), parent]:
+-            if cid not in order:
+-                order.append(cid)
+-    return order
++    return list(dict.fromkeys(cid for parent in meta.get("after", [])
++                              for cid in [*ancestors(load(CHANGES / parent / "change.yaml")), parent]))
+ 
+ 
+ def build_rounds(change, build):
+@@ -375,9 +447,9 @@ def stage(change, repo):
+     """
+     for parent in ancestors(change):  # staged with the changeset, so that git diff shows only what this change adds
+         git(repo, "apply", "--index", str(CHANGES / parent / "change.patch"))
+-    patch = CHANGES / change["id"] / "change.patch"
+-    if patch.read_text().strip():
+-        git(repo, "apply", "--intent-to-add", str(patch))  # new files show up in git diff too
++    if has_patch(change):
++        # Intent to add, so that new files show up in git diff too.
++        git(repo, "apply", "--intent-to-add", str(CHANGES / change["id"] / "change.patch"))
+ 
+ 
+ def review_repo(change, root=REVIEW):
+@@ -417,24 +489,24 @@ def show(change):
+         print(f"  stacked on {', '.join(change['after'])}, staged with the changeset")
+     for f in change["findings"]:
+         t = f["triage"]
+-        decision = paint(f"{t['decision']} {t.get('score')}", COLORS.get(t["decision"]))
++        decision = paint(f"{t['decision']} {t.get('score')}", Decision(t["decision"]).color)
+         print(f"\n  {paint(f['id'], '1')}  {decision}  {f.get('row', '')}  {paint(', '.join(f.get('at', [])), '2')}"
+               f"\n    {paint('claim:', '2')}  {f.get('claim', '').strip()}"
+               f"\n    {paint('fix:', '2')}    {f.get('fix', '').strip()}"
+               f"\n    {paint('triage:', '2')} {t.get('reason', '').strip()}")
+-    if not (CHANGES / change["id"] / "change.patch").read_text().strip():
++    if not has_patch(change):
+         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
+     if match := prior(change):
+-        newest = [l for l in match.change["labels"] if l["by"].startswith("user")][-1]
++        newest = newest_user_label(match.change)
+         print(f"\n  closest labelled change from an earlier run: {match.change['id']}, {match.share:.0%} of words shared,"
+-              f" labelled {paint(newest['label'], COLORS[newest['label']])}"
++              f" labelled {paint(newest['label'], Label(newest['label']).color)}"
+               f"{': ' + newest['note'] if newest.get('note') else ''}")
+     if change["judge"]:
+         j = change["judge"]
+-        print(f"judge: {paint(j['label'], COLORS.get(j['label']))} ({j['confidence']:.2f}): {j['reason']}")
++        print(f"judge: {paint(j['label'], Label(j['label']).color)} ({j['confidence']:.2f}): {j['reason']}")
+     for l in change["labels"]:
+         about = f" on {l['finding']}" if l.get("finding") else ""
+-        print(f"label: {paint(l['label'], COLORS[l['label']])}{about} by {l['by']}: {l.get('note', '')}")
++        print(f"label: {paint(l['label'], Label(l['label']).color)}{about} by {l['by']}: {l.get('note', '')}")
+     color = "--color=always" if TTY else "--color=never"
+     print("\n" + git(REVIEW_REPO, "diff", color, "--stat").rstrip())
+     print(f"\nStaged, the changeset under review (git diff --cached):\n{git(REVIEW_REPO, 'diff', color, '--cached', '--stat').rstrip()}")
+@@ -442,30 +514,29 @@ def show(change):
+     print(paint("  git diff --cached            # the changeset under review, which the findings call \"the change\"", "2"))
+     print(paint(f"  report: {Rounds(first['run']).report(first['round'])}", "2"))
+     print(paint(f"  labels: {CHANGES / change['id'] / 'change.yaml'}", "2"))
+-    print("  evals/changes.py label good|bad|neutral|unsure [-f FINDING] -n NOTE")
++    print(f"  {LABEL_USAGE}")
+ 
+ 
+ def check(ids):
+-    """Runs the fixture's check on each change in turn, outside the review repo, and stores the result.
++    """Runs each fixture's check on the changes in ids, or on every change not yet checked.
+ 
+-    In `patches only` runs the skill merges nothing, so this is the full check each patch would get
+-    on merge (SKILL.md §3.0, step 6). One at a time, sharing one Rust target directory.
++    Records ok, fail or no-apply as check in change.yaml. A change that fails or does not apply
++    leaves its output in check.log.
+     """
+     root = CACHE / "check"
++    # The changes are checked one at a time, sharing one Rust target directory.
+     env = os.environ | {"CARGO_TARGET_DIR": str(root / "target")}
+-    for meta in all_changes():
+-        if ids and meta["id"] not in ids or not ids and "check" in meta:
+-            continue
++    for meta in pending(all_changes(), ids, lambda m: "check" in m):
+         try:
+             repo = review_repo(meta, root)
+         except subprocess.CalledProcessError as e:
+-            meta["check"] = "no-apply"
++            meta["check"] = CheckStatus.NO_APPLY.value
+             dump(CHANGES / meta["id"] / "change.yaml", meta)
+             (CHANGES / meta["id"] / "check.log").write_text(f"{e.cmd}\n{e.stderr}")
+-            print(f"{meta['id']} no-apply", flush=True)
++            print(f"{meta['id']} {meta['check']}", flush=True)
+             continue
+         out = Fixture.named(meta["fixture"]).run_check(repo, env)
+-        meta["check"] = "ok" if out.returncode == 0 else "fail"
++        meta["check"] = (CheckStatus.OK if out.returncode == 0 else CheckStatus.FAIL).value
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {meta['check']}", flush=True)
+         log = CHANGES / meta["id"] / "check.log"
+@@ -476,90 +547,120 @@ def check(ids):
+ 
+ 
+ def list_changes():
+-    """Prints one line per change: id, the newest user label, where it was made, its decisions, its size, and its first claim."""
++    """Prints one line per change, ordered by fixture, round and task."""
+     for meta in sorted(all_changes(), key=lambda m: (m["fixture"], m["seen"][0]["round"], m["seen"][0]["task"])):
+         # The newest user label per finding (None: the whole change); differing ones show as good+bad.
+-        newest = {l.get("finding"): l["label"] for l in meta["labels"] if l["by"].startswith("user")}
++        newest = {l.get("finding"): l["label"] for l in meta["labels"] if by_user(l)}
+         label = "+".join(sorted(set(newest.values()))) or "-"
+-        decisions = "/".join(sorted({f["triage"]["decision"] for f in meta["findings"]}))
+         claim = " ".join(meta["findings"][0].get("claim", "").split())
+         signs = Counter(c.sign for c in changed_lines((CHANGES / meta["id"] / "change.patch").read_text()))
+-        print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions:9}"
++        print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions(meta):9}"
+               f"  {f'+{signs[Sign.ADDED]} -{signs[Sign.REMOVED]}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
+ 
+ 
++def score_label(change):
++    """Returns what score counts the change as: its newest label, else the judge's as judge:LABEL, else unlabelled."""
++    if label := newest_label(change):
++        return label["label"]
++    return f"judge:{change['judge']['label']}" if change["judge"] else "unlabelled"
++
++
+ def score(run_dirs):
+     for run_dir in run_dirs:
+         run = run_dir.resolve().name
+-        counts = {}
+-        for meta in all_changes():
+-            if any(s["run"] == run for s in meta["seen"]):
+-                label = meta["labels"][-1]["label"] if meta["labels"] else (
+-                    f"judge:{meta['judge']['label']}" if meta["judge"] else "unlabelled")
+-                counts[label] = counts.get(label, 0) + 1
++        counts = Counter(score_label(m) for m in all_changes() if any(s["run"] == run for s in m["seen"]))
+         print(run, " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+ 
+ 
++def next_change():
++    """Opens the change without a user label whose judgement is least certain, and prints it.
++
++    Changes without a patch are left out. Exits when every other change has a user label.
++    """
++    # A change without a patch (an editor that made none) has nothing to review in the repo.
++    todo = [m for m in all_changes() if not any(by_user(l) for l in m["labels"]) and has_patch(m)]
++    if not todo:
++        sys.exit("every change has a user label")
++    # The least certain judgements first: they are where a label teaches the judge most.
++    change = min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1)
++    select(change)
++    show(change)
++    print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
++
++
++def open_change(cid):
++    """Opens the change cid in the review repo and prints it. With no cid, prints the current change."""
++    change = load(CHANGES / (cid or current()) / "change.yaml")
++    if cid:
++        select(change)
++    show(change)
++
++
++def parse_label_args(args):
++    """Returns the change id and the label that label's [ID] LABEL arguments name.
++
++    The id defaults to the current change. Exits with the usage when args are not [ID] LABEL.
++    """
++    match args:
++        case [label] if label in Label:
++            return current(), Label(label)
++        case [cid, label] if label in Label:
++            return cid, Label(label)
++    sys.exit(f"usage: {LABEL_USAGE}")
++
++
++def add_label(cid, label, finding, note, by):
++    """Appends a label to the change cid, about one finding or, with no finding, the whole change.
++
++    Exits when the change has no such finding.
++    """
++    path = CHANGES / cid / "change.yaml"
++    meta = load(path)
++    if finding and finding not in {f["id"] for f in meta["findings"]}:
++        sys.exit(f"{cid} has no finding {finding}")
++    entry = {"label": label.value, "finding": finding, "note": note, "by": by, "date": date.today().isoformat()}
++    meta["labels"].append({k: v for k, v in entry.items() if v})
++    dump(path, meta)
++    print(f"{cid}: {label}")
++
++
++def extract_runs(paths):
++    """Adds the changes of each run to the dataset and prints how many each run had."""
++    for path in paths:
++        print(f"{path.name}: {len(extract(path))} changes")
++
++
+ def main():
+     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+-    sub = p.add_subparsers(dest="cmd", required=True)
+-    sub.add_parser("extract").add_argument("runs", nargs="+", type=Path)
+-    j = sub.add_parser("judge")
++    sub = p.add_subparsers(required=True)
++    x = sub.add_parser("extract", help="split each round of a run into changes")
++    x.add_argument("runs", nargs="+", type=Path)
++    x.set_defaults(func=lambda a: extract_runs(a.runs))
++    j = sub.add_parser("judge", help="propose a label for changes with none")
+     j.add_argument("ids", nargs="*")
+     j.add_argument("--model", default="opus")
+     j.add_argument("--jobs", type=int, default=6)
+-    sub.add_parser("check").add_argument("ids", nargs="*", help="default: every change not checked yet")
+-    sub.add_parser("list")
+-    sub.add_parser("next")
+-    sub.add_parser("show").add_argument("id", nargs="?", help="default: the change in the review repo")
+-    lab = sub.add_parser("label", usage=f"changes.py label [ID] {{{','.join(LABELS)}}} [-f FINDING] [-n NOTE]")
+-    lab.add_argument("args", nargs="+", metavar="[ID] LABEL", help=f"ID defaults to the change in the review repo; LABEL is one of {', '.join(LABELS)}")
++    j.set_defaults(func=lambda a: judge(a.ids, a.model, a.jobs))
++    c = sub.add_parser("check", help="run the fixture's check on each change")
++    c.add_argument("ids", nargs="*", help="default: every change not checked yet")
++    c.set_defaults(func=lambda a: check(a.ids))
++    sub.add_parser("list", help="list every change with its label").set_defaults(func=lambda a: list_changes())
++    sub.add_parser("next", help="open the next change no person has labelled").set_defaults(
++        func=lambda a: next_change())
++    s = sub.add_parser("show", help="open a change in the review repo")
++    s.add_argument("id", nargs="?", help="default: print the change in the review repo")
++    s.set_defaults(func=lambda a: open_change(a.id))
++    lab = sub.add_parser("label", help="label a change", usage=LABEL_USAGE)
++    lab.add_argument("args", nargs="+", metavar="[ID] LABEL", help="ID defaults to the change in the review repo")
+     lab.add_argument("-f", "--finding", help="the finding of the change that the label is about; the whole change when left out")
+     lab.add_argument("-n", "--note", default="", help="why: what is good or wrong about it")
+-    lab.add_argument("--by", default="user")
+-    sub.add_parser("score").add_argument("runs", nargs="+", type=Path)
++    lab.add_argument("--by", default=USER)
++    lab.set_defaults(func=lambda a: add_label(*parse_label_args(a.args), a.finding, a.note, a.by))
++    sc = sub.add_parser("score", help="count a run's changes by label")
++    sc.add_argument("runs", nargs="+", type=Path)
++    sc.set_defaults(func=lambda a: score(a.runs))
+     a = p.parse_args()
+-
+-    if a.cmd == "extract":
+-        for run in a.runs:
+-            print(f"{run.name}: {len(extract(run))} changes")
+-    elif a.cmd == "judge":
+-        judge(a.ids, a.model, a.jobs)
+-    elif a.cmd == "check":
+-        check(a.ids)
+-    elif a.cmd == "list":
+-        list_changes()
+-    elif a.cmd == "next":
+-        # A change without a patch (an editor that made none) has nothing to review in the repo.
+-        todo = [m for m in all_changes() if not any(l["by"].startswith("user") for l in m["labels"])
+-                and (CHANGES / m["id"] / "change.patch").read_text().strip()]
+-        if not todo:
+-            sys.exit("every change has a user label")
+-        # The least certain judgements first: they are where a label teaches the judge most.
+-        change = min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1)
+-        select(change)
+-        show(change)
+-        print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
+-    elif a.cmd == "show":
+-        change = load(CHANGES / (a.id or current()) / "change.yaml")
+-        if a.id:
+-            select(change)
+-        show(change)
+-    elif a.cmd == "label":
+-        if len(a.args) > 2 or a.args[-1] not in LABELS:
+-            sys.exit(f"usage: changes.py label [ID] LABEL, with LABEL one of {', '.join(LABELS)}")
+-        a.id, a.label = (a.args[0] if len(a.args) == 2 else current()), a.args[-1]
+-        path = CHANGES / a.id / "change.yaml"
+-        meta = load(path)
+-        if a.finding and a.finding not in {f["id"] for f in meta["findings"]}:
+-            sys.exit(f"{a.id} has no finding {a.finding}")
+-        entry = {"label": a.label, "finding": a.finding, "note": a.note,
+-                 "by": a.by, "date": date.today().isoformat()}
+-        meta["labels"].append({k: v for k, v in entry.items() if v})
+-        dump(path, meta)
+-        print(f"{a.id}: {a.label}")
+-    elif a.cmd == "score":
+-        score(a.runs)
++    a.func(a)
+ 
+ 
+ if __name__ == "__main__":

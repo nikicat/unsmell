@@ -1,0 +1,33 @@
+id: dengi-seb-20261102-005337-1-t11
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t11
+judge: null
+labels: []
+findings:
+- id: b1-21
+  at:
+  - seb.py:28
+  - seb.py:54
+  - seb.py:74
+  reach:
+  - seb.py:12
+  - seb.py:28
+  - seb.py:54
+  - seb.py:74
+  row: repeated derivation
+  claim: datetime.now(timezone.utc) is written three times. requires-python >=3.14 has datetime.UTC.
+  fix: Use datetime.now(UTC), with `from datetime import UTC`.
+  decision: SKIP
+  score: 1
+  reason: Idiomatic as it is. Not a smell.
+  same: []
+  triage:
+    id: b1-21
+    decision: SKIP
+    score: 1
+    reason: not a smell
+    task: t11
+check: ok

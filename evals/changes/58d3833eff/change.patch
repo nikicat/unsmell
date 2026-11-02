@@ -1,0 +1,192 @@
+diff --git a/evals/README.md b/evals/README.md
+index e8764a0..72c422a 100644
+--- a/evals/README.md
++++ b/evals/README.md
+@@ -31,7 +31,7 @@ echo '{}' > ~/.cache/unsmell-eval/config/settings.json
+ 
+ | Measure | Passes when |
+ | -- | -- |
+-| Convergence | a round changes nothing, within the round limit |
++| Convergence | a round changes nothing, within the round limit, and no claude call fails |
+ | Reversals | no round brings back a line that an earlier round removed |
+ | Check | the fixture's `check` command passes after every round |
+ | Stability | the above holds over repeated runs, since runs vary |
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..bd44851 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -39,7 +39,7 @@ from pathlib import Path
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+ 
+-from run import CACHE, CONFIG, git, materialize
++from run import CACHE, SKILL, claude, git, materialize
+ 
+ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+@@ -73,19 +73,6 @@ def change_id(patch):
+     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
+ 
+ 
+-def claude(prompt, schema, model):
+-    """Returns the structured reply of a tool-less headless call, and its cost."""
+-    cmd = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+-           "--no-session-persistence", "--tools", "", "--model", model]
+-    out = subprocess.run(cmd, input=prompt, text=True, capture_output=True,
+-                         env=os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)})
+-    try:
+-        reply = json.loads(out.stdout)
+-        return reply.get("structured_output") or json.loads(reply["result"]), reply.get("total_cost_usd", 0.0)
+-    except (json.JSONDecodeError, KeyError, TypeError):
+-        raise RuntimeError(out.stderr.strip()[:200] or out.stdout[:200]) from None
+-
+-
+ def tasks(record):
+     """Yields (task, findings, decisions) for each task of one skill run directory (§3.0 of SKILL.md),
+     each finding joined with its decision entry."""
+@@ -187,7 +174,7 @@ def neighbours(meta, labelled, k=5):
+ 
+ 
+ def judge(ids, model, jobs):
+-    skill = (EVALS.parent / "skills" / "unsmell" / "SKILL.md").read_text()
++    skill = SKILL.read_text()
+     metas = all_changes()
+     labelled = [m for m in metas if m["labels"] and m["labels"][-1]["label"] != "unsure"]
+     todo = [m for m in metas if (m["id"] in ids if ids else not m["judge"] and not m["labels"])]
+@@ -210,15 +197,16 @@ def judge(ids, model, jobs):
+             f"## The change to label\n\n```diff\n{(CHANGES / meta['id'] / 'change.patch').read_text()}```\n\n"
+             f"## The skill\n\n{skill}")
+         try:
+-            verdict, cost = claude(prompt, schema, model)
+-        except RuntimeError as e:
++            reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", model, stdin=prompt)
++            verdict = reply.structured or json.loads(reply.result)
++        except (RuntimeError, json.JSONDecodeError) as e:
+             print(f"{meta['id']}: judge failed: {e}", file=sys.stderr)
+             return 0.0
+         meta["judge"] = {**verdict, "model": model}
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {verdict['label']:7} {verdict['confidence']:.2f} {summary(meta)}",
+               flush=True)
+-        return cost
++        return reply.cost_usd
+ 
+     with ThreadPoolExecutor(jobs) as pool:
+         cost = sum(pool.map(one, todo))
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..73e8f38 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -24,6 +24,7 @@ from datetime import datetime
+ from pathlib import Path
+ 
+ SKILL_REPO = Path(__file__).resolve().parent.parent
++SKILL = SKILL_REPO / "skills" / "unsmell" / "SKILL.md"
+ CACHE = Path.home() / ".cache" / "unsmell-eval"
+ CONFIG = CACHE / "config"
+ ALLOWED = [
+@@ -119,24 +120,55 @@ def materialize(fixture, spec, workdir):
+     return repo
+ 
+ 
+-def run_skill(repo, log, args):
+-    cmd = ["claude", "-p", f"/unsmell:unsmell {args}".strip(), "--plugin-dir", str(SKILL_REPO),
+-           "--permission-mode", "auto", "--permission-prompts", "none",
+-           "--output-format", "json", "--no-session-persistence",
+-           # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
+-           "--allowedTools", *ALLOWED]
+-    env = os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)}
+-    out = subprocess.run(cmd, cwd=repo, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
+-    log.write_text(out.stdout + out.stderr)
+-    # The skill's own record of the round (§3.0 of SKILL.md): batches, findings, decisions.
+-    record = repo / ".git" / "unsmell"
+-    if record.exists():
+-        shutil.move(record, log.with_suffix(""))
+-        git(repo, "worktree", "prune")  # editors' worktrees the skill left behind
++@dataclass
++class Reply:
++    """The answer of one headless claude call."""
++
++    result: str
++    structured: dict | None  # the answer to --json-schema, when the call passed one
++    cost_usd: float
++
++
++def claude(*args, stdin="", cwd=None, log=None):
++    """Runs `claude -p` with args under the eval config and returns its reply.
++
++    args are the prompt, if any, and flags. stdin is piped in, as the prompt or
++    beside it. log, when given, receives claude's stdout and stderr.
++    Errors when claude exits non-zero, prints no JSON, or reports an error.
++    """
++    cmd = ["claude", "-p", "--output-format", "json", "--no-session-persistence", *args]
++    out = subprocess.run(cmd, input=stdin, cwd=cwd, text=True, capture_output=True,
++                         env=os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)})
++    if log:
++        log.write_text(out.stdout + out.stderr)
++    failure = RuntimeError(out.stderr.strip()[:200] or out.stdout[:200])
++    if out.returncode:
++        raise failure
+     try:
+-        return json.loads(out.stdout).get("total_cost_usd", 0.0)
++        reply = json.loads(out.stdout)
+     except json.JSONDecodeError:
+-        return 0.0
++        raise failure from None
++    if reply.get("is_error"):
++        raise failure
++    return Reply(reply.get("result", ""), reply.get("structured_output"), reply.get("total_cost_usd", 0.0))
++
++
++def run_skill(repo, log, args):
++    """Runs one round of the skill in repo and returns its cost in USD.
++
++    Errors when the claude call fails. The log and the skill's record are kept either way.
++    """
++    try:
++        return claude(f"/unsmell:unsmell {args}".strip(), "--plugin-dir", str(SKILL_REPO),
++                      "--permission-mode", "auto", "--permission-prompts", "none",
++                      # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
++                      "--allowedTools", *ALLOWED, cwd=repo, log=log).cost_usd
++    finally:
++        # The skill's own record of the round (§3.0 of SKILL.md): batches, findings, decisions.
++        record = repo / ".git" / "unsmell"
++        if record.exists():
++            shutil.move(record, log.with_suffix(""))
++            git(repo, "worktree", "prune")  # editors' worktrees the skill left behind
+ 
+ 
+ def evaluate(fixture, rounds, args):
+@@ -145,11 +177,17 @@ def evaluate(fixture, rounds, args):
+     workdir = CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}"
+     repo = materialize(fixture, spec, workdir)
+     # Which skill text the rounds ran, so that their changes can be traced to it.
+-    (workdir / "skill.sha256").write_text(hashlib.sha256((SKILL_REPO / "skills" / "unsmell" / "SKILL.md").read_bytes()).hexdigest())
++    (workdir / "skill.sha256").write_text(hashlib.sha256(SKILL.read_bytes()).hexdigest())
+     trees, deltas, report = [snapshot(repo)], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
++    converged = False
+     git(repo, "update-ref", "refs/rounds/0", git(repo, "commit-tree", trees[0], "-m", "round 0").strip())
+     for n in range(1, rounds + 1):
+-        cost = run_skill(repo, workdir / f"round-{n}.json", args)
++        try:
++            cost = run_skill(repo, workdir / f"round-{n}.json", args)
++        except RuntimeError as e:
++            report["error"] = f"round {n}: {e}"
++            print(f"{fixture.name} round {n}: claude failed: {e}", flush=True)
++            break
+         trees.append(snapshot(repo))
+         delta = Delta.between(repo, trees[-2], trees[-1])
+         ok = subprocess.run(check, shell=True, cwd=repo, capture_output=True).returncode == 0
+@@ -163,10 +201,10 @@ def evaluate(fixture, rounds, args):
+               f"reversals={report['rounds'][-1]['reversals']} rework={report['rounds'][-1]['rework']} check={'ok' if ok else 'FAIL'} ${cost:.2f}",
+               flush=True)
+         if delta.empty():
++            converged = True
+             break
+         deltas.append(delta)
+-    last = report["rounds"][-1]
+-    report["converged"] = last["added"] == last["removed"] == 0
++    report["converged"] = converged
+     report["oscillated"] = any(r["reversals"] for r in report["rounds"])
+     (workdir / "report.json").write_text(json.dumps(report, indent=2))
+     return report

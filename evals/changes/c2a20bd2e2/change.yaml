@@ -1,0 +1,154 @@
+id: c2a20bd2e2
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t4
+judge: null
+labels: []
+findings:
+- id: b1-1
+  at:
+  - evals/run.py:94-119
+  - evals/run.py:143-144
+  - evals/run.py:155
+  reach:
+  - evals/run.py:94-119
+  - evals/run.py:142-155
+  - evals/changes.py:257
+  - evals/changes.py:353-355
+  row: unparsed input
+  claim: fixture.toml is read into a raw dict at run.py:143 and its keys are tested by hand in materialize
+    (`"commit" in spec` twice, spec.get("source", ""), spec['commit']) and in evaluate (spec["check"]).
+    fixture and spec always travel together. A commit fixture without `source` silently copies from the
+    current directory, since Path("") is ".". changes.py:257 and :354 parse the same file again and run
+    the check the same way as run.py:155.
+  fix: A Fixture dataclass in run.py, built by Fixture.load(dir), with dir, check and an origin that is
+    either Commit(source, commit) or Trees(head, base or None); load errors when check is missing or a
+    commit has no source. materialize becomes Fixture.materialize(workdir) with a match on the origin,
+    and Fixture.run_check(repo, env) runs the check. evaluate and changes.py use Fixture.load instead
+    of tomllib and the check by hand.
+  decision: FIX
+  score: 8
+  reason: the full tell of unparsed input (key access past the edge, parsed three times), plus a silent
+    cwd fallback
+  same: []
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 8
+    reason: the full tell of unparsed input (key access past the edge, parsed three times), plus a silent
+      cwd fallback
+    task: t4
+    after: &id001
+    - t3
+- id: b1-13
+  at:
+  - evals/run.py:4
+  reach:
+  - evals/run.py:4
+  row: duplicated knowledge
+  claim: The module docstring is the --help description. Its Usage line repeats the usage that argparse
+    prints itself, and it leaves out --args.
+  fix: delete the Usage line; argparse prints the full usage
+  decision: FIX
+  score: 7
+  reason: a stale copy of a fact the code owns, and it already says less than the code
+  same: []
+  triage:
+    id: b1-13
+    decision: FIX
+    score: 7
+    reason: same docstring as b1-14, so it shares the Fixture task
+    task: t4
+    after: *id001
+- id: b1-14
+  at:
+  - evals/run.py:6-11
+  - evals/run.py:97-98
+  reach:
+  - evals/run.py:2-12
+  - evals/run.py:94-99
+  row: duplicated knowledge
+  claim: The fixture format (source and commit, or base/ and head/, plus check) is stated in the module
+    docstring, again in materialize's docstring, and again in README.md:41-51. The throwaway repo and
+    the config without CLAUDE.md, hooks or plugins are stated in the module docstring and in README.md:15-21.
+  fix: The Fixture type of b1-1 owns the format in its docstring, and the README Fixtures section stays
+    as the user's guide. materialize keeps only its first sentence. The module docstring says what the
+    program does and points to evals/README.md.
+  decision: FIX
+  score: 5
+  reason: one fact in three places
+  same:
+  - b1-1
+  triage:
+    id: b1-14
+    decision: FIX
+    score: 5
+    reason: one fact in three places
+    task: t4
+    after: *id001
+- id: b2-10
+  at:
+  - evals/changes.py:252
+  - evals/changes.py:257
+  - evals/changes.py:353-354
+  reach:
+  - evals/changes.py:250-257
+  - evals/changes.py:353-354
+  - evals/run.py:94-119
+  - evals/run.py:142-146
+  row: repeated derivation
+  claim: 'The fixture is located (EVALS / ''fixtures'' / name) and its fixture.toml parsed at 252-257
+    and again at 353-354, and run.py:143 parses it a third time. worktree takes the fixture name from
+    rounds/<run>/meta.yaml, check takes it from change.yaml: two sources for one fact.'
+  fix: A Fixture dataclass in run.py (path, spec, check) with Fixture.load(path); materialize takes a
+    Fixture; changes.py derives it from one source.
+  decision: FIX
+  score: 7
+  reason: derivation written three times across two files
+  same: []
+  triage:
+    id: b2-10
+    decision: FIX
+    score: 7
+    reason: derivation written three times across two files
+    task: t4
+    after: *id001
+- id: cross-1
+  at:
+  - evals/run.py:143-144
+  - evals/run.py:155
+  - evals/changes.py:252-257
+  - evals/changes.py:353-355
+  reach:
+  - evals/run.py:94-119
+  - evals/run.py:142-155
+  - evals/changes.py:250-257
+  - evals/changes.py:334-363
+  row: repeated derivation
+  claim: Both batches locate a fixture, parse its fixture.toml into a raw dict with tomllib, read spec["check"]
+    and run the check with subprocess.run(check, shell=True, cwd=repo). run.py:143-144 and :155 do it
+    once, and changes.py does it twice (252-257 in worktree, 353-355 in check). Each spells "fixture.toml"
+    and the "check" key itself, and changes.py also spells the EVALS / "fixtures" / name path.
+  fix: A Fixture dataclass in run.py with Fixture.load(dir) (and a lookup by name under the fixtures directory),
+    the check as a field, an origin that is either Commit(source, commit) or Trees(head, base or None),
+    materialize(workdir) and run_check(repo, env). evaluate, worktree and check all go through it; no
+    other site names fixture.toml or its keys.
+  decision: FIX
+  score: 8
+  reason: one input parsed three times across two modules, past its edge, by key
+  same:
+  - b1-1
+  - b2-10
+  - b1-14
+  triage:
+    id: cross-1
+    decision: FIX
+    score: 8
+    reason: one input parsed three times across two modules, past its edge, by key
+    task: t4
+    after: *id001
+after:
+- 58d3833eff
+check: ok

@@ -1,0 +1,65 @@
+id: 28689d8a97
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-6
+  at:
+  - src/evm/cache/event_signature_cache.rs:20
+  reach:
+  - src/evm/cache/event_signature_cache.rs:20
+  row: tautological comment
+  claim: 'The field doc added by the changeset, "`topic0` — the keccak256 hash of the signature.", opens
+    with its field''s own name and then an em-dash appositive.
+
+    '
+  fix: /// The keccak256 hash of `signature`. Logs of this event carry it as topic 0.
+  decision: FIX
+  score: 5
+  reason: doc-opening rule hit on a changed line (§3 says fix every match); one line
+  same: []
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 5
+    reason: confirmed; doc-opening rule hit on a changed line
+    task: t2
+- id: b1-7
+  at:
+  - src/evm/cache/event_signature_cache.rs:22
+  reach:
+  - src/evm/cache/event_signature_cache.rs:22
+  - src/signatures.rs:51-53
+  row: duplicated knowledge
+  claim: 'The abi_json doc added by the changeset says "JSON of the matched ABI event item, when populated."
+    It leaves out what None means: a row cached before the abi_json column existed (migration at src/evm/cache.rs:258-262;
+    resolve_event always writes Some). The same transitional rule is stated on ResolvedEvent.abi_json
+    (src/signatures.rs:51-53). "matched" has no referent.
+
+    '
+  fix: '"/// JSON of the contract''s ABI event item named `event_name`. None on rows cached before ///
+    the column was added." If b1-2 option (a) is taken this field goes and only the ResolvedEvent doc
+    remains as the owner.
+
+    '
+  decision: FIX
+  score: 5
+  reason: states a missing None condition on a changed line; transitional state must say it is transitional
+    (§5)
+  same:
+  - b1-2
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 5
+    reason: confirmed; the migration at cache.rs:258-262 makes None transitional, the new doc does not
+      say so
+    task: t2
+check: ok

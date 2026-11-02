@@ -1,0 +1,20 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..2b80a9c 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -33,14 +33,7 @@ impl EventSignatureCache {
+         Self { conn }
+     }
+ 
+-    /// Open a standalone signature cache at the given path. Creates the DB and
+-    /// runs migrations if needed. Equivalent to
+-    /// `CacheDb::open(path)?.signatures()`.
+-    pub fn open(path: &str) -> Result<Self, CacheError> {
+-        Ok(super::CacheDb::open(path)?.signatures())
+-    }
+-
+-    /// Open a standalone in-memory signature cache. Useful for tests.
++    /// Opens a cache that lives only in memory, with its schema migrated.
+     pub fn open_in_memory() -> Result<Self, CacheError> {
+         Ok(super::CacheDb::open_in_memory()?.signatures())
+     }

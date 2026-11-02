@@ -1,0 +1,43 @@
+diff --git a/seb.py b/seb.py
+index ab9a4a1..928d023 100644
+--- a/seb.py
++++ b/seb.py
+@@ -9,6 +9,7 @@ import os
+ import sqlite3
+ import sys
+ import uuid
++from collections.abc import Iterator
+ from dataclasses import dataclass
+ from datetime import date, datetime, timedelta, timezone
+ from pathlib import Path
+@@ -141,16 +142,23 @@ class EnableBanking:
+             return session
+         return self.authorize()
+ 
+-    def transactions(self, uid: str, since: date | None) -> list[dict]:
+-        params, out = {"date_from": since.isoformat()} if since else {}, []
++    def pages(self, path: str, params: dict[str, str]) -> Iterator[dict]:
++        """Yields each page of the GET at path, up to the page without a continuation_key."""
+         while True:
+-            page = self.call("GET", f"/accounts/{uid}/transactions", params=params)
++            page = self.call("GET", path, params=params)
++            yield page
++            if not page.get("continuation_key"):
++                return
++            params = params | {"continuation_key": page["continuation_key"]}
++
++    def transactions(self, uid: str, since: date | None) -> list[dict]:
++        params = {"date_from": since.isoformat()} if since else {}
++        out = []
++        for page in self.pages(f"/accounts/{uid}/transactions", params):
+             out += page["transactions"]
+             print(f"\r{uid}: {len(out)} transactions", end="", file=sys.stderr, flush=True)
+-            if not page.get("continuation_key"):
+-                print(file=sys.stderr)
+-                return out
+-            params["continuation_key"] = page["continuation_key"]
++        print(file=sys.stderr)
++        return out
+ 
+ 
+ # The txn key needs an entry_reference, and only booked transactions have one

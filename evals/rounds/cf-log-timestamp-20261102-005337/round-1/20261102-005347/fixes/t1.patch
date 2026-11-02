@@ -1,0 +1,104 @@
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 8596f73..ac6059b 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -238,12 +238,9 @@ pub(crate) fn migrations() -> rusqlite_migration::Migrations<'static> {
+         ),
+         rusqlite_migration::M::up(
+             "
+-        -- Per-log block timestamp, when the provider includes it on the
+-        -- eth_getLogs response (a non-standard but common extension). Lets the
+-        -- query path stamp EvmEvent.timestamp directly, skipping the
+-        -- eth_getBlockByNumber header fetch. Nullable: most providers omit it,
+-        -- and rows written before this column existed have NULL — in both
+-        -- cases the reader falls back to the cached block header.
++        -- The block's Unix timestamp in seconds, which some providers add to
++        -- eth_getLogs results as a non-standard extension. NULL when the
++        -- provider omitted it or the row predates this migration.
+         ALTER TABLE cached_logs ADD COLUMN block_timestamp INTEGER;
+         ",
+         ),
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..a479880 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -398,15 +398,8 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistBackend<EvmEvent
+             async move {
+                 match result {
+                     Ok(log) => {
+-                        let mut event = log_to_evm_event(&log);
+-                        // Only round-trip to a block header when the log didn't
+-                        // already carry its timestamp.
+-                        if log.block_timestamp.is_none() {
+-                            let bn = log.block_number.unwrap_or(0);
+-                            event.timestamp = ensure_block_header_via(&provider, &store, bn)
+-                                .await?
+-                                .timestamp;
+-                        }
++                        let timestamp = log_timestamp(&provider, &store, &log).await?;
++                        let event = log_to_evm_event(&log, timestamp);
+                         let pos = event.position();
+                         Ok(Positioned::new(event, pos))
+                     }
+@@ -509,7 +502,7 @@ fn apply_topics(mut filter: Filter, topics: &[Option<[u8; 32]>; 4]) -> Filter {
+     filter
+ }
+ 
+-fn log_to_evm_event(log: &Log) -> EvmEvent {
++fn log_to_evm_event(log: &Log, timestamp: u64) -> EvmEvent {
+     let addr: [u8; 20] = log.address().0.0;
+     let block_hash: [u8; 32] = log.block_hash.map_or([0; 32], |h| h.0);
+     let tx_hash: [u8; 32] = log.transaction_hash.map_or([0; 32], |h| h.0);
+@@ -517,9 +510,7 @@ fn log_to_evm_event(log: &Log) -> EvmEvent {
+     EvmEvent {
+         contract_address: addr,
+         block_number: log.block_number.unwrap_or(0),
+-        // Provider-supplied per-log timestamp when present; otherwise 0, and
+-        // the caller fills it from the (cached) block header.
+-        timestamp: log.block_timestamp.unwrap_or(0),
++        timestamp,
+         block_hash,
+         log_index: log.log_index.unwrap_or(0) as u32,
+         tx_hash,
+@@ -570,6 +561,23 @@ where
+     })
+ }
+ 
++/// Returns the Unix timestamp of the block that holds `log`. A log that
++/// carries its own timestamp needs no block header. For any other log, the
++/// timestamp comes from the block header. Errors when the header fetch fails.
++async fn log_timestamp<P: Provider<Ethereum>>(
++    provider: &P,
++    store: &LogCache,
++    log: &Log,
++) -> Result<u64, HistoryError> {
++    if let Some(timestamp) = log.block_timestamp {
++        return Ok(timestamp);
++    }
++    let block_number = log.block_number.unwrap_or(0);
++    Ok(ensure_block_header_via(provider, store, block_number)
++        .await?
++        .timestamp)
++}
++
+ fn build_fetcher<P>(
+     provider: P,
+     store: Arc<LogCache>,
+@@ -597,15 +605,8 @@ where
+             tracing::debug!(from, to, num_logs = logs.len(), "eth_getLogs returned");
+ 
+             let end_header = ensure_block_header_via(&provider, &store, to).await?;
+-            for log in &logs {
+-                // Logs that carry their own timestamp need no header — the
+-                // query path reads it straight off the persisted log.
+-                if log.block_timestamp.is_some() {
+-                    continue;
+-                }
+-                if let Some(bn) = log.block_number {
+-                    let _ = ensure_block_header_via(&provider, &store, bn).await;
+-                }
++            for log in logs.iter().filter(|log| log.block_number.is_some()) {
++                let _ = log_timestamp(&provider, &store, log).await;
+             }
+ 
+             Ok(LogPage {

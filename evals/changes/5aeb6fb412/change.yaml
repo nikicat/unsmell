@@ -1,0 +1,48 @@
+id: 5aeb6fb412
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261101-210501
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  note: would be even better to refactor more
+  by: user
+  date: '2026-11-01'
+findings:
+- id: b1-2
+  at:
+  - internal/proxy/prompter.go:55
+  - internal/proxy/prompter.go:112-116
+  - internal/proxy/prompter.go:188-193
+  reach:
+  - internal/proxy/prompter.go:53-58
+  - internal/proxy/prompter.go:60-125
+  - internal/proxy/prompter.go:181-194
+  row: algebraic blindness
+  claim: Before the change, a non-nil bridge that was not active stood for "waiting for the front prompter".
+    Now the only such state is "lost the claim to another owner" (:112-114). newPrompterBridge then returns
+    a non-nil bridge that owns nothing and exports nothing, and the owned flag exists only so that close()
+    can tell that case apart. This is the same no-bridge outcome as the same-bus case at :76-79, but spelled
+    as a third state.
+  fix: 'Final shape: newPrompterBridge returns (nil, nil) when the backend bus already has a prompter,
+    and also when RequestName does not make it the primary owner (it logs that case). A returned bridge
+    therefore always owns the name and has exported the object. owned, active and closed go away. close()
+    unexports the callbacks under mu and then releases the name unconditionally. activate either folds
+    into newPrompterBridge or reports the lost claim to it (via a sentinel error or a named result), so
+    the caller can return nil.'
+  decision: ASK
+  score: 5
+  reason: There are two defensible shapes (fold activate in, or keep it with a named outcome). The change
+    is internal and p.prompter is nil-checked in Proxy.Close, so no caller outside the package notices.
+  same:
+  - b1-1
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 5
+    reason: two defensible shapes (fold activate into the constructor, or keep it with a named lost-claim
+      outcome); patch shows the fold
+    task: t2
+check: ok

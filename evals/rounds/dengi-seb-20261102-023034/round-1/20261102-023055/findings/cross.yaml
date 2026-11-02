@@ -1,0 +1,5 @@
+# The changeset is a single batch (b1), so no finding can cross batches.
+# No cross-file agent was run.
+read: []
+unread: []
+findings: []

@@ -1,0 +1,15 @@
+diff --git a/seb.py b/seb.py
+index 3c4369b..a2f4344 100644
+--- a/seb.py
++++ b/seb.py
+@@ -66,6 +66,10 @@ class EnableBanking:
+     psu: dict[str, str]
+ 
+     def call(self, method, path, **kw):
++        """Returns the decoded JSON body of an API call.
++
++        Exits the program with the status and body when the API answers with an error.
++        """
+         now = int(datetime.now(timezone.utc).timestamp())
+         token = jwt.encode(
+             {"iss": "enablebanking.com", "aud": "api.enablebanking.com", "iat": now, "exp": now + 3600},

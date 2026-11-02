@@ -1,0 +1,36 @@
+id: 1792ee335b
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-12
+  at:
+  - schema.sql:9-15
+  reach:
+  - schema.sql:6-20
+  row: repeated derivation
+  claim: The debit rule raw ->> '$.credit_debit_indicator' = 'DBIT' is written three times, in amount_cents,
+    counterparty and counterparty_iban.
+  fix: One generated column, debit INTEGER AS (raw ->> '$.credit_debit_indicator' = 'DBIT'), placed before
+    the columns that use it. amount_cents uses IIF(debit, -1, 1), and counterparty and counterparty_iban
+    use IIF(debit, creditor, debtor).
+  decision: ASK
+  score: 5
+  reason: A repeated rule, but the fix adds a column to a stored schema. Because the table uses CREATE
+    TABLE IF NOT EXISTS, existing databases would not get it (see b1-14).
+  same:
+  - b1-14
+  triage:
+    id: b1-12
+    decision: ASK
+    score: 5
+    reason: it changes the stored schema, and existing databases would not get the change (b1-14)
+    task: t4
+check: ok

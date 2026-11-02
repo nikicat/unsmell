@@ -1,0 +1,183 @@
+read: [internal/proxy/prompter.go, internal/proxy/prompter_test.go]
+unread: []
+findings:
+  - id: b1-1
+    at: [internal/proxy/prompter.go:56-57, internal/proxy/prompter.go:103-107, internal/proxy/prompter.go:183]
+    reach: [internal/proxy/prompter.go:53-58, internal/proxy/prompter.go:96-125, internal/proxy/prompter.go:181-183]
+    row: oversized lock
+    claim: "the changeset removed watchFrontPrompter/awaitFrontPrompter (HEAD prompter.go:128-175), whose goroutine called b.activate() concurrently with close(); what served only that path survives: the active and closed fields (prompter.go:56-57), activate's closed||active guard and its lock (prompter.go:103-107), the closed write in close (prompter.go:183) and the doc sentence 'Idempotent, and a no-op after close()' (prompter.go:99). activate now has one caller, newPrompterBridge at prompter.go:90, before the bridge is returned, and active always equals owned"
+    fix: "delete the active and closed fields, the guard and the mu.Lock/Unlock in activate, b.closed = true in close, and the idempotency sentence; mu then guards callbacks and owned only (owned goes too if b1-2 is taken)"
+    decision: FIX
+    score: 6
+    reason: dead code left by a narrowing; behaviour-preserving, private type, single caller verified by grep
+    same: [b1-5]
+  - id: b1-2
+    at: [internal/proxy/prompter.go:55, internal/proxy/prompter.go:112-115, internal/proxy/prompter.go:188-193]
+    reach: [internal/proxy/prompter.go:53-58, internal/proxy/prompter.go:75-125, internal/proxy/prompter.go:181-194]
+    row: algebraic blindness
+    claim: "when RequestName is refused (prompter.go:112-115) newPrompterBridge returns a non-nil bridge that owns and exports nothing; owned exists only so close() can tell that inert bridge from a live one. With the deferred activation removed by the changeset (HEAD prompter.go:128-175), an inert bridge can never become live"
+    fix: "newPrompterBridge returns (nil, nil) when the claim is refused (keeping the log line); delete owned; close() releases the name unconditionally; mu guards callbacks only"
+    decision: ASK
+    score: 5
+    reason: "a second, further shape stacked on b1-1; changes which state Proxy.prompter holds (nil instead of an inert bridge), and a double Proxy.Close would issue a second, harmless ReleaseName"
+    same: [b1-1]
+  - id: b1-3
+    at: [internal/proxy/prompter.go:28-32, internal/proxy/prompter.go:64-68, internal/proxy/prompter_test.go:61-63, internal/proxy/prompter_test.go:147-149]
+    reach: [internal/proxy/prompter.go:23-46, internal/proxy/prompter.go:60-74, internal/proxy/prompter_test.go:60-66, internal/proxy/prompter_test.go:143-150, internal/proxy/forward.go:68-71, internal/proxy/proxy.go:164-167]
+    row: duplicated knowledge
+    claim: "the changeset added to the newPrompterBridge doc (prompter.go:66-68) and the test doc (prompter_test.go:147-149) that in the local-takeover topology the gcr-prompter fallback draws its own GTK dialog instead of hanging; the type doc (prompter.go:28-30), TestPrompterBridge's doc (prompter_test.go:61-63), forward.go:70-71 and proxy.go:165-166 still say the fallback is display-less and can never draw, so the unlock hangs. One of the two is false, and the fact has six copies"
+    fix: "the prompterBridge type doc owns what the fallback does in the local-takeover topology and why owning the backend name pre-empts it, stated once and correctly; the constructor doc, the activate doc, both test docs, nameHasOwner's doc (forward.go:68-71) and the proxy.go:164-167 comment drop the rationale or point to prompterBridge"
+    decision: ASK
+    score: 9
+    reason: "a doc states something false, but which one is true (hang vs GTK dialog) is a domain fact the code does not show; the user must say"
+    same: [b1-4, b1-7, b1-13]
+  - id: b1-4
+    at: [internal/proxy/prompter.go:60-74]
+    reach: [internal/proxy/prompter.go:60-74]
+    row: long comment
+    claim: "the newPrompterBridge doc the changeset rewrote is 14 lines, cause (b) wrong subject: it narrates history ('it does NOT wait for gnome-shell's front prompter to appear first' contrasts with the removed watchFrontPrompter path), repeats the system rationale the type doc owns (b1-3), repeats the forwarding-by-name fact (b1-6), says 'unconditionally' though the claim is conditional on prompter.go:76, uses 'window' for a time window right after a GTK dialog, names the removed 're-arming' mechanism, opens with its own name, and leaves out the exits (an inert bridge when the claim is refused, the claim and export errors)"
+    fix: "Returns a bridge that already holds org.gnome.keyring.SystemPrompter on backendConn and forwards prompts to frontConn. Returns (nil, nil) when backendConn already has a prompter (remote mode, or one shared bus), since there is nothing to bridge. Errors when claiming the name or exporting the bridge fails. (Adjust the inert-bridge case to the b1-2 decision.)"
+    decision: FIX
+    score: 6
+    reason: shortens a comment that narrates history and states facts twice, and adds the missing exits
+    same: [b1-3, b1-6]
+  - id: b1-5
+    at: [internal/proxy/prompter.go:96-101]
+    reach: [internal/proxy/prompter.go:96-101]
+    row: narrating doc comment
+    claim: "the activate doc, whose lines 100-101 the changeset rewrote, opens with its own name, narrates ('then exports the bridge'), names the mechanism ('DoNotQueue'), carries the caller's timing ('BEFORE any client triggers an unlock'), keeps the dead 'Idempotent, and a no-op after close()' (b1-1), hedges with 'somehow', and states no error contract"
+    fix: "Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the bridge there. Leaves the name to its owner, and the bridge inactive, when another connection already holds it. Errors when the claim or the export fails."
+    decision: FIX
+    score: 6
+    reason: removes a dead claim and narration, states the missing error contract; shares a task with b1-1
+    same: [b1-1]
+  - id: b1-6
+    at: [internal/proxy/prompter.go:68-71, internal/proxy/prompter_test.go:149-150, internal/proxy/prompter_test.go:187-188]
+    reach: [internal/proxy/prompter.go:50, internal/proxy/prompter.go:68-71, internal/proxy/prompter_test.go:149-150, internal/proxy/prompter_test.go:187-188]
+    row: duplicated knowledge
+    claim: "the changeset added in three comments that forwarding resolves gnome-shell by name at prompt time and so survives a relogin without re-arming (prompter.go:68-71, prompter_test.go:149-150, 187-188); the item that decides it is the toShell field (prompter.go:50), whose comment does not say it. 're-arming' names the mechanism the changeset removed"
+    fix: "toShell's comment owns it, on its own line above the field: 'Forwards Prompter calls to whichever connection owns SystemPrompter on the front bus at call time, so a gnome-shell restart needs nothing from the bridge.' The three other copies are deleted"
+    decision: FIX
+    score: 6
+    reason: one fact, three copies, wrong owner; all copies on changed lines
+    same: [b1-4, b1-7]
+  - id: b1-7
+    at: [internal/proxy/prompter_test.go:143-150, internal/proxy/prompter_test.go:167-168, internal/proxy/prompter_test.go:187-188]
+    reach: [internal/proxy/prompter_test.go:143-150, internal/proxy/prompter_test.go:167-168, internal/proxy/prompter_test.go:187-188]
+    row: long comment
+    claim: "the test doc the changeset rewrote (prompter_test.go:143-150) is 8 lines, opens with its own name, shouts ('IMMEDIATELY'), and repeats the constructor doc's rationale (fallback D-Bus activation, GTK dialog, forwarding by name); 'win that window' reads as a GUI window. The added comments at :167-168 and :187-188 repeat the doc and the assert message"
+    fix: "doc: 'Checks that the bridge claims the backend SystemPrompter name before gnome-shell's prompter exists, and forwards to that prompter once it appears. This is the relogin case, where the proxy often starts first.' Delete :167-168 (the assert message says it) and shorten :187-188 to 'Forwarding works once the front prompter appears.'"
+    decision: FIX
+    score: 5
+    reason: removes restated rationale and a duplicate comment on changed lines
+    same: [b1-3, b1-6]
+  - id: b1-8
+    at: [internal/proxy/prompter_test.go:75-76, internal/proxy/prompter_test.go:98]
+    reach: [internal/proxy/prompter_test.go:75-76, internal/proxy/prompter_test.go:98, e2e/gnome/vm/demo-driver-install.sh:138-139]
+    row: ambiguous noun
+    claim: "the changeset removed the front-bus guard nameHasOwner(frontConn, systemPrompterName) at HEAD prompter.go:87, so the comment '(so the bridge's guard sees it and activates)' at prompter_test.go:75-76 and the assert message 'bridge should activate when the front bus has a prompter and the backend does not' at :98 are now false; e2e/gnome/vm/demo-driver-install.sh:138-139 still says the bridge 're-establishes' the forwarding after the relogin"
+    fix: "prompter_test.go:75-76 becomes 'gnome-shell's prompter on the front bus.'; the :98 message becomes 'bridge should be created when the backend bus has no prompter'; the demo script's parenthesis is dropped or says the bridge holds the backend name from startup"
+    decision: FIX
+    score: 9
+    reason: "unchanged lines, but the changeset made them false; the fix belongs with the guard's removal (§6)"
+    same: []
+  - id: b1-9
+    at: [internal/proxy/prompter.go:96-102, internal/proxy/prompter.go:65, internal/proxy/prompter_test.go:147]
+    reach: [internal/proxy/prompter.go:90, internal/proxy/prompter.go:96-102]
+    row: misleading name
+    claim: "activate means two things in the same comments: D-Bus activation of the gcr-prompter fallback (prompter.go:65, 98; prompter_test.go:147) and prompterBridge.activate, which claims the name and exports the bridge; with the deferred path removed it is a one-shot construction step"
+    fix: "rename activate to claimSystemPrompter (or fold its body into newPrompterBridge); 'activate' in prose then only means D-Bus activation"
+    decision: SKIP
+    score: 4
+    reason: the name is not false, only overloaded; rename is low value
+    same: []
+  - id: b1-10
+    at: [internal/proxy/prompter.go:23, internal/proxy/prompter.go:129, internal/proxy/prompter.go:140, internal/proxy/prompter.go:146, internal/proxy/prompter.go:196, internal/proxy/prompter.go:204, internal/proxy/prompter.go:210, internal/proxy/prompter_test.go:14, internal/proxy/prompter_test.go:43, internal/proxy/prompter_test.go:60]
+    reach: [internal/proxy/prompter.go:23, internal/proxy/prompter.go:129, internal/proxy/prompter.go:140, internal/proxy/prompter.go:146, internal/proxy/prompter.go:196, internal/proxy/prompter.go:204, internal/proxy/prompter.go:210, internal/proxy/prompter_test.go:14, internal/proxy/prompter_test.go:43, internal/proxy/prompter_test.go:60]
+    row: tautological comment
+    claim: "docs on unchanged lines open with their declaration's own name (prompterBridge, BeginPrompting, PerformPrompt, StopPrompting, prompterCallback, PromptReady, PromptDone, mockShellPrompter, mockKeyringCallback, TestPrompterBridge); no revive exported rule keeps the convention"
+    fix: drop the name; functions start at the verb, types at the noun phrase
+    decision: PLAN
+    score: 5
+    reason: catalog tell in full, but on unchanged lines (the changed-line ones are in b1-4, b1-5, b1-7)
+    same: []
+  - id: b1-11
+    at: [internal/proxy/prompter_test.go:68-97, internal/proxy/prompter_test.go:152-192]
+    reach: [internal/proxy/prompter_test.go:67-195]
+    row: repeated derivation
+    claim: "both tests build the same fixtures inline: two test dbus daemons with kill/wait cleanup (:68-73, :152-156), the proxy connected between them (:91-97, :159-165), the mock shell prompter exported and named (:77-88, :174-185), and the keyring connection and prompter object (:102-109, :189-192)"
+    fix: "test helpers startBuses(t) (frontAddr, backendAddr), connectProxy(t, frontAddr, backendAddr) *Proxy, startShellPrompter(t, frontAddr) *mockShellPrompter, and connectKeyring(t, backendAddr) returning the conn and the prompter object; both tests read as their steps"
+    decision: PLAN
+    score: 6
+    reason: unchanged lines
+    same: []
+  - id: b1-12
+    at: [internal/proxy/prompter.go:177, internal/proxy/prompter.go:184-186]
+    reach: [internal/proxy/prompter.go:170-187]
+    row: duplication
+    claim: "close() repeats unexportCallback's unexport-and-delete of a callback proxy (prompter.go:177-178 and 185-186)"
+    fix: a dropCallbackLocked(path) helper, called under mu by unexportCallback and by close's loop
+    decision: PLAN
+    score: 5
+    reason: unchanged lines in a function the changeset only shrank
+    same: []
+  - id: b1-13
+    at: [internal/proxy/prompter.go:23-46]
+    reach: [internal/proxy/prompter.go:23-46]
+    row: long comment
+    claim: "the prompterBridge type doc is 24 lines; besides the fact b1-3 corrects it narrates the protocol method by method (interface read back) and the payload's end-to-end path, which callForwarder's doc (forward.go:38-40) also states"
+    fix: "two or three sentences: the only way the backend gnome-keyring reaches the user's real unlock prompter across the private bus; it holds the backend SystemPrompter name so the fallback never answers, and it never reads the exchange payload. The per-direction method list goes"
+    decision: PLAN
+    score: 5
+    reason: "unchanged lines; whatever b1-3 decides edits the fallback sentence only"
+    same: [b1-3]
+  - id: b1-14
+    at: [internal/proxy/prompter.go:73-74, internal/proxy/prompter.go:77-78]
+    reach: [internal/proxy/prompter.go:73-78, internal/proxy/proxy.go:164-167]
+    row: duplicated knowledge
+    claim: "the (nil, nil) no-bridge-needed contract is stated in newPrompterBridge's doc (prompter.go:73-74), the comment at its check (prompter.go:77-78) and the caller's comment (proxy.go:166-167)"
+    fix: "newPrompterBridge's doc owns it; the proxy.go comment says only that a nil bridge means none is needed, or drops it"
+    decision: PLAN
+    score: 5
+    reason: unchanged lines, one copy outside the batch
+    same: [b1-4]
+  - id: b1-15
+    at: [internal/proxy/prompter.go:201, internal/proxy/prompter.go:161]
+    reach: [internal/proxy/prompter.go:159-162, internal/proxy/prompter.go:199-202]
+    row: speculative generality
+    claim: prompterCallback.logger is set in exportCallback (prompter.go:161) and never read
+    fix: delete the field and its initialiser
+    decision: PLAN
+    score: 5
+    reason: dead field on unchanged lines
+    same: []
+  - id: b1-16
+    at: [internal/proxy/forward.go:38-40, internal/proxy/prompter.go:34-36]
+    reach: [internal/proxy/forward.go:38-40, internal/proxy/prompter.go:23-46]
+    row: duplicated knowledge
+    claim: "reported by the t4 editor: callForwarder's type doc (forward.go:38-40) and the prompterBridge type doc (prompter.go:34-36) both state that the exchange payload with the DH-encrypted password passes through unread; both lines are unchanged by the changeset"
+    fix: "callForwarder owns that it forwards bodies verbatim; the prompterBridge doc keeps only that the dispatcher never sees the plaintext, or points to callForwarder"
+    decision: PLAN
+    score: 5
+    reason: unchanged lines in both files
+    same: [b1-13]
+  - id: b1-17
+    at: [internal/proxy/prompter.go:122, internal/proxy/prompter_test.go:14, internal/proxy/prompter_test.go:43]
+    reach: [internal/proxy/prompter.go:105-190, internal/proxy/prompter_test.go:14-50]
+    row: compressed doc
+    claim: "reported by the t10 editor: on unchanged lines, the StopPrompting doc joins a second idea with a semicolon, both mock docs join one with a colon, and several prompter.go docs speak as we and us"
+    fix: plain two-sentence docs in the third person
+    decision: PLAN
+    score: 5
+    reason: unchanged lines
+    same: [b1-10]
+  - id: b1-18
+    at: [internal/proxy/prompt_test.go]
+    reach: [internal/proxy/prompt_test.go, internal/proxy/prompter_test.go]
+    row: repeated derivation
+    claim: "reported by the t11 editor: newPromptTestEnv in prompt_test.go starts the same pair of test buses inline that t11's startBuses helper extracts"
+    fix: newPromptTestEnv uses startBuses
+    decision: PLAN
+    score: 5
+    reason: outside the changeset
+    same: [b1-11]

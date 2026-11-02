@@ -1,0 +1,35 @@
+id: 45872ad7a2
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b1-12
+judge: null
+labels: []
+findings:
+- id: b1-12
+  at:
+  - evals/run.py:43
+  - evals/run.py:58
+  - evals/run.py:82
+  - evals/run.py:122
+  reach:
+  - evals/run.py:38-139
+  - evals/changes.py
+  row: missing receiver
+  claim: The eval repo is passed to snapshot, Delta.between, clear, run_skill and every git call.
+  fix: A Repo(path) class with git, snapshot, diff and clear as methods. git stays usable on the source
+    and review repos that changes.py drives.
+  decision: SKIP
+  score: 4
+  reason: git is a generic helper used on several repos, so the shared column is weak, and the fix churns
+    every git call in changes.py
+  same: []
+  triage:
+    id: b1-12
+    decision: SKIP
+    score: 4
+    reason: git is a generic helper used on several repos, so the shared column is weak, and the fix churns
+      every git call in changes.py
+    task: skip-b1-12
+check: ok

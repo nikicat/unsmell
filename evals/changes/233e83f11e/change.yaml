@@ -1,0 +1,50 @@
+id: 233e83f11e
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-5
+  at:
+  - seb.py:61
+  - seb.py:66
+  - seb.py:73-74
+  - seb.py:83-88
+  - seb.py:96-97
+  - seb.py:101
+  - seb.py:108
+  reach:
+  - seb.py:52-109
+  row: unparsed input
+  claim: 'every Enable Banking body is a dict accessed by key at its use site: [''url''], session [''access''][''valid_until'']
+    and [''accounts''], acc.get(''account_id'', {}).get(''iban'') or acc[''uid''], page[''transactions'']
+    and .get(''continuation_key''), t[''status''] and t[''entry_reference'']; the schema the script depends
+    on is written nowhere'
+  fix: 'pydantic models parsed in the client methods: Session(valid_until: AwareDatetime, accounts: list[Account])
+    with an expired property, Account(uid, iban: str | None via account_id), Page(transactions: list[Transaction],
+    continuation_key: str | None), Transaction(status, entry_reference: str | None) keeping the raw dict
+    for storage'
+  decision: ASK
+  score: 7
+  reason: a schema for an input body is a library's job (pydantic); a hand-written set of dataclasses
+    is not a FIX (§5); adds a dependency
+  same:
+  - b1-6
+  - b1-10
+  triage:
+    id: b1-5
+    decision: ASK
+    score: 7
+    reason: response schema belongs to pydantic, a new dependency
+    task: t4
+    after:
+    - t1
+after:
+- 2233303edb
+check: ok

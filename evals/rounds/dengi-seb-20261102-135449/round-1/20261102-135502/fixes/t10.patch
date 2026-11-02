@@ -1,0 +1,40 @@
+diff --git a/seb.py b/seb.py
+index 3c4369b..3a1d0ac 100644
+--- a/seb.py
++++ b/seb.py
+@@ -12,7 +12,7 @@ import sys
+ import uuid
+ from collections.abc import Iterable, Iterator
+ from dataclasses import dataclass
+-from datetime import date, datetime, timedelta, timezone
++from datetime import UTC, date, datetime, timedelta
+ from pathlib import Path
+ from urllib.parse import parse_qs, urlparse
+ 
+@@ -54,7 +54,7 @@ def redirect_code(url: str, state: str) -> str:
+ 
+ def still_valid(session: dict) -> bool:
+     """Checks whether the given session still grants access."""
+-    return datetime.fromisoformat(session["access"]["valid_until"]) > datetime.now(timezone.utc)
++    return datetime.fromisoformat(session["access"]["valid_until"]) > datetime.now(UTC)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -66,7 +66,7 @@ class EnableBanking:
+     psu: dict[str, str]
+ 
+     def call(self, method, path, **kw):
+-        now = int(datetime.now(timezone.utc).timestamp())
++        now = int(datetime.now(UTC).timestamp())
+         token = jwt.encode(
+             {"iss": "enablebanking.com", "aud": "api.enablebanking.com", "iat": now, "exp": now + 3600},
+             self.key, algorithm="RS256", headers={"kid": self.app_id},
+@@ -97,7 +97,7 @@ class EnableBanking:
+ 
+     def start_auth(self, state: str) -> str:
+         """Returns the bank's login URL for a new authorization with the given state."""
+-        valid_until = datetime.now(timezone.utc) + timedelta(days=180)  # PSD2 max; bank may cap lower
++        valid_until = datetime.now(UTC) + timedelta(days=180)  # PSD2 max; bank may cap lower
+         return self.call("POST", "/auth", json={
+             "access": {"valid_until": valid_until.isoformat()},
+             "aspsp": {"name": os.environ.get("EB_ASPSP", "SEB"), "country": "LT"},

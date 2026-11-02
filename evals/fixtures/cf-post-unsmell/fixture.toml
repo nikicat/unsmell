@@ -1,0 +1,5 @@
+# Rust, 2 files: a commit that was itself the output of an unsmell pass. The
+# skill should find little or nothing here, so this one measures restraint.
+source = "~/src/chainfold"
+commit = "6a18c18"
+check = "CARGO_TARGET_DIR=$HOME/.cache/unsmell-eval/target/chainfold cargo check --all-targets --all-features --locked"

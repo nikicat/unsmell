@@ -1,0 +1,121 @@
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+index 489ee70..09ec547 100644
+--- a/internal/notification/markup.go
++++ b/internal/notification/markup.go
+@@ -34,13 +34,19 @@ func (m *bodyMarkup) italic(s string) {
+ 	m.b.WriteString("</i>")
+ }
+ 
+-// Appends the process names on a new line, joined by arrows. When showPIDs
+-// is set, each name is followed by its PID in brackets.
++// Starts a new line and appends the process names as processNames does.
+ func (m *bodyMarkup) processChain(chain []approval.ProcessInfo, showPIDs bool) {
++	if len(chain) > 0 {
++		m.text("\n")
++	}
++	m.processNames(chain, showPIDs)
++}
++
++// Appends the process names joined by arrows. When showPIDs is set, each name
++// is followed by its PID in brackets.
++func (m *bodyMarkup) processNames(chain []approval.ProcessInfo, showPIDs bool) {
+ 	for i, p := range chain {
+-		if i == 0 {
+-			m.text("\n")
+-		} else {
++		if i > 0 {
+ 			m.text(" ← ")
+ 		}
+ 		m.text(p.Name)
+@@ -50,6 +56,11 @@ func (m *bodyMarkup) processChain(chain []approval.ProcessInfo, showPIDs bool) {
+ 	}
+ }
+ 
++// Reports whether nothing has been written yet.
++func (m *bodyMarkup) empty() bool {
++	return m.b.Len() == 0
++}
++
+ // Returns the body written so far.
+ func (m *bodyMarkup) String() string {
+ 	return m.b.String()
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 9623e37..7652959 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -78,33 +78,28 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ // formatSlowUpstreamBody builds the notification body from item labels and
+ // optional process chain.
+ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+-	var b strings.Builder
++	var b bodyMarkup
+ 
+ 	// Item labels (fall back to Path when Label is empty)
+ 	switch len(ctx.Items) {
+ 	case 0:
+ 		// no items
+ 	case 1:
+-		b.WriteString(itemDisplayLabel(ctx.Items[0]))
++		b.text(itemDisplayLabel(ctx.Items[0]))
+ 	default:
+ 		labels := make([]string, len(ctx.Items))
+ 		for i, item := range ctx.Items {
+ 			labels[i] = itemDisplayLabel(item)
+ 		}
+-		fmt.Fprintf(&b, "%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
++		b.text(fmt.Sprintf("%s (%d items)", strings.Join(labels, ", "), len(ctx.Items)))
+ 	}
+ 
+ 	// Process chain (Name ← Name convention, matching desktop.go)
+ 	if len(ctx.SenderInfo.ProcessChain) > 0 {
+-		if b.Len() > 0 {
+-			b.WriteString("\n")
+-		}
+-		for i, p := range ctx.SenderInfo.ProcessChain {
+-			if i > 0 {
+-				b.WriteString(" \u2190 ")
+-			}
+-			b.WriteString(p.Name)
++		if !b.empty() {
++			b.text("\n")
+ 		}
++		b.processNames(ctx.SenderInfo.ProcessChain, false)
+ 	}
+ 
+ 	return b.String()
+diff --git a/internal/notification/slow_upstream_test.go b/internal/notification/slow_upstream_test.go
+index 0a58570..737a072 100644
+--- a/internal/notification/slow_upstream_test.go
++++ b/internal/notification/slow_upstream_test.go
+@@ -276,3 +276,31 @@ func TestSlowUpstreamNotifier_ProcessChainOnly(t *testing.T) {
+ 		t.Errorf("unexpected body: %q", mock.notified[0].body)
+ 	}
+ }
++
++func TestSlowUpstreamNotifier_EscapesInjectedMarkup(t *testing.T) {
++	mock := &mockNotifier{}
++	n := newSlowUpstreamNotifier(mock)
++
++	ctx := proxy.UpstreamCallContext{
++		Items: []approval.ItemInfo{
++			{Label: `<a href="x">pay</a> & co`},
++			{Path: "/org/<b>evil</b>"},
++		},
++		SenderInfo: approval.SenderInfo{
++			ProcessChain: []approval.ProcessInfo{
++				{Name: "<i>git</i>", PID: 1234},
++				{Name: "zsh", PID: 1000},
++			},
++		},
++	}
++	dismiss := n.NotifySlowUpstream(ctx)
++	defer dismiss()
++
++	mock.mu.Lock()
++	defer mock.mu.Unlock()
++	expected := "&lt;a href=&#34;x&#34;&gt;pay&lt;/a&gt; &amp; co, /org/&lt;b&gt;evil&lt;/b&gt; (2 items)\n" +
++		"&lt;i&gt;git&lt;/i&gt; \u2190 zsh"
++	if mock.notified[0].body != expected {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].body, expected)
++	}
++}

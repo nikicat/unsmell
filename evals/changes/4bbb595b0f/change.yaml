@@ -1,0 +1,102 @@
+id: 4bbb595b0f
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-4
+  at:
+  - internal/proxy/prompter.go:60-74
+  reach:
+  - internal/proxy/prompter.go:60-74
+  row: long comment
+  claim: 'the newPrompterBridge doc the changeset rewrote is 14 lines, cause (b) wrong subject: it narrates
+    history (''it does NOT wait for gnome-shell''s front prompter to appear first'' contrasts with the
+    removed watchFrontPrompter path), repeats the system rationale the type doc owns (b1-3), repeats the
+    forwarding-by-name fact (b1-6), says ''unconditionally'' though the claim is conditional on prompter.go:76,
+    uses ''window'' for a time window right after a GTK dialog, names the removed ''re-arming'' mechanism,
+    opens with its own name, and leaves out the exits (an inert bridge when the claim is refused, the
+    claim and export errors)'
+  fix: Returns a bridge that already holds org.gnome.keyring.SystemPrompter on backendConn and forwards
+    prompts to frontConn. Returns (nil, nil) when backendConn already has a prompter (remote mode, or
+    one shared bus), since there is nothing to bridge. Errors when claiming the name or exporting the
+    bridge fails. (Adjust the inert-bridge case to the b1-2 decision.)
+  decision: FIX
+  score: 6
+  reason: shortens a comment that narrates history and states facts twice, and adds the missing exits
+  same:
+  - b1-3
+  - b1-6
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 6
+    reason: the doc states the current contract only; the fallback rationale is left to t4
+    task: t3
+- id: b1-6
+  at:
+  - internal/proxy/prompter.go:68-71
+  - internal/proxy/prompter_test.go:149-150
+  - internal/proxy/prompter_test.go:187-188
+  reach:
+  - internal/proxy/prompter.go:50
+  - internal/proxy/prompter.go:68-71
+  - internal/proxy/prompter_test.go:149-150
+  - internal/proxy/prompter_test.go:187-188
+  row: duplicated knowledge
+  claim: the changeset added in three comments that forwarding resolves gnome-shell by name at prompt
+    time and so survives a relogin without re-arming (prompter.go:68-71, prompter_test.go:149-150, 187-188);
+    the item that decides it is the toShell field (prompter.go:50), whose comment does not say it. 're-arming'
+    names the mechanism the changeset removed
+  fix: 'toShell''s comment owns it, on its own line above the field: ''Forwards Prompter calls to whichever
+    connection owns SystemPrompter on the front bus at call time, so a gnome-shell restart needs nothing
+    from the bridge.'' The three other copies are deleted'
+  decision: FIX
+  score: 6
+  reason: one fact, three copies, wrong owner; all copies on changed lines
+  same:
+  - b1-4
+  - b1-7
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 6
+    reason: the toShell field decides the by-name resolution, so it owns the fact
+    task: t3
+- id: b1-7
+  at:
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:167-168
+  - internal/proxy/prompter_test.go:187-188
+  reach:
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/prompter_test.go:167-168
+  - internal/proxy/prompter_test.go:187-188
+  row: long comment
+  claim: the test doc the changeset rewrote (prompter_test.go:143-150) is 8 lines, opens with its own
+    name, shouts ('IMMEDIATELY'), and repeats the constructor doc's rationale (fallback D-Bus activation,
+    GTK dialog, forwarding by name); 'win that window' reads as a GUI window. The added comments at :167-168
+    and :187-188 repeat the doc and the assert message
+  fix: 'doc: ''Checks that the bridge claims the backend SystemPrompter name before gnome-shell''s prompter
+    exists, and forwards to that prompter once it appears. This is the relogin case, where the proxy often
+    starts first.'' Delete :167-168 (the assert message says it) and shorten :187-188 to ''Forwarding
+    works once the front prompter appears.'''
+  decision: FIX
+  score: 5
+  reason: removes restated rationale and a duplicate comment on changed lines
+  same:
+  - b1-3
+  - b1-6
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 5
+    reason: same text as b1-4 and b1-6, in the test
+    task: t3
+check: ok

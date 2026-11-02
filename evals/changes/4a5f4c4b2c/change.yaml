@@ -1,0 +1,256 @@
+id: 4a5f4c4b2c
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+- label: bad
+  finding: b1-13
+  note: schema.sql comment got longer with no new information, and it adds an implementation detail (pending
+    rows not stored)
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - seb.py:19-49
+  - seb.py:92-93
+  reach:
+  - seb.py:19-49
+  - seb.py:52-88
+  - seb.py:91-96
+  row: missing receiver
+  claim: headers(), call(), authorize(), load_session() and transactions() all reach the same API client
+    context (API, KEY, APP_ID, PSU) through module globals instead of a receiver. PSU is a mutable global
+    that main() must fill (seb.py:92-93, comment "set in main()" at seb.py:24) before headers() works,
+    which is temporal coupling.
+  fix: A class EnableBanking (dataclass) holding app_id, key and the psu headers as fields, built once
+    in main as EnableBanking(config, psu_headers()). headers, call, authorize, session (today's load_session)
+    and transactions become its methods. The PSU global, the global statement and the "set in main()"
+    comment are gone.
+  decision: FIX
+  score: 6
+  reason: Full tell (shared context reaching every sibling, plus the global set by the caller). Minus
+    2 for churn of about 40 lines, but the temporal coupling makes it worth more than a plain 5.
+  same:
+  - b1-2
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 6
+    reason: full tell, plus the PSU global that main must set first
+    task: t1
+- id: b1-2
+  at:
+  - seb.py:20-23
+  - seb.py:57
+  - seb.py:94
+  reach:
+  - seb.py:19-24
+  - seb.py:55-60
+  - seb.py:91-95
+  row: unparsed input
+  claim: The settings are read in two places. EB_APP_ID, EB_KEY and EB_REDIRECT are read at import time,
+    and seb.py:21 reads private.pem during import, so importing seb (the console script, or a test) fails
+    before main runs. EB_ASPSP is read inside authorize (seb.py:57). The cwd-relative paths session.json
+    and dengi.db are literals at seb.py:23 and seb.py:94.
+  fix: 'A frozen dataclass Config with app_id, key (bytes), redirect, aspsp, and Config.from_env() that
+    reads all four variables and the key file. main calls it once and builds EnableBanking (b1-1) from
+    it. Module scope keeps only the true constants: API, plus SESSION and DB as Path constants.'
+  decision: FIX
+  score: 6
+  reason: A setting read away from the edge, plus an import-time file read. The fix merges with b1-1's
+    constructor, so it shares that task.
+  same:
+  - b1-1
+  triage:
+    id: b1-2
+    decision: FIX
+    score: 6
+    reason: the settings edge, merged into the client constructor
+    task: t1
+- id: b1-3
+  at:
+  - seb.py:66-76
+  - seb.py:96
+  reach:
+  - seb.py:52-76
+  - seb.py:96
+  row: misplaced rule
+  claim: The session is a blind dict read by key at three sites (s["access"]["valid_until"] at seb.py:74,
+    ["accounts"] at seb.py:96, and the raw write at seb.py:67). The expiry check, a rule about the session,
+    lives in load_session, a free function that only reads the session.
+  fix: A dataclass Session with the fields valid_until (datetime), accounts (list[Account]) and raw (the
+    JSON as received). Session.from_json(d) parses the body. Session.expired is a property. Session.load(path)
+    returns Session or None, and session.save(path) writes raw unchanged, so the file format stays the
+    same. EnableBanking.session() (b1-1) returns a session that is still valid, loaded or authorized,
+    and main iterates over session.accounts.
+  decision: FIX
+  score: 7
+  reason: Expiry check on the wrong owner (named in the placement pass), plus key access on a file and
+    API body. The serialized format is unchanged.
+  same:
+  - b1-4
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 7
+    reason: expiry rule on its owner; the session file format is unchanged
+    task: t1
+- id: b1-4
+  at:
+  - seb.py:97
+  - seb.py:101
+  reach:
+  - seb.py:96-101
+  row: misplaced rule
+  claim: The account's storage key is derived inline in main as acc.get("account_id", {}).get("iban")
+    or acc["uid"]. That is a rule about an account, written at the caller. It crashes with AttributeError
+    if the API sends "account_id" as null.
+  fix: A dataclass Account with uid and iban (str or None), and Account.from_json called by Session.from_json
+    (b1-3). Its property key returns the IBAN, or the fallback when there is none. main uses account.key
+    and account.uid.
+  decision: FIX
+  score: 7
+  reason: Misplaced rule with the full tell; it goes in the same task as b1-3.
+  same:
+  - b1-3
+  - b1-5
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 7
+    reason: the account key rule on its owner; its reach overlaps b1-3 and b1-1
+    task: t1
+- id: b1-6
+  at:
+  - seb.py:99-100
+  - seb.py:4
+  - seb.py:109
+  reach:
+  - seb.py:79-82
+  - seb.py:91-109
+  row: unparsed input
+  claim: sys.argv[1] is a raw str that goes to the API query (seb.py:80) and to the output (seb.py:109).
+    It is never checked against the YYYY-MM-DD that the module doc promises, and it is re-read inside
+    the per-account loop. The fallback from the database is also a raw str, read positionally with fetchone()[0].
+    For an account with no rows, seb.py:109 prints "since None".
+  fix: main parses the argument once, before the loop, with date.fromisoformat(sys.argv[1]) when it is
+    given, and exits with a usage message otherwise. Store.last_booking_date(key) (b1-7) returns date
+    or None. EnableBanking.transactions(uid, since) takes date or None and formats it with isoformat().
+    The summary line reads "since <date>", or "full history" when there is no date.
+  decision: FIX
+  score: 7
+  reason: Unparsed CLI input with the full tell. A bad date now fails locally instead of at the API, a
+    check moved to the edge (Behaviour).
+  same:
+  - b1-7
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 7
+    reason: unparsed CLI date. Its reach overlaps b1-7 and b1-1
+    task: t1
+- id: b1-7
+  at:
+  - seb.py:91-109
+  reach:
+  - seb.py:91-109
+  row: mixed altitude
+  claim: main mixes named steps (psu_headers, load_session, transactions) with inline details, decisions
+    and effects. The details are the schema bootstrap, a count lambda and the upsert SQL. The decisions
+    are the account key, the choice of date_from and the BOOK filter. The effects are the upsert and the
+    print. The three store statements and the "only booked rows have an entry_reference" rule (reason
+    at schema.sql:3) belong to the store, not to main.
+  fix: 'A class Store wraps the sqlite connection. Store.open(path) connects and runs schema.sql from
+    beside __file__. It has last_booking_date(key) -> date or None, and upsert(key, txs) -> int, which
+    returns the number of new rows (it counts before and after inside the method). A named booked(txs)
+    filter sits beside the store and carries a short comment pointing at schema.sql:3. main reads as steps:
+    config, client, store, then for each account fetch, filter, upsert, and print.'
+  decision: FIX
+  score: 6
+  reason: Mixed altitude plus misplaced store rules with the full tell. Minus 2 for churn of over 30 lines,
+    but the SQL leaves main as a unit.
+  same:
+  - b1-6
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 6
+    reason: mixed altitude in main; the store gets its own type
+    task: t1
+- id: b1-8
+  at:
+  - seb.py:98
+  - seb.py:5
+  reach:
+  - seb.py:98
+  row: duplicated knowledge
+  claim: 'The comment at seb.py:98 ("default: resume from last stored day") repeats the module doc at
+    seb.py:5 ("without date_from, resumes from the last stored day").'
+  fix: seb.py:98 keeps only the fact that the module doc does not state, as a sentence. For example "#
+    The upsert dedupes the day that overlaps the last run." It sits beside the date choice, which b1-6
+    and b1-7 leave in main.
+  decision: FIX
+  score: 5
+  reason: A fact stated twice; the fix removes the copy.
+  same: []
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 5
+    reason: a fact stated twice. seb.py:98 lies inside the reach of b1-7
+    task: t1
+- id: b1-9
+  at:
+  - seb.py:37-38
+  reach:
+  - seb.py:36-38
+  row: compressed doc
+  claim: The psu_headers doc opens with "Mark the request as user-present", but the function marks no
+    request. It returns headers, and "the request" has no referent. A colon also joins a second idea at
+    line 38.
+  fix: '"""Returns the PSU headers, which tell the bank that the user is present. With them, the bank
+    lifts its cap of about four unattended requests a day. Returns no headers when stdin is not a terminal,
+    because an unattended run must not claim that the user is there."""'
+  decision: FIX
+  score: 5
+  reason: The verb states something the function does not do, and the colon is a compressed-doc tell.
+  same: []
+  triage:
+    id: b1-9
+    decision: FIX
+    score: 5
+    reason: the doc says the function marks a request, which it does not. seb.py:36-38 lies inside the
+      reach of b1-1
+    task: t1
+- id: b1-13
+  at:
+  - schema.sql:3
+  - seb.py:54
+  reach:
+  - schema.sql:2-4
+  - seb.py:54
+  row: compressed doc
+  claim: Two trailing comments join two ideas with a semicolon. schema.sql:3 is also longer than a few
+    words ("unique per account at SEB; booked only, pending has none"). seb.py:54 says "PSD2 max; bank
+    may cap lower".
+  fix: 'Above entry_reference in schema.sql, on its own line: "-- Unique per account at SEB. Only booked
+    transactions have one, so pending ones are not stored." At seb.py:54, on its own line above: "# 180
+    days is the PSD2 maximum. The bank may grant less."'
+  decision: FIX
+  score: 5
+  reason: Compressed-doc tells (a semicolon join and a long trailing comment).
+  same: []
+  triage:
+    id: b1-13
+    decision: FIX
+    score: 5
+    reason: compressed trailing comments; seb.py:54 lies inside the reach of b1-1
+    task: t1
+check: ok

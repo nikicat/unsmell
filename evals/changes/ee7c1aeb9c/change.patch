@@ -1,0 +1,144 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..b4946dc 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -43,9 +43,22 @@ type Approver interface {
+ // Action represents a user interaction with a notification button.
+ type Action struct {
+ 	NotificationID uint32
+-	ActionKey      string // "approve" or "deny"
++	ActionKey      actionKey
+ }
+ 
++// The identifier of a notification button. It is sent in the actions list
++// and comes back in the ActionInvoked signal.
++type actionKey string
++
++const (
++	actionDefault               actionKey = "default"
++	actionApprove               actionKey = "approve"
++	actionApproveAndAutoApprove actionKey = "approve_and_auto_approve"
++	actionDeny                  actionKey = "deny"
++	actionAutoApprove           actionKey = "auto_approve"
++	actionDismiss               actionKey = "dismiss"
++)
++
+ // DBusNotifier sends notifications via D-Bus and listens for action button clicks.
+ // It automatically reconnects if the session bus connection drops.
+ type DBusNotifier struct {
+@@ -148,7 +161,7 @@ func (n *DBusNotifier) processSignals(ch <-chan *dbus.Signal) {
+ 				continue
+ 			}
+ 			select {
+-			case n.actions <- Action{NotificationID: id, ActionKey: key}:
++			case n.actions <- Action{NotificationID: id, ActionKey: actionKey(key)}:
+ 			case <-n.done:
+ 				return
+ 			}
+@@ -375,18 +388,18 @@ func (h *Handler) handleAction(action Action) {
+ 
+ 	var err error
+ 	switch action.ActionKey {
+-	case "default":
++	case actionDefault:
+ 		h.openURL(h.baseURL + "?request=" + reqID)
+ 		return
+-	case "approve":
++	case actionApprove:
+ 		err = h.approver.Approve(reqID)
+-	case "approve_and_auto_approve":
++	case actionApproveAndAutoApprove:
+ 		err = h.approver.ApproveAndAutoApprove(reqID)
+-	case "deny":
++	case actionDeny:
+ 		err = h.approver.Deny(reqID)
+-	case "auto_approve":
++	case actionAutoApprove:
+ 		err = h.approver.AutoApprove(reqID)
+-	case "dismiss":
++	case actionDismiss:
+ 		return // just close the notification, do nothing
+ 	default:
+ 		slog.Debug("unknown action key", "action", action.ActionKey, "request_id", reqID)
+@@ -467,10 +480,10 @@ func (h *Handler) sendNotification(req *approval.Request) {
+ 	body := h.formatBody(req)
+ 	durLabel := formatDurationShort(h.autoApproveDuration)
+ 	actions := []string{
+-		"default", "",
+-		"approve", "Approve",
+-		"approve_and_auto_approve", "Approve " + durLabel,
+-		"deny", "Deny",
++		string(actionDefault), "",
++		string(actionApprove), "Approve",
++		string(actionApproveAndAutoApprove), "Approve " + durLabel,
++		string(actionDeny), "Deny",
+ 	}
+ 
+ 	id, err := h.notifier.Notify(summary, body, icon, actions)
+@@ -530,7 +543,7 @@ func (h *Handler) handleCancelled(req *approval.Request) {
+ 	}
+ 	summary := fmt.Sprintf("%s timed out", invoker)
+ 	body := fmt.Sprintf("Auto-approve similar requests for %s?", formatDurationShort(h.autoApproveDuration))
+-	actions := []string{"auto_approve", "Auto-approve", "dismiss", "Dismiss"}
++	actions := []string{string(actionAutoApprove), "Auto-approve", string(actionDismiss), "Dismiss"}
+ 
+ 	newID, err := h.notifier.Notify(summary, body, "dialog-question", actions)
+ 	if err != nil {
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..5df87b4 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -192,7 +192,7 @@ func TestHandler_OnEvent_RequestCreated_Actions(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	wantActions := []string{"default", "", "approve", "Approve", "approve_and_auto_approve", "Approve 2m", "deny", "Deny"}
++	wantActions := []string{string(actionDefault), "", string(actionApprove), "Approve", string(actionApproveAndAutoApprove), "Approve 2m", string(actionDeny), "Deny"}
+ 	if len(call.actions) != len(wantActions) {
+ 		t.Fatalf("expected %d actions, got %d: %v", len(wantActions), len(call.actions), call.actions)
+ 	}
+@@ -591,7 +591,7 @@ func TestHandler_ListenActions_Approve(t *testing.T) {
+ 	h.mu.Unlock()
+ 
+ 	actions := make(chan Action, 1)
+-	actions <- Action{NotificationID: nID, ActionKey: "approve"}
++	actions <- Action{NotificationID: nID, ActionKey: actionApprove}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan struct{})
+@@ -630,7 +630,7 @@ func TestHandler_ListenActions_Deny(t *testing.T) {
+ 	h.mu.Unlock()
+ 
+ 	actions := make(chan Action, 1)
+-	actions <- Action{NotificationID: nID, ActionKey: "deny"}
++	actions <- Action{NotificationID: nID, ActionKey: actionDeny}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan struct{})
+@@ -670,7 +670,7 @@ func TestHandler_ListenActions_DefaultOpensURL(t *testing.T) {
+ 	h.mu.Unlock()
+ 
+ 	actions := make(chan Action, 1)
+-	actions <- Action{NotificationID: nID, ActionKey: "default"}
++	actions <- Action{NotificationID: nID, ActionKey: actionDefault}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan struct{})
+@@ -698,7 +698,7 @@ func TestHandler_ListenActions_UnknownNotification(t *testing.T) {
+ 	h, _, approver := newTestHandler()
+ 
+ 	actions := make(chan Action, 1)
+-	actions <- Action{NotificationID: 9999, ActionKey: "approve"}
++	actions <- Action{NotificationID: 9999, ActionKey: actionApprove}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan struct{})
+@@ -735,7 +735,7 @@ func TestHandler_ListenActions_ApproverError(t *testing.T) {
+ 	h.mu.Unlock()
+ 
+ 	actions := make(chan Action, 1)
+-	actions <- Action{NotificationID: nID, ActionKey: "approve"}
++	actions <- Action{NotificationID: nID, ActionKey: actionApprove}
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 	done := make(chan struct{})

@@ -1,0 +1,45 @@
+id: 5ad315fb12
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: cross-4
+  at:
+  - internal/proxy/proxy.go:158
+  - internal/proxy/proxy.go:168
+  - internal/proxy/signals.go:26
+  - internal/proxy/prompter.go:75
+  reach:
+  - internal/proxy/proxy.go:155-172
+  - internal/proxy/signals.go:18-33
+  - internal/proxy/prompter.go:47-90
+  row: data clump
+  claim: newSignalForwarder(backendConn, frontConn, logger) (signals.go:26) and newPrompterBridge(frontConn,
+    backendConn, logger) (prompter.go:75) take the same three Proxy fields, and both store the two conns
+    as fields with the same names. The two *dbus.Conn parameters come in opposite orders, and the calls
+    sit ten lines apart in proxy.go (:158, :168). A swap compiles silently and would bridge the wrong
+    bus. NewPromptHandler (prompt.go:24) takes the backend conn as 'localConn', a third name for the same
+    value. The changeset touched none of these signatures.
+  fix: A small value type for the topology, e.g. `type busPair struct{ front, backend *dbus.Conn }`, held
+    on Proxy and passed as one argument to newSignalForwarder and newPrompterBridge (and stored in their
+    structs in place of the two fields), so the order cannot be swapped.
+  decision: PLAN
+  score: 4
+  reason: Unchanged lines outside the diff, and not the root cause of any changed-line smell. Two same-typed
+    parameters in opposite order are a real hazard, but no bug today.
+  same: []
+  triage:
+    id: cross-4
+    decision: PLAN
+    score: 5
+    reason: adjacent same-typed conns in opposite orders is the parameter-bloat tell in full (scored 4
+      by the agent, raised to the floor of 5); unchanged lines
+    task: t8
+check: ok

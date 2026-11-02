@@ -1,0 +1,53 @@
+id: f9b49e1baf
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-8
+  at:
+  - src/evm/history.rs:802-803
+  - src/evm/history.rs:252
+  - src/evm/history.rs:474
+  reach:
+  - src/evm/types.rs:47-56
+  - src/evm/history.rs:252
+  - src/evm/history.rs:474
+  - src/evm/history.rs:715
+  - src/evm/history.rs:730
+  - src/evm/history.rs:769
+  - src/evm/history.rs:802-803
+  - src/evm/history.rs:835
+  - src/evm/history.rs:839
+  - src/evm/history.rs:908
+  - src/bin/chainfold/util.rs:49-65
+  row: repeated derivation
+  claim: 'The end-of-block cut `EvmPosition::new(b, u32::MAX)` has no name. It is written at history.rs:252
+    and 474, in many tests, and in src/bin/chainfold/util.rs:49, 63 and 65. The new test adds two more
+    copies at 802-803.
+
+    '
+  fix: 'Add `pub const fn end_of_block(block: u64) -> Self` on EvmPosition in src/evm/types.rs and use
+    it at every site.
+
+    '
+  decision: PLAN
+  score: 5
+  reason: 'The changed lines only add test copies. The real sites are unchanged and span batches, so this
+    is for the cross-file agent.
+
+    '
+  same: []
+  triage:
+    id: b2-8
+    decision: PLAN
+    score: 5
+    task: t8
+    reason: spans util.rs outside the changeset
+check: ok

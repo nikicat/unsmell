@@ -1,0 +1,38 @@
+id: 1505de751c
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-5
+  at:
+  - src/bin/chainfold/signature_cache.rs:33
+  - src/bin/chainfold/signature_cache.rs:53
+  reach:
+  - src/bin/chainfold/signature_cache.rs:33
+  - src/bin/chainfold/signature_cache.rs:53
+  - src/evm/types.rs:88-106
+  row: primitive obsession
+  claim: The adapter converts between the resolver's [u8; 32] and Topic by hopping through B256 in both
+    directions (row.topic0.b256().into() and Topic::from(B256::from(entry.topic0))), because Topic has
+    no From<[u8; 32]> and no to-array accessor.
+  fix: Add From<[u8; 32]> for Topic and From<Topic> for [u8; 32] in src/evm/types.rs. The adapter then
+    writes row.topic0.into() and Topic::from(entry.topic0).
+  decision: SKIP
+  score: 3
+  reason: Each direction is written once, and the conversion correctly lives at the adapter boundary.
+    Adding two impls to a core type to save one hop each adds little.
+  same: []
+  triage:
+    id: b1-5
+    decision: SKIP
+    score: 3
+    reason: Each conversion direction is written once at the adapter boundary.
+    task: t4
+check: ok

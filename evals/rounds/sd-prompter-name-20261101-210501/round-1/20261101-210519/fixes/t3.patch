@@ -1,0 +1,23 @@
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index b63a84b..3970fe2 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -72,8 +72,7 @@ func TestPrompterBridge(t *testing.T) {
+ 	frontCmd, frontAddr := startTestDBusDaemon(t, filepath.Join(tmpDir, "front.sock"))
+ 	t.Cleanup(func() { frontCmd.Process.Kill(); frontCmd.Wait() })
+ 
+-	// gnome-shell's prompter on the front bus, present before the proxy starts
+-	// (so the bridge's guard sees it and activates).
++	// gnome-shell's prompter on the front bus, present before the proxy starts.
+ 	shellConn, err := dbus.Connect(frontAddr)
+ 	require.NoError(t, err)
+ 	t.Cleanup(func() { shellConn.Close() })
+@@ -95,7 +94,7 @@ func TestPrompterBridge(t *testing.T) {
+ 	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
+ 	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
+ 	t.Cleanup(func() { p.Close() })
+-	require.NotNil(t, p.prompter, "bridge should activate when the front bus has a prompter and the backend does not")
++	require.NotNil(t, p.prompter, "bridge should activate when the backend bus has no prompter")
+ 
+ 	// The backend gnome-keyring: a connection that exports a callback object
+ 	// and calls the SystemPrompter (now the bridge) on the backend bus.

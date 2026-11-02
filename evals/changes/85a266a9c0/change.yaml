@@ -1,0 +1,30 @@
+id: 85a266a9c0
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t2
+judge: null
+labels: []
+findings:
+- id: b1-16
+  at:
+  - evals/run.py:82-85
+  reach:
+  - evals/run.py:82-85
+  row: concept mixing
+  claim: clear uses a conditional expression as a statement, and Path.is_dir follows symlinks, so a symlink
+    to a directory in the base tree reaches shutil.rmtree, which refuses symlinks, and materialize fails.
+  fix: An if statement that calls rmtree only for a real directory (is_dir() and not is_symlink()) and
+    unlink otherwise.
+  decision: FIX
+  score: 5
+  reason: a crash on a valid fixture tree, and a fix of two lines
+  same: []
+  triage:
+    id: b1-16
+    decision: FIX
+    score: 5
+    reason: a crash on a valid fixture tree, and a fix of two lines
+    task: t2
+check: ok

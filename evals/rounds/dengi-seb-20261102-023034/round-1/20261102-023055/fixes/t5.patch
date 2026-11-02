@@ -1,0 +1,84 @@
+diff --git a/schema.sql b/schema.sql
+index 2fd259b..8e2007c 100644
+--- a/schema.sql
++++ b/schema.sql
+@@ -1,5 +1,6 @@
+ CREATE TABLE IF NOT EXISTS txn (
+-    iban            TEXT NOT NULL,
++    -- The IBAN, or the Enable Banking identification_hash when the account has none.
++    account         TEXT NOT NULL,
+     -- Unique per account at SEB. Only booked transactions have one, so pending ones are not stored.
+     entry_reference TEXT NOT NULL,
+     raw             TEXT NOT NULL CHECK (json_valid(raw)),
+@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS txn (
+                                             raw ->> '$.bank_transaction_code.code',
+                                             raw ->> '$.bank_transaction_code.sub_code')),
+ 
+-    PRIMARY KEY (iban, entry_reference)
++    PRIMARY KEY (account, entry_reference)
+ ) STRICT;
+ 
+-CREATE INDEX IF NOT EXISTS txn_date ON txn (iban, booking_date);
++CREATE INDEX IF NOT EXISTS txn_date ON txn (account, booking_date);
+diff --git a/seb.py b/seb.py
+index ab9a4a1..c613cf2 100644
+--- a/seb.py
++++ b/seb.py
+@@ -42,17 +42,20 @@ class Config:
+ 
+ @dataclass(frozen=True)
+ class Account:
++    # Valid only while its session is authorized.
+     uid: str
+     iban: str | None
++    # Matches the same account across sessions.
++    identification_hash: str
+ 
+     @classmethod
+     def from_json(cls, d: dict) -> Account:
+-        return cls(d["uid"], (d.get("account_id") or {}).get("iban"))
++        return cls(d["uid"], (d.get("account_id") or {}).get("iban"), d["identification_hash"])
+ 
+     @property
+     def key(self) -> str:
+-        """The value stored in txn.iban for this account."""
+-        return self.iban or self.uid
++        """The value stored in txn.account for this account."""
++        return self.iban or self.identification_hash
+ 
+ 
+ @dataclass(frozen=True)
+@@ -169,23 +172,23 @@ class Store:
+         db.executescript(Path(__file__).with_name("schema.sql").read_text())
+         return cls(db)
+ 
+-    def last_booking_date(self, key: str) -> date | None:
+-        day = self.db.execute("SELECT max(booking_date) FROM txn WHERE iban = ?", (key,)).fetchone()[0]
++    def last_booking_date(self, account: str) -> date | None:
++        day = self.db.execute("SELECT max(booking_date) FROM txn WHERE account = ?", (account,)).fetchone()[0]
+         return date.fromisoformat(day) if day else None
+ 
+-    def _count(self, key: str) -> int:
+-        return self.db.execute("SELECT count(*) FROM txn WHERE iban = ?", (key,)).fetchone()[0]
++    def _count(self, account: str) -> int:
++        return self.db.execute("SELECT count(*) FROM txn WHERE account = ?", (account,)).fetchone()[0]
+ 
+-    def upsert(self, key: str, txs: list[dict]) -> int:
+-        """Stores txs under the account key and returns how many were new.
++    def upsert(self, account: str, txs: list[dict]) -> int:
++        """Stores txs under the account and returns how many were new.
+         A stored transaction is updated when its JSON has changed."""
+-        before = self._count(key)
++        before = self._count(account)
+         with self.db:
+             self.db.executemany(
+-                "INSERT INTO txn (iban, entry_reference, raw) VALUES (?, ?, ?)"
++                "INSERT INTO txn (account, entry_reference, raw) VALUES (?, ?, ?)"
+                 " ON CONFLICT DO UPDATE SET raw = excluded.raw WHERE raw IS NOT excluded.raw",
+-                [(key, t["entry_reference"], json.dumps(t, ensure_ascii=False)) for t in txs])
+-        return self._count(key) - before
++                [(account, t["entry_reference"], json.dumps(t, ensure_ascii=False)) for t in txs])
++        return self._count(account) - before
+ 
+ 
+ def parse_date_from(args: list[str]) -> date | None:

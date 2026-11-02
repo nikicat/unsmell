@@ -1,0 +1,72 @@
+- id: b1-1
+  decision: FIX
+  score: 7
+  reason: confirmed at event_signature_cache.rs:117-134 and cache.rs:34-55; siblings ChainId/FilterHash own their ToSql in the cache layer, Topic has none
+  task: t1
+- id: b1-5
+  decision: FIX
+  score: 5
+  reason: confirmed; its reach (the test imports at :172-173) overlaps b1-1's, so it shares b1-1's task
+  task: t1
+- id: b1-6
+  decision: FIX
+  score: 5
+  reason: confirmed; doc-opening rule hit on a changed line
+  task: t2
+- id: b1-7
+  decision: FIX
+  score: 5
+  reason: confirmed; the migration at cache.rs:258-262 makes None transitional, the new doc does not say so
+  task: t2
+- id: b1-2
+  decision: ASK
+  score: 6
+  reason: two defensible designs, public re-exported type. With b1-3 discarded, ResolvedEvent keeps topic0 as [u8; 32]; "patches only" asks nothing, so the patch shows option (a) and the question stays open
+  task: t3
+  after: t1+t2
+- id: b1-3
+  decision: DISCARD
+  score: 6
+  reason: overrules the survey. The module doc of src/signatures.rs:4 makes the resolver standalone ("Knows nothing about the rest of chainfold"), so ChainId/Topic/Address cannot enter its trait. Converting at that boundary is the adapter's whole job, so the conversions at signature_cache.rs:29-53 are where they belong
+- id: b1-4
+  decision: ASK
+  score: 5
+  reason: its parameter type depends on b1-2; linked by same
+  task: t3
+  after: t1+t2
+- id: b1-11
+  decision: PLAN
+  score: 5
+  reason: dead public API on unchanged lines
+  task: t4
+- id: b1-12
+  decision: PLAN
+  score: 6
+  reason: data clump on unchanged lines that crosses the public trait; stacked on t3, which rewrites the same signatures
+  task: t5
+  after: t3
+- id: b1-13
+  decision: PLAN
+  score: 5
+  reason: outside the changeset; overrules the survey's same-link to b1-1 for tasking, since it is the same class on other code (U256 in erc20_cache), not the same code
+  task: t6
+- id: b1-8
+  decision: SKIP
+  score: 2
+  reason: correct doc; rewording only
+  task: t7
+- id: b1-9
+  decision: SKIP
+  score: 3
+  reason: unchanged lines; the tuple spelling is stale but still clear
+  task: t7
+- id: b1-10
+  decision: SKIP
+  score: 4
+  reason: unchanged lines; changing the error payload is an API change for a small gain
+  task: t8
+# Not a finding: the run's plan entries, and removal of the TODO.md entry the changeset made obsolete.
+- id: plan
+  decision: PLAN
+  task: t9
+  reason: unanswered ASK b1-2/b1-4 and PLANs b1-11, b1-12, b1-13 written under "## unsmell run 2026-11-02"; removes the Tier 1 "EventSignatureRow → named struct" entry

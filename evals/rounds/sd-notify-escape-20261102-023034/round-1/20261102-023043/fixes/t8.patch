@@ -1,0 +1,26 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..027d352 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -418,9 +418,9 @@ func (h *Handler) OnEvent(event approval.Event) {
+ 	}
+ }
+ 
+-// notificationMeta returns the summary title and icon for a request based on its type.
+-func (h *Handler) notificationMeta(req *approval.Request) (summary, icon string) {
+-	switch req.Type {
++// Returns the notification summary title and icon name for a request type.
++func notificationMeta(t approval.RequestType) (summary, icon string) {
++	switch t {
+ 	case approval.RequestTypeGPGSign:
+ 		return "Sign commit", "emblem-important"
+ 	case approval.RequestTypeSearch:
+@@ -463,7 +463,7 @@ func (h *Handler) handleCreated(req *approval.Request) {
+ }
+ 
+ func (h *Handler) sendNotification(req *approval.Request) {
+-	summary, icon := h.notificationMeta(req)
++	summary, icon := notificationMeta(req.Type)
+ 	body := h.formatBody(req)
+ 	durLabel := formatDurationShort(h.autoApproveDuration)
+ 	actions := []string{

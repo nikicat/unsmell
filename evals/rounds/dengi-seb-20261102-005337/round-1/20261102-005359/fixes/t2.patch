@@ -1,0 +1,30 @@
+diff --git a/seb.py b/seb.py
+index cbf12ff..6f6269c 100644
+--- a/seb.py
++++ b/seb.py
+@@ -4,6 +4,7 @@
+ Usage: uv run seb [date_from YYYY-MM-DD]
+ Upserts booked transactions into dengi.db; without date_from, resumes from the last stored day.
+ """
++import ipaddress
+ import json
+ import os
+ import sqlite3
+@@ -35,11 +36,14 @@ def headers():
+ 
+ def psu_headers():
+     """Mark the request as user-present, which lifts the bank's ~4/day unattended-access cap.
+-    Only when run from a terminal: an unattended run must not claim the user is there."""
++    Only when run from a terminal: an unattended run must not claim the user is there.
++    Errors when ipify fails or does not answer with an IP address."""
+     if not sys.stdin.isatty():
+         return {}
+-    ip = requests.get("https://api.ipify.org", timeout=10).text.strip()
+-    return {"Psu-Ip-Address": ip, "Psu-User-Agent": "dengi"}
++    r = requests.get("https://api.ipify.org", timeout=10)
++    r.raise_for_status()
++    ip = ipaddress.ip_address(r.text.strip())
++    return {"Psu-Ip-Address": str(ip), "Psu-User-Agent": "dengi"}
+ 
+ 
+ def call(method, path, **kw):

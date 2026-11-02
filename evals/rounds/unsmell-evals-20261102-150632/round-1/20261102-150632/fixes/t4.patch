@@ -1,0 +1,226 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index bd44851..5900c2e 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -32,14 +32,13 @@ import re
+ import shutil
+ import subprocess
+ import sys
+-import tomllib
+ from datetime import date
+ from pathlib import Path
+ 
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+ 
+-from run import CACHE, SKILL, claude, git, materialize
++from run import CACHE, SKILL, Fixture, claude, git
+ 
+ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+@@ -237,12 +236,11 @@ def worktree(meta, root=None):
+     """
+     first = meta["seen"][0]
+     rounds = ROUNDS / first["run"]
+-    fixture = EVALS / "fixtures" / load(rounds / "meta.yaml")["fixture"]
+     root = root or REVIEW
+     build = root / "build"
+     if build.exists():
+         shutil.rmtree(build)
+-    built = materialize(fixture, tomllib.loads((fixture / "fixture.toml").read_text()), build)
++    built = Fixture.named(meta["fixture"]).materialize(build)
+     git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+@@ -338,9 +336,7 @@ def check(ids):
+             (CHANGES / meta["id"] / "check.log").write_text(f"{e.cmd}\n{e.stderr}")
+             print(f"{meta['id']} no-apply", flush=True)
+             continue
+-        fixture = EVALS / "fixtures" / meta["fixture"]
+-        cmd = tomllib.loads((fixture / "fixture.toml").read_text())["check"]
+-        out = subprocess.run(cmd, shell=True, cwd=repo, env=env, capture_output=True, text=True)
++        out = Fixture.named(meta["fixture"]).run_check(repo, env)
+         meta["check"] = "ok" if out.returncode == 0 else "fail"
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {meta['check']}", flush=True)
+diff --git a/evals/run.py b/evals/run.py
+index 73e8f38..7a1f274 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -1,14 +1,7 @@
+ #!/usr/bin/env python3
+-"""Runs unsmell on fixtures in a loop and reports whether it reaches a fixed point.
++"""Runs the unsmell skill on fixtures, round after round, and reports whether it reaches a fixed point.
+ 
+-Usage: evals/run.py [--rounds N] [--jobs N] FIXTURE_DIR...
+-
+-A fixture names a commit in another repo (`source` and `commit` in fixture.toml),
+-or holds head/ (the working tree under review) and an optional base/ (the tree it
+-changes). Its fixture.toml always holds `check`, a shell command that must pass
+-after every round. Each run happens in a throwaway git repo
+-under ~/.cache/unsmell-eval, with a Claude config that has no CLAUDE.md, hooks
+-or plugins, so that only the skill under test steers the result.
++evals/README.md explains fixtures, what passes and how to read a run.
+ """
+ import argparse
+ import hashlib
+@@ -25,6 +18,7 @@ from pathlib import Path
+ 
+ SKILL_REPO = Path(__file__).resolve().parent.parent
+ SKILL = SKILL_REPO / "skills" / "unsmell" / "SKILL.md"
++FIXTURES = SKILL_REPO / "evals" / "fixtures"
+ CACHE = Path.home() / ".cache" / "unsmell-eval"
+ CONFIG = CACHE / "config"
+ ALLOWED = [
+@@ -92,32 +86,95 @@ def copy_tree(source, rev, repo):
+     subprocess.run(["tar", "-x", "-C", str(repo)], input=archive, check=True)
+ 
+ 
+-def materialize(fixture, spec, workdir):
+-    """Returns a new repo whose HEAD is the fixture's base and whose working tree is its head.
++@dataclass(frozen=True)
++class Commit:
++    """Code under review that is a commit in another repo, with the commit's parent as its base."""
++
++    source: Path
++    rev: str
++
++    def write_base(self, repo):
++        copy_tree(self.source, f"{self.rev}^", repo)
++
++    def write_head(self, repo):
++        copy_tree(self.source, self.rev, repo)
++
++
++@dataclass(frozen=True)
++class Trees:
++    """Code under review that the fixture directory holds as trees."""
++
++    head: Path
++    base: Path | None
++
++    def write_base(self, repo):
++        if self.base:
++            shutil.copytree(self.base, repo, dirs_exist_ok=True)
+ 
+-    A fixture names a commit in another repo (`source` and `commit` in fixture.toml), or it
+-    holds the trees itself in base/ and head/.
++    def write_head(self, repo):
++        shutil.copytree(self.head, repo, dirs_exist_ok=True)
++
++
++@dataclass(frozen=True)
++class Fixture:
++    """A case the skill runs on, read from a directory that holds a fixture.toml.
++
++    fixture.toml always holds `check`, a shell command that must pass after every round.
++    The code under review comes from one of two places. When fixture.toml names a `commit`,
++    that commit is the code under review, and `source` names the local repo that holds it.
++    Otherwise the directory holds head/, the working tree under review. It may also hold
++    base/, the tree that head/ changes. Without base/, every file is new.
+     """
+-    repo = workdir / "repo"
+-    repo.mkdir(parents=True)
+-    git(repo, "init", "-q", "-b", "main")
+-    git(repo, "config", "user.email", "eval@unsmell")
+-    git(repo, "config", "user.name", "unsmell eval")
+-    # The round commits are scratch state, so they must not trigger the user's signing setup.
+-    git(repo, "config", "commit.gpgsign", "false")
+-    source = Path(spec.get("source", "")).expanduser()
+-    if "commit" in spec:
+-        copy_tree(source, f"{spec['commit']}^", repo)
+-    elif (fixture / "base").is_dir():
+-        shutil.copytree(fixture / "base", repo, dirs_exist_ok=True)
+-    git(repo, "add", "-A")
+-    git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+-    clear(repo)
+-    if "commit" in spec:
+-        copy_tree(source, spec["commit"], repo)
+-    else:
+-        shutil.copytree(fixture / "head", repo, dirs_exist_ok=True)
+-    return repo
++
++    dir: Path
++    check: str
++    origin: Commit | Trees
++
++    @classmethod
++    def load(cls, dir):
++        """Reads the fixture in dir.
++
++        Errors when fixture.toml has no `check`, or names a `commit` without its `source`.
++        """
++        spec = tomllib.loads((dir / "fixture.toml").read_text())
++        if "check" not in spec:
++            raise ValueError(f"{dir}/fixture.toml has no check")
++        if "commit" not in spec:
++            base = dir / "base"
++            return cls(dir, spec["check"], Trees(dir / "head", base if base.is_dir() else None))
++        if "source" not in spec:
++            raise ValueError(f"{dir}/fixture.toml names a commit without its source")
++        return cls(dir, spec["check"], Commit(Path(spec["source"]).expanduser(), spec["commit"]))
++
++    @classmethod
++    def named(cls, name):
++        """Reads the fixture called name in evals/fixtures."""
++        return cls.load(FIXTURES / name)
++
++    @property
++    def name(self):
++        return self.dir.name
++
++    def materialize(self, workdir):
++        """Returns a new repo whose HEAD is the fixture's base and whose working tree is its head."""
++        repo = workdir / "repo"
++        repo.mkdir(parents=True)
++        git(repo, "init", "-q", "-b", "main")
++        git(repo, "config", "user.email", "eval@unsmell")
++        git(repo, "config", "user.name", "unsmell eval")
++        # The round commits are scratch state, so they must not trigger the user's signing setup.
++        git(repo, "config", "commit.gpgsign", "false")
++        self.origin.write_base(repo)
++        git(repo, "add", "-A")
++        git(repo, "commit", "-q", "--allow-empty", "-m", "base")
++        clear(repo)
++        self.origin.write_head(repo)
++        return repo
++
++    def run_check(self, repo, env=None):
++        """Runs the check in repo and returns the finished process, with its output captured as text."""
++        return subprocess.run(self.check, shell=True, cwd=repo, env=env, capture_output=True,
++                               text=True, errors="replace")
+ 
+ 
+ @dataclass
+@@ -172,10 +229,8 @@ def run_skill(repo, log, args):
+ 
+ 
+ def evaluate(fixture, rounds, args):
+-    spec = tomllib.loads((fixture / "fixture.toml").read_text())
+-    check = spec["check"]
+     workdir = CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}"
+-    repo = materialize(fixture, spec, workdir)
++    repo = fixture.materialize(workdir)
+     # Which skill text the rounds ran, so that their changes can be traced to it.
+     (workdir / "skill.sha256").write_text(hashlib.sha256(SKILL.read_bytes()).hexdigest())
+     trees, deltas, report = [snapshot(repo)], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
+@@ -190,7 +245,7 @@ def evaluate(fixture, rounds, args):
+             break
+         trees.append(snapshot(repo))
+         delta = Delta.between(repo, trees[-2], trees[-1])
+-        ok = subprocess.run(check, shell=True, cwd=repo, capture_output=True).returncode == 0
++        ok = fixture.run_check(repo).returncode == 0
+         report["rounds"].append({
+             "round": n, "cost_usd": cost, "added": len(delta.added), "removed": len(delta.removed),
+             "reversals": delta.reversals(deltas), "rework": delta.rework(deltas), "check": ok, "tree": trees[-1],
+@@ -219,8 +274,9 @@ def main():
+     args = parser.parse_args()
+     if not (CONFIG / ".credentials.json").exists():
+         sys.exit(f"{CONFIG} has no .credentials.json. Link it to your Claude login first, see evals/README.md.")
++    fixtures = [Fixture.load(f.resolve()) for f in args.fixtures]
+     with ThreadPoolExecutor(args.jobs) as pool:
+-        reports = pool.map(lambda f: evaluate(f.resolve(), args.rounds, args.args), args.fixtures)
++        reports = pool.map(lambda f: evaluate(f, args.rounds, args.args), fixtures)
+     for r in reports:
+         print(f"{r['fixture']}: {'converged' if r['converged'] else 'did not converge'} in "
+               f"{len(r['rounds'])} rounds, {'oscillated' if r['oscillated'] else 'no reversals'}. {r['workdir']}")

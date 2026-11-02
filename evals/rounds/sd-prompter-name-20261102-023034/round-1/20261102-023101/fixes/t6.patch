@@ -1,0 +1,25 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 4dcda50..cfa7834 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -85,16 +85,16 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 		callbacks:   make(map[dbus.ObjectPath]bool),
+ 	}
+ 
+-	if err := b.activate(); err != nil {
++	if err := b.claimSystemPrompter(); err != nil {
+ 		return nil, err
+ 	}
+ 	return b, nil
+ }
+ 
+ // Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the
+-// bridge there. Leaves the bridge inactive when another connection already
+-// holds the name. Errors when the claim or the export fails.
+-func (b *prompterBridge) activate() error {
++// bridge there. Exports nothing when another connection already holds the name.
++// Errors when the claim or the export fails.
++func (b *prompterBridge) claimSystemPrompter() error {
+ 	// The bridge does not queue for the name. A fallback prompter that already
+ 	// holds it cannot be taken over, so the bridge leaves it to its owner.
+ 	reply, err := b.backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)

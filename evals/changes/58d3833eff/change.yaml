@@ -1,0 +1,114 @@
+id: 58d3833eff
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t3
+judge: null
+labels: []
+findings:
+- id: b1-3
+  at:
+  - evals/run.py:129-139
+  reach:
+  - evals/run.py:122-139
+  - evals/run.py:152-167
+  row: concept mixing
+  claim: run_skill never looks at the claude exit status or the JSON is_error field, and returns 0.0 when
+    stdout is not JSON. A failed call (expired login, rate limit) leaves the tree unchanged, so evaluate
+    sees an empty delta, breaks, and reports the fixture as converged.
+  fix: run_skill errors when claude exits non-zero or its reply has is_error, with the start of stderr
+    in the message, as changes.claude already does. evaluate records the failure on the fixture's report,
+    which then counts as not converged, instead of treating the round as a fixed point.
+  decision: FIX
+  score: 9
+  reason: a bug, the eval reports success when the run failed
+  same:
+  - b1-4
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 9
+    reason: a bug, the eval reports success when the run failed
+    task: t3
+- id: b1-4
+  at:
+  - evals/run.py:122-139
+  - evals/run.py:147-148
+  reach:
+  - evals/run.py:122-148
+  - evals/changes.py:76-87
+  row: duplication
+  claim: The headless claude call is written twice. run.py:123-129 and changes.py:77-81 both build `claude
+    -p --output-format json --no-session-persistence` with the CLAUDE_CONFIG_DIR overlay, and both decode
+    stdout and read total_cost_usd (run.py:137, changes.py:84). The SKILL.md path used for skill.sha256
+    is spelled inline at run.py:148.
+  fix: One claude(prompt, *flags, cwd=None) function in run.py that sets the config dir, runs the call,
+    errors on failure and returns a Reply(result, structured, cost_usd). run_skill and changes.claude
+    call it. The SKILL.md path becomes a module constant beside SKILL_REPO.
+  decision: FIX
+  score: 7
+  reason: the same call shape and reply parsing in two modules that must agree
+  same:
+  - b1-3
+  triage:
+    id: b1-4
+    decision: FIX
+    score: 7
+    reason: the same call shape and reply parsing in two modules that must agree
+    task: t3
+- id: b2-19
+  at:
+  - evals/changes.py:76-86
+  reach:
+  - evals/changes.py:76-86
+  - evals/run.py:122-139
+  row: repeated derivation
+  claim: 'claude() builds the headless claude command and its env (os.environ | {''CLAUDE_CONFIG_DIR'':
+    str(CONFIG)}) and parses total_cost_usd, as run.py''s run_skill does at 123-137. It returns an unnamed
+    (verdict, cost) tuple, and its doc leaves out the RuntimeError it raises.'
+  fix: run.py exports one headless(args, ...) helper that returns a Reply(result, structured, cost) dataclass;
+    both callers use it. The doc gains "Errors with RuntimeError when the call fails or the reply has
+    no result."
+  decision: FIX
+  score: 6
+  reason: a derivation written in two files, an unnamed return and a missing exit
+  same: []
+  triage:
+    id: b2-19
+    decision: FIX
+    score: 6
+    reason: a derivation written in two files, an unnamed return and a missing exit
+    task: t3
+- id: cross-2
+  at:
+  - evals/run.py:122-139
+  - evals/changes.py:76-87
+  reach:
+  - evals/run.py:122-139
+  - evals/changes.py:76-87
+  - evals/changes.py:197-225
+  row: duplication
+  claim: 'The headless claude call is written in both batches. run.py:123-129 and changes.py:77-81 both
+    build `claude -p --output-format json --no-session-persistence`, both set the env as os.environ |
+    {"CLAUDE_CONFIG_DIR": str(CONFIG)}, and both decode stdout and read total_cost_usd (run.py:137, changes.py:84).
+    changes.claude raises on a failed call; run_skill ignores the exit status and is_error and returns
+    0.0, so a failed round passes as converged. changes.claude returns an unnamed (verdict, cost) tuple.'
+  fix: One claude(prompt, *flags, cwd=None) function in run.py that sets the config dir, runs the call,
+    errors when claude exits non-zero, the reply has is_error or stdout is not JSON, and returns a Reply(result,
+    structured, cost_usd) dataclass. run_skill and the judge in changes.py call it; evaluate records a
+    failed round as not converged.
+  decision: FIX
+  score: 9
+  reason: one call shape in two modules that must agree, and the copy in run.py hides failures as success
+  same:
+  - b1-3
+  - b1-4
+  - b2-19
+  triage:
+    id: cross-2
+    decision: FIX
+    score: 9
+    reason: one call shape in two modules that must agree, and the copy in run.py hides failures as success
+    task: t3
+check: ok

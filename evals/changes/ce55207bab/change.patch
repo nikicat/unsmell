@@ -1,0 +1,123 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 4dcda50..a56112f 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -52,24 +52,13 @@ type prompterBridge struct {
+ 
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+-	owned     bool                     // claimed the name on the backend bus
+ }
+ 
+-// newPrompterBridge sets up the bridge when the topology needs one: the backend
+-// must be a distinct bus without its own prompter (the local-takeover case). It
+-// claims org.gnome.keyring.SystemPrompter on the backend bus immediately and
+-// unconditionally — it does NOT wait for gnome-shell's front prompter to appear
+-// first. That ownership is what pre-empts the gcr-prompter fallback: the backend
+-// bus can D-Bus-activate that fallback the instant gnome-keyring asks to unlock,
+-// and in the local-takeover topology the backend runs inside the graphical
+-// session, so the fallback actually draws its own (GTK) dialog instead of just
+-// hanging. Claiming the name from birth denies it that window. Forwarding to the
+-// real prompter resolves gnome-shell by name at prompt time (by which point the
+-// interactive session — and thus gnome-shell — is up), so it also survives a
+-// relogin/gnome-shell restart without re-arming anything.
+-//
+-// In topologies where the backend already shares a bus with a real prompter
+-// (remote mode, or same-bus), there is nothing to bridge and it returns (nil, nil).
++// Creates a bridge that holds org.gnome.keyring.SystemPrompter on the backend
++// bus and forwards its prompts to the front bus. Returns nil when the backend
++// bus already has a SystemPrompter, since there is nothing to bridge. Also
++// returns nil when another connection takes the name before the bridge can
++// claim it. Errors when claiming the name or exporting the bridge fails.
+ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger) (*prompterBridge, error) {
+ 	if nameHasOwner(backendConn, systemPrompterName) {
+ 		// Same-bus / remote topology: the backend already reaches a real
+@@ -77,6 +66,17 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 		return nil, nil
+ 	}
+ 
++	// The bridge does not queue for the name. A fallback prompter that already
++	// holds it cannot be taken over, so the bridge leaves it to its owner.
++	reply, err := backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
++	if err != nil {
++		return nil, fmt.Errorf("claim %s on backend bus: %w", systemPrompterName, err)
++	}
++	if reply != dbus.RequestNameReplyPrimaryOwner {
++		logger.Info("could not claim system prompter on backend bus; unlock dialogs use the fallback", "reply", reply)
++		return nil, nil
++	}
++
+ 	b := &prompterBridge{
+ 		frontConn:   frontConn,
+ 		backendConn: backendConn,
+@@ -84,37 +84,14 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 		logger:      logger,
+ 		callbacks:   make(map[dbus.ObjectPath]bool),
+ 	}
+-
+-	if err := b.activate(); err != nil {
+-		return nil, err
++	if err := backendConn.Export(b, dbus.ObjectPath(systemPrompterPath), prompterInterface); err != nil {
++		_, _ = backendConn.ReleaseName(systemPrompterName)
++		return nil, fmt.Errorf("export prompter bridge: %w", err)
+ 	}
++	logger.Info("prompter bridge active: keyring unlock prompts forwarded to the session prompter")
+ 	return b, nil
+ }
+ 
+-// Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the
+-// bridge there. Leaves the bridge inactive when another connection already
+-// holds the name. Errors when the claim or the export fails.
+-func (b *prompterBridge) activate() error {
+-	// The bridge does not queue for the name. A fallback prompter that already
+-	// holds it cannot be taken over, so the bridge leaves it to its owner.
+-	reply, err := b.backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+-	if err != nil {
+-		return fmt.Errorf("claim %s on backend bus: %w", systemPrompterName, err)
+-	}
+-	if reply != dbus.RequestNameReplyPrimaryOwner {
+-		b.logger.Info("could not claim system prompter on backend bus; unlock dialogs use the fallback", "reply", reply)
+-		return nil
+-	}
+-	b.owned = true
+-	if err := b.backendConn.Export(b, dbus.ObjectPath(systemPrompterPath), prompterInterface); err != nil {
+-		_, _ = b.backendConn.ReleaseName(systemPrompterName)
+-		b.owned = false
+-		return fmt.Errorf("export prompter bridge: %w", err)
+-	}
+-	b.logger.Info("prompter bridge active: keyring unlock prompts forwarded to the session prompter")
+-	return nil
+-}
+-
+ // --- Prompter interface (received from gnome-keyring on the backend bus) ---
+ 
+ // BeginPrompting starts a prompt. The callback object lives on gnome-keyring's
+@@ -175,12 +152,8 @@ func (b *prompterBridge) close() {
+ 		_ = b.frontConn.Export(nil, path, prompterCallbackInterface)
+ 		delete(b.callbacks, path)
+ 	}
+-	owned := b.owned
+-	b.owned = false
+ 	b.mu.Unlock()
+-	if owned {
+-		_, _ = b.backendConn.ReleaseName(systemPrompterName) // not under mu (network call)
+-	}
++	_, _ = b.backendConn.ReleaseName(systemPrompterName) // not under mu (network call)
+ }
+ 
+ // prompterCallback is the front-bus proxy for a gnome-keyring callback object.
+diff --git a/internal/proxy/proxy.go b/internal/proxy/proxy.go
+index 95f63b0..8280ca1 100644
+--- a/internal/proxy/proxy.go
++++ b/internal/proxy/proxy.go
+@@ -163,8 +163,8 @@ func (p *Proxy) ConnectWith(frontConn, backendConn *dbus.Conn) error {
+ 
+ 	// Bridge the backend keyring's unlock prompter to the session prompter
+ 	// (gnome-shell), so a locked-collection unlock renders a real dialog
+-	// instead of hanging on the display-less fallback. No-op when the
+-	// topology doesn't need it (returns nil, nil).
++	// instead of hanging on the display-less fallback. p.prompter stays nil
++	// when there is no bridge (see newPrompterBridge).
+ 	p.prompter, err = newPrompterBridge(p.frontConn, p.backendConn, p.logger)
+ 	if err != nil {
+ 		p.Close()

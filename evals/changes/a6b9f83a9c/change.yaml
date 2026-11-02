@@ -1,0 +1,37 @@
+id: a6b9f83a9c
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-17
+  at:
+  - seb.py:63-66
+  reach:
+  - seb.py:63-66
+  row: unparsed input
+  claim: The pasted redirect is read with q["code"][0]. When the bank redirects with error= (the user
+    cancelled or was refused), the state check passes and the run dies with a KeyError traceback.
+  fix: parse_redirect(url, state) -> str returns the code. It exits with the bank's error and error_description
+    when there is no code.
+  decision: SKIP
+  score: 4
+  reason: This turns a generic error into a specific one, which is a feature (§5). Under the threshold.
+  same: []
+  triage:
+    id: b1-17
+    decision: SKIP
+    score: 4
+    reason: a specific error for a generic one is a feature (§5)
+    task: t9
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

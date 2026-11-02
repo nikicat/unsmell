@@ -1,0 +1,96 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 05bc8f5..4d6ac62 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -72,17 +72,17 @@ type prompterBridge struct {
+ //
+ // In topologies where the backend already shares a bus with a real prompter
+ // (remote mode, or same-bus), there is nothing to bridge and it returns (nil, nil).
+-func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger) (*prompterBridge, error) {
+-	if nameHasOwner(backendConn, systemPrompterName) {
++func newPrompterBridge(buses busPair, logger *logging.Logger) (*prompterBridge, error) {
++	if nameHasOwner(buses.backend, systemPrompterName) {
+ 		// Same-bus / remote topology: the backend already reaches a real
+ 		// prompter, so inserting the bridge would only fight for the name.
+ 		return nil, nil
+ 	}
+ 
+ 	b := &prompterBridge{
+-		frontConn:   frontConn,
+-		backendConn: backendConn,
+-		toShell:     callForwarder{dst: frontConn, dstName: systemPrompterName},
++		frontConn:   buses.front,
++		backendConn: buses.backend,
++		toShell:     callForwarder{dst: buses.front, dstName: systemPrompterName},
+ 		logger:      logger,
+ 		callbacks:   make(map[dbus.ObjectPath]bool),
+ 	}
+diff --git a/internal/proxy/proxy.go b/internal/proxy/proxy.go
+index 95f63b0..72f88ee 100644
+--- a/internal/proxy/proxy.go
++++ b/internal/proxy/proxy.go
+@@ -40,6 +40,12 @@ type Proxy struct {
+ 	prompter          *prompterBridge
+ }
+ 
++// busPair is the two buses the proxy sits between.
++type busPair struct {
++	front   *dbus.Conn
++	backend *dbus.Conn
++}
++
+ // Config holds configuration for the proxy.
+ type Config struct {
+ 	ClientName            string
+@@ -154,8 +160,10 @@ func (p *Proxy) ConnectWith(frontConn, backendConn *dbus.Conn) error {
+ 		return fmt.Errorf("failed to become primary owner of %s (reply=%d)", dbustypes.BusName, reply)
+ 	}
+ 
++	buses := busPair{front: p.frontConn, backend: p.backendConn}
++
+ 	// Forward signals from backend to frontend so clients see live updates
+-	p.signals, err = newSignalForwarder(p.backendConn, p.frontConn, p.logger)
++	p.signals, err = newSignalForwarder(buses, p.logger)
+ 	if err != nil {
+ 		p.Close()
+ 		return fmt.Errorf("start signal forwarder: %w", err)
+@@ -165,7 +173,7 @@ func (p *Proxy) ConnectWith(frontConn, backendConn *dbus.Conn) error {
+ 	// (gnome-shell), so a locked-collection unlock renders a real dialog
+ 	// instead of hanging on the display-less fallback. No-op when the
+ 	// topology doesn't need it (returns nil, nil).
+-	p.prompter, err = newPrompterBridge(p.frontConn, p.backendConn, p.logger)
++	p.prompter, err = newPrompterBridge(buses, p.logger)
+ 	if err != nil {
+ 		p.Close()
+ 		return fmt.Errorf("start prompter bridge: %w", err)
+diff --git a/internal/proxy/signals.go b/internal/proxy/signals.go
+index 1060acc..57cecf0 100644
+--- a/internal/proxy/signals.go
++++ b/internal/proxy/signals.go
+@@ -23,21 +23,21 @@ type signalForwarder struct {
+ 	done        chan struct{}
+ }
+ 
+-func newSignalForwarder(backendConn, frontConn *dbus.Conn, logger *logging.Logger) (*signalForwarder, error) {
++func newSignalForwarder(buses busPair, logger *logging.Logger) (*signalForwarder, error) {
+ 	f := &signalForwarder{
+-		backendConn: backendConn,
+-		frontConn:   frontConn,
++		backendConn: buses.backend,
++		frontConn:   buses.front,
+ 		logger:      logger,
+ 		ch:          make(chan *dbus.Signal, 64),
+ 		done:        make(chan struct{}),
+ 	}
+ 
+-	if err := backendConn.AddMatchSignal(
++	if err := buses.backend.AddMatchSignal(
+ 		dbus.WithMatchSender(dbustypes.BusName),
+ 	); err != nil {
+ 		return nil, err
+ 	}
+-	backendConn.Signal(f.ch)
++	buses.backend.Signal(f.ch)
+ 
+ 	go f.run()
+ 	return f, nil

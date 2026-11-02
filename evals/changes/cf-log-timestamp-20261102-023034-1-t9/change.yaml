@@ -1,0 +1,31 @@
+id: cf-log-timestamp-20261102-023034-1-t9
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t9
+judge: null
+labels: []
+findings:
+- id: b2-18
+  at:
+  - src/evm/history.rs:1-26
+  reach:
+  - src/evm/history.rs:1-26
+  row: interface read back
+  claim: The module doc opens by listing the parts the history is built from ("HistStoreBackend over an
+    alloy Provider, LogCache, and LogIndex"). Its bullets describe the mechanism ("in-memory tree update
+    synchronous").
+  fix: 'Open with the history''s place in the system: the one HistStore over one log filter on one chain,
+    which keeps EVM details out of the generic combinators. Move the mechanism to `//` comments at subscribe.'
+  decision: SKIP
+  score: 4
+  reason: Unchanged lines. A doc fact that is true but adds little.
+  same: []
+  triage:
+    id: b2-18
+    decision: SKIP
+    score: 4
+    reason: module doc on unchanged lines reads its parts back; small gain, no patch
+    task: t9
+check: ok

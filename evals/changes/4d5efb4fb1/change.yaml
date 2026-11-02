@@ -1,0 +1,82 @@
+id: 4d5efb4fb1
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - internal/proxy/prompter.go:28-32
+  - internal/proxy/prompter.go:64-68
+  - internal/proxy/prompter_test.go:61-63
+  - internal/proxy/prompter_test.go:147-149
+  reach:
+  - internal/proxy/prompter.go:23-46
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:60-66
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/forward.go:68-71
+  - internal/proxy/proxy.go:164-167
+  row: duplicated knowledge
+  claim: the changeset added to the newPrompterBridge doc (prompter.go:66-68) and the test doc (prompter_test.go:147-149)
+    that in the local-takeover topology the gcr-prompter fallback draws its own GTK dialog instead of
+    hanging; the type doc (prompter.go:28-30), TestPrompterBridge's doc (prompter_test.go:61-63), forward.go:70-71
+    and proxy.go:165-166 still say the fallback is display-less and can never draw, so the unlock hangs.
+    One of the two is false, and the fact has six copies
+  fix: the prompterBridge type doc owns what the fallback does in the local-takeover topology and why
+    owning the backend name pre-empts it, stated once and correctly; the constructor doc, the activate
+    doc, both test docs, nameHasOwner's doc (forward.go:68-71) and the proxy.go:164-167 comment drop the
+    rationale or point to prompterBridge
+  decision: ASK
+  score: 9
+  reason: a doc states something false, but which one is true (hang vs GTK dialog) is a domain fact the
+    code does not show; the user must say
+  same:
+  - b1-4
+  - b1-7
+  - b1-13
+  triage:
+    id: b1-3
+    decision: ASK
+    score: 9
+    reason: 'checked: prompter.go:28-30, prompter_test.go:61-63, forward.go:70-71 and proxy.go:165-166
+      say the fallback is display-less and the unlock hangs; prompter.go:66-68 and prompter_test.go:147-149
+      say it draws a GTK dialog. Only the user knows which is true. The patch takes the changeset''s newer
+      claim'
+    task: t4
+    after:
+    - t3
+- id: b1-13
+  at:
+  - internal/proxy/prompter.go:23-46
+  reach:
+  - internal/proxy/prompter.go:23-46
+  row: long comment
+  claim: the prompterBridge type doc is 24 lines; besides the fact b1-3 corrects it narrates the protocol
+    method by method (interface read back) and the payload's end-to-end path, which callForwarder's doc
+    (forward.go:38-40) also states
+  fix: 'two or three sentences: the only way the backend gnome-keyring reaches the user''s real unlock
+    prompter across the private bus; it holds the backend SystemPrompter name so the fallback never answers,
+    and it never reads the exchange payload. The per-direction method list goes'
+  decision: PLAN
+  score: 5
+  reason: unchanged lines; whatever b1-3 decides edits the fallback sentence only
+  same:
+  - b1-3
+  triage:
+    id: b1-13
+    decision: PLAN
+    score: 5
+    reason: overlaps b1-3 on the type doc; rides on t4's patch, and is planned if t4 is declined
+    task: t4
+    after:
+    - t3
+after:
+- 4bbb595b0f
+check: ok

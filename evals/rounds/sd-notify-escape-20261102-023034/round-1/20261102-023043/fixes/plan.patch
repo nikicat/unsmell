@@ -1,0 +1,21 @@
+diff --git a/TODO.md b/TODO.md
+index 7636cd7..e3bfd00 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -12,3 +12,16 @@
+ - [x] Implement CLI for approving/rejecting
+ - [ ] Refactor
+ - [ ] Proxy webserver mode for development - load webapp from vite webserver instead of embedded html
++
++## Unsmell run 20261102-023043 (notification markup escaping)
++
++Each entry has a ready patch in `.git/unsmell/20261102-023043/fixes/`.
++
++- [ ] `internal/notification/desktop.go` `formatBody`: a switch on `req.Type` whose default arm switches on `req.Type` again. Split it into one body function per request kind (GPG, SSH, items with a process chain, legacy without one), and let `formatBody` dispatch. (t3)
++- [ ] `internal/notification/desktop_test.go`: `contains`/`stringContains` reimplement `strings.Contains`. Delete them. (t4)
++- [ ] `internal/notification/desktop.go` `Notify`, `NotifyPersistent`, `Close`: the reconnect-on-`dbus.ErrClosed`-and-retry-once block is written three times. Make it one method. (t5)
++- [ ] `internal/notification/desktop.go`: action keys (`"approve"`, `"deny"`, …) are string literals in the code that sends the actions and again in `handleAction`. Use a typed key with constants. (t6)
++- [ ] `internal/sshagent/proxy.go` and `internal/notification/desktop.go`: the `"destination"` item attribute is spelled in both places. Give it one owner in `internal/approval`. (t7)
++- [ ] `internal/notification/desktop.go` `Handler.notificationMeta` never uses its receiver. Make it a free function of the request type. (t8)
++- [ ] `internal/notification/desktop.go`, `desktop_test.go`: about 27 doc comments open with their own declaration's name. (t9)
++- [ ] `Notifier` interface: summary, body and icon travel together through every method. Option (a) is a `Message` struct (patch t10). Option (b) is to keep the strings and type only the body. Both change the exported interface. (t10)

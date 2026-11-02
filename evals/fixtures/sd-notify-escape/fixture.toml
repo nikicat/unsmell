@@ -1,0 +1,5 @@
+# Go, 2 files, 143 lines: a security fix that escapes client fields in a
+# notification. Small tier; it exercises the bug-fix and behaviour rules.
+source = "~/src/secrets-dispatcher"
+commit = "ca1605d"
+check = "go build ./... && go vet ./..."

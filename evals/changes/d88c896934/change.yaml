@@ -1,0 +1,48 @@
+id: d88c896934
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - src/evm/cache/event_signature_cache.rs:79-87
+  - src/bin/chainfold/signature_cache.rs:47-55
+  reach:
+  - src/evm/cache/event_signature_cache.rs:79-103
+  - src/evm/cache/event_signature_cache.rs:117-168
+  - src/bin/chainfold/signature_cache.rs:40-57
+  row: data clump
+  claim: The changeset named the row as EventSignatureRow { signature, topic0, abi_json } for get_event_signature's
+    return, but insert_event_signature (whose topic0 parameter the changeset retyped to Topic at event_signature_cache.rs:85)
+    still takes those same three fields as loose parameters, six in all. The write and the read describe
+    one record in two shapes, and the tests spell each field literal twice instead of comparing one row.
+  fix: 'insert_event_signature(&self, chain_id, address, event_name, row: &EventSignatureRow). The adapter''s
+    put builds an EventSignatureRow from the ResolvedEvent (cloning signature and abi_json, a one-off
+    write after a network fetch). The tests build one EventSignatureRow, insert it, and assert_eq! the
+    read-back row against it, which also gives the PartialEq derive its use.'
+  decision: FIX
+  score: 6
+  reason: Data-clump tell met in full on a changed signature. The function is pub, but the changeset already
+    broke its signature and the row type, and its only in-repo caller is the adapter. Storing ResolvedEvent
+    directly instead is ruled out by the TODO.md entry that fixed the struct's shape with topic0 as Topic.
+  same: []
+  triage:
+    id: b1-1
+    decision: ASK
+    score: 6
+    reason: The fix changes the exported signature of chainfold::evm::EventSignatureCache::insert_event_signature,
+      which is an ASK under §5 even though the bin is its only in-repo caller. Patches only, so no question
+      is asked; the patch shows the proposal.
+    task: t2
+    after:
+    - t1
+after:
+- 7967cdc768
+check: ok

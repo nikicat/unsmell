@@ -1,0 +1,377 @@
+read: [seb.py, schema.sql, pyproject.toml, .gitignore]
+unread: []
+findings:
+  - id: b1-1
+    at: [seb.py:19-49, seb.py:92-93]
+    reach: [seb.py:19-49, seb.py:52-88, seb.py:91-96]
+    row: missing receiver
+    claim: >-
+      headers(), call(), authorize(), load_session() and transactions() all reach
+      the same API client context (API, KEY, APP_ID, PSU) through module globals
+      instead of a receiver. PSU is a mutable global that main() must fill
+      (seb.py:92-93, comment "set in main()" at seb.py:24) before headers() works,
+      which is temporal coupling.
+    fix: >-
+      A class EnableBanking (dataclass) holding app_id, key and the psu headers as
+      fields, built once in main as EnableBanking(config, psu_headers()). headers,
+      call, authorize, session (today's load_session) and transactions become its
+      methods. The PSU global, the global statement and the "set in main()"
+      comment are gone.
+    decision: FIX
+    score: 6
+    reason: >-
+      Full tell (shared context reaching every sibling, plus the global set by the
+      caller). Minus 2 for churn of about 40 lines, but the temporal coupling makes
+      it worth more than a plain 5.
+    same: [b1-2]
+  - id: b1-2
+    at: [seb.py:20-23, seb.py:57, seb.py:94]
+    reach: [seb.py:19-24, seb.py:55-60, seb.py:91-95]
+    row: unparsed input
+    claim: >-
+      The settings are read in two places. EB_APP_ID, EB_KEY and EB_REDIRECT are
+      read at import time, and seb.py:21 reads private.pem during import, so
+      importing seb (the console script, or a test) fails before main runs.
+      EB_ASPSP is read inside authorize (seb.py:57). The cwd-relative paths
+      session.json and dengi.db are literals at seb.py:23 and seb.py:94.
+    fix: >-
+      A frozen dataclass Config with app_id, key (bytes), redirect, aspsp, and
+      Config.from_env() that reads all four variables and the key file. main
+      calls it once and builds EnableBanking (b1-1) from it. Module scope keeps
+      only the true constants: API, plus SESSION and DB as Path constants.
+    decision: FIX
+    score: 6
+    reason: >-
+      A setting read away from the edge, plus an import-time file read. The fix
+      merges with b1-1's constructor, so it shares that task.
+    same: [b1-1]
+  - id: b1-3
+    at: [seb.py:66-76, seb.py:96]
+    reach: [seb.py:52-76, seb.py:96]
+    row: misplaced rule
+    claim: >-
+      The session is a blind dict read by key at three sites
+      (s["access"]["valid_until"] at seb.py:74, ["accounts"] at seb.py:96, and the
+      raw write at seb.py:67). The expiry check, a rule about the session, lives
+      in load_session, a free function that only reads the session.
+    fix: >-
+      A dataclass Session with the fields valid_until (datetime), accounts
+      (list[Account]) and raw (the JSON as received). Session.from_json(d) parses
+      the body. Session.expired is a property. Session.load(path) returns
+      Session or None, and session.save(path) writes raw unchanged, so the file
+      format stays the same. EnableBanking.session() (b1-1) returns a session
+      that is still valid, loaded or authorized, and main iterates over
+      session.accounts.
+    decision: FIX
+    score: 7
+    reason: >-
+      Expiry check on the wrong owner (named in the placement pass), plus key
+      access on a file and API body. The serialized format is unchanged.
+    same: [b1-4]
+  - id: b1-4
+    at: [seb.py:97, seb.py:101]
+    reach: [seb.py:96-101]
+    row: misplaced rule
+    claim: >-
+      The account's storage key is derived inline in main as
+      acc.get("account_id", {}).get("iban") or acc["uid"]. That is a rule about an
+      account, written at the caller. It crashes with AttributeError if the API
+      sends "account_id" as null.
+    fix: >-
+      A dataclass Account with uid and iban (str or None), and Account.from_json
+      called by Session.from_json (b1-3). Its property key returns the IBAN, or
+      the fallback when there is none. main uses account.key and account.uid.
+    decision: FIX
+    score: 7
+    reason: Misplaced rule with the full tell; it goes in the same task as b1-3.
+    same: [b1-3, b1-5]
+  - id: b1-5
+    at: [seb.py:97, schema.sql:2]
+    reach: [seb.py:97, schema.sql:2, schema.sql:22, schema.sql:25]
+    row: misleading name
+    claim: >-
+      The txn.iban column holds the Enable Banking account uid when the account
+      has no IBAN, so the name says less than the column holds. This is PLAUSIBLE
+      and needs checking against the Enable Banking docs. As far as I recall, uid
+      is scoped to one session, and the stable cross-session identifier is
+      identification_hash. If so, the rows of an IBAN-less account split under a
+      new key after each re-authorization (180 days at most), and the resume
+      query at seb.py:100 finds nothing for them.
+    fix: >-
+      Account.key (b1-4) falls back to identification_hash instead of uid. The
+      column is renamed to account, with a comment saying it holds the IBAN or
+      the Enable Banking identification_hash.
+    decision: ASK
+    score: 8
+    reason: >-
+      It is a bug if uid is session-scoped, and the rename changes the stored
+      schema, which someone outside the changeset can notice.
+    same: [b1-4]
+  - id: b1-6
+    at: [seb.py:99-100, seb.py:4, seb.py:109]
+    reach: [seb.py:79-82, seb.py:91-109]
+    row: unparsed input
+    claim: >-
+      sys.argv[1] is a raw str that goes to the API query (seb.py:80) and to the
+      output (seb.py:109). It is never checked against the YYYY-MM-DD that the
+      module doc promises, and it is re-read inside the per-account loop. The
+      fallback from the database is also a raw str, read positionally with
+      fetchone()[0]. For an account with no rows, seb.py:109 prints "since None".
+    fix: >-
+      main parses the argument once, before the loop, with
+      date.fromisoformat(sys.argv[1]) when it is given, and exits with a usage
+      message otherwise. Store.last_booking_date(key) (b1-7) returns date or
+      None. EnableBanking.transactions(uid, since) takes date or None and
+      formats it with isoformat(). The summary line reads "since <date>", or
+      "full history" when there is no date.
+    decision: FIX
+    score: 7
+    reason: >-
+      Unparsed CLI input with the full tell. A bad date now fails locally instead
+      of at the API, a check moved to the edge (Behaviour).
+    same: [b1-7]
+  - id: b1-7
+    at: [seb.py:91-109]
+    reach: [seb.py:91-109]
+    row: mixed altitude
+    claim: >-
+      main mixes named steps (psu_headers, load_session, transactions) with inline
+      details, decisions and effects. The details are the schema bootstrap, a
+      count lambda and the upsert SQL. The decisions are the account key, the
+      choice of date_from and the BOOK filter. The effects are the upsert and
+      the print. The three store statements and the "only booked rows have an
+      entry_reference" rule (reason at schema.sql:3) belong to the store, not
+      to main.
+    fix: >-
+      A class Store wraps the sqlite connection. Store.open(path) connects and
+      runs schema.sql from beside __file__. It has last_booking_date(key) ->
+      date or None, and upsert(key, txs) -> int, which returns the number of new
+      rows (it counts before and after inside the method). A named
+      booked(txs) filter sits beside the store and carries a short comment
+      pointing at schema.sql:3. main reads as steps: config, client, store, then
+      for each account fetch, filter, upsert, and print.
+    decision: FIX
+    score: 6
+    reason: >-
+      Mixed altitude plus misplaced store rules with the full tell. Minus 2 for
+      churn of over 30 lines, but the SQL leaves main as a unit.
+    same: [b1-6]
+  - id: b1-8
+    at: [seb.py:98, seb.py:5]
+    reach: [seb.py:98]
+    row: duplicated knowledge
+    claim: >-
+      The comment at seb.py:98 ("default: resume from last stored day") repeats
+      the module doc at seb.py:5 ("without date_from, resumes from the last
+      stored day").
+    fix: >-
+      seb.py:98 keeps only the fact that the module doc does not state, as a
+      sentence. For example "# The upsert dedupes the day that overlaps the last
+      run." It sits beside the date choice, which b1-6 and b1-7 leave in main.
+    decision: FIX
+    score: 5
+    reason: A fact stated twice; the fix removes the copy.
+    same: []
+  - id: b1-9
+    at: [seb.py:37-38]
+    reach: [seb.py:36-38]
+    row: compressed doc
+    claim: >-
+      The psu_headers doc opens with "Mark the request as user-present", but the
+      function marks no request. It returns headers, and "the request" has no
+      referent. A colon also joins a second idea at line 38.
+    fix: >-
+      """Returns the PSU headers, which tell the bank that the user is present.
+      With them, the bank lifts its cap of about four unattended requests a day.
+      Returns no headers when stdin is not a terminal, because an unattended run
+      must not claim that the user is there."""
+    decision: FIX
+    score: 5
+    reason: The verb states something the function does not do, and the colon is a compressed-doc tell.
+    same: []
+  - id: b1-10
+    at: [seb.py:2-6]
+    reach: [seb.py:2-6]
+    row: compressed doc
+    claim: >-
+      In the module doc, a semicolon joins two ideas at line 5. The doc leaves out
+      the outcome a user meets first: when no valid session is stored, the run
+      asks for a Smart-ID login and needs the pasted redirect URL. It also says
+      nothing about exiting on a bad redirect.
+    fix: >-
+      """Fetches the SEB LT account history through Enable Banking.
+
+      Usage: uv run seb [date_from YYYY-MM-DD]
+
+      Upserts the booked transactions into dengi.db. Without date_from, each
+      account resumes from its last stored booking day. When no valid session
+      is stored, it asks you to log in with Smart-ID and to paste the URL you
+      land on. It exits when that URL does not belong to this login."""
+    decision: FIX
+    score: 5
+    reason: A missing user-visible effect and exit, plus a compressed-doc tell.
+    same: []
+  - id: b1-11
+    at: [.gitignore:1-3]
+    reach: [.gitignore:1-3]
+    row: speculative generality
+    claim: >-
+      .gitignore ignores only build artefacts. The program reads and writes three
+      files in the working directory, and none of them is ignored. They are the
+      RSA private key private.pem (seb.py:21), the bank session session.json
+      (seb.py:23), and the personal ledger dengi.db (seb.py:94). One git add of
+      the directory would commit a private key and bank data.
+    fix: >-
+      .gitignore also lists /private.pem, /session.json, /dengi.db and
+      /dengi.db-journal.
+    decision: FIX
+    score: 8
+    reason: >-
+      It prevents leaking a private key and financial data. It is mechanical and
+      does not change program behaviour. The row is the nearest one; the defect
+      is a missing safety rule.
+    same: []
+  - id: b1-12
+    at: [schema.sql:9-15]
+    reach: [schema.sql:6-20]
+    row: repeated derivation
+    claim: >-
+      The debit rule raw ->> '$.credit_debit_indicator' = 'DBIT' is written three
+      times, in amount_cents, counterparty and counterparty_iban.
+    fix: >-
+      One generated column, debit INTEGER AS (raw ->> '$.credit_debit_indicator'
+      = 'DBIT'), placed before the columns that use it.
+      amount_cents uses IIF(debit, -1, 1), and counterparty and counterparty_iban
+      use IIF(debit, creditor, debtor).
+    decision: ASK
+    score: 5
+    reason: >-
+      A repeated rule, but the fix adds a column to a stored schema. Because the
+      table uses CREATE TABLE IF NOT EXISTS, existing databases would not get it
+      (see b1-14).
+    same: [b1-14]
+  - id: b1-13
+    at: [schema.sql:3, seb.py:54]
+    reach: [schema.sql:2-4, seb.py:54]
+    row: compressed doc
+    claim: >-
+      Two trailing comments join two ideas with a semicolon.
+      schema.sql:3 is also longer than a few words ("unique per account at SEB;
+      booked only, pending has none"). seb.py:54 says "PSD2 max; bank may cap
+      lower".
+    fix: >-
+      Above entry_reference in schema.sql, on its own line: "-- Unique per account
+      at SEB. Only booked transactions have one, so pending ones are not stored."
+      At seb.py:54, on its own line above: "# 180 days is the PSD2 maximum. The
+      bank may grant less."
+    decision: FIX
+    score: 5
+    reason: Compressed-doc tells (a semicolon join and a long trailing comment).
+    same: []
+  - id: b1-14
+    at: [schema.sql:1, seb.py:95]
+    reach: [schema.sql:1-25, seb.py:95]
+    row: temporal coupling
+    claim: >-
+      The schema is applied with CREATE TABLE IF NOT EXISTS on every run, and it
+      has no version (PRAGMA user_version). Any later edit to schema.sql, such as a
+      generated column, never reaches an existing dengi.db, and nothing reports
+      the mismatch.
+    fix: >-
+      Store.open checks PRAGMA user_version against a SCHEMA_VERSION in
+      schema.sql. It applies migrations in order or recreates the generated
+      columns, because they derive from raw, and exits when the database is
+      newer.
+    decision: PLAN
+    score: 5
+    reason: >-
+      This is a latent problem, not a bug today. It needs a design decision on
+      migration versus rebuild from raw.
+    same: [b1-12]
+  - id: b1-15
+    at: [seb.py:79-88]
+    reach: [seb.py:79-88]
+    row: computing loop with effects
+    claim: >-
+      transactions combines continuation-key paging (generic), accumulation into a
+      list and a progress print to stderr in one loop. The tuple assignment with a
+      conditional at seb.py:80 also has to be read twice.
+    fix: >-
+      A generator EnableBanking.pages(path, params) yields each page and follows
+      continuation_key. transactions chains page["transactions"] from it and
+      prints progress, and params is built on its own line.
+    decision: SKIP
+    score: 4
+    reason: The loop is small and has one user; the gain is local.
+    same: []
+  - id: b1-16
+    at: [seb.py:20]
+    reach: [seb.py:20]
+    row: speculative generality
+    claim: >-
+      The EB_APP_ID default "00000000-0000-4000-8000-000000000000" is a
+      placeholder that no API accepts. A missing setting therefore shows up as an
+      API 401 instead of naming the variable.
+    fix: >-
+      Config.from_env (b1-2) requires EB_APP_ID and exits with "EB_APP_ID is not
+      set" when it is missing.
+    decision: SKIP
+    score: 4
+    reason: The failure is still loud (a 401). It changes the CLI error behaviour for little gain.
+    same: [b1-2]
+  - id: b1-17
+    at: [seb.py:63-66]
+    reach: [seb.py:63-66]
+    row: unparsed input
+    claim: >-
+      The pasted redirect is read with q["code"][0]. When the bank redirects with
+      error= (the user cancelled or was refused), the state check passes and the
+      run dies with a KeyError traceback.
+    fix: >-
+      parse_redirect(url, state) -> str returns the code. It exits with the
+      bank's error and error_description when there is no code.
+    decision: SKIP
+    score: 4
+    reason: >-
+      This turns a generic error into a specific one, which is a feature (§5).
+      Under the threshold.
+    same: []
+  - id: b1-18
+    at: [seb.py:45-49]
+    reach: [seb.py:45-49]
+    row: concept mixing
+    claim: >-
+      call(), the HTTP helper, also decides that any non-2xx response ends the
+      process (sys.exit), so no caller can handle an API error.
+    fix: >-
+      call raises an ApiError(method, path, status, body), and main turns it into
+      the exit message.
+    decision: SKIP
+    score: 3
+    reason: For a one-shot CLI script, exiting at the helper is acceptable. No caller needs to recover today.
+    same: []
+  - id: b1-19
+    at: [seb.py:36-42]
+    reach: [seb.py:36-42]
+    row: concept mixing
+    claim: >-
+      psu_headers holds the TTY policy and the network lookup of the public IP
+      inline in one body.
+    fix: >-
+      Leave it as is. The policy is the function's whole purpose, and a one-line
+      predicate would only add a hop.
+    decision: SKIP
+    score: 2
+    reason: Two roles inline in five lines, and splitting them adds nothing a reader needs.
+    same: [b1-9]
+  - id: b1-20
+    at: [seb.py:19, seb.py:30]
+    reach: [seb.py:19-30]
+    row: repeated derivation
+    claim: >-
+      The JWT audience "api.enablebanking.com" repeats the host of API.
+    fix: Leave it as is. Enable Banking fixes the audience whatever base URL is used, so the two only look alike.
+    decision: DISCARD
+    score: 1
+    reason: The resemblance is a coincidence; the two would not change for the same reason.
+    same: []

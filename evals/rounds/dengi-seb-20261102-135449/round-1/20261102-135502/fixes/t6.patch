@@ -1,0 +1,23 @@
+diff --git a/schema.sql b/schema.sql
+index 488144d..cbd4fe7 100644
+--- a/schema.sql
++++ b/schema.sql
+@@ -5,14 +5,13 @@ CREATE TABLE IF NOT EXISTS txn (
+ 
+     booking_date    TEXT AS (raw ->> '$.booking_date'),
+     value_date      TEXT AS (raw ->> '$.value_date'),
++    debit           INTEGER AS (raw ->> '$.credit_debit_indicator' = 'DBIT'),
+     -- signed: negative = money out
+     amount_cents    INTEGER AS (CAST(round((raw ->> '$.transaction_amount.amount') * 100) AS INTEGER)
+-                                * IIF(raw ->> '$.credit_debit_indicator' = 'DBIT', -1, 1)),
++                                * IIF(debit, -1, 1)),
+     currency        TEXT AS (raw ->> '$.transaction_amount.currency'),
+-    counterparty    TEXT AS (IIF(raw ->> '$.credit_debit_indicator' = 'DBIT',
+-                                 raw ->> '$.creditor.name', raw ->> '$.debtor.name')),
+-    counterparty_iban TEXT AS (IIF(raw ->> '$.credit_debit_indicator' = 'DBIT',
+-                                   raw ->> '$.creditor_account.iban', raw ->> '$.debtor_account.iban')),
++    counterparty    TEXT AS (IIF(debit, raw ->> '$.creditor.name', raw ->> '$.debtor.name')),
++    counterparty_iban TEXT AS (IIF(debit, raw ->> '$.creditor_account.iban', raw ->> '$.debtor_account.iban')),
+     remittance      TEXT AS (raw ->> '$.remittance_information'),  -- JSON array text, fine for LIKE
+     -- ISO 20022 domain/family/sub-family, e.g. PMNT/CCRD/OTHR = card payment
+     tx_code         TEXT AS (concat_ws('/', raw ->> '$.bank_transaction_code.description',

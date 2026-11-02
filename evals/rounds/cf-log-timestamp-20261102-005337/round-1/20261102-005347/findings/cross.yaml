@@ -1,0 +1,52 @@
+read: [inventory/b1.md, inventory/b2.md]
+unread: []
+findings:
+  - id: x-1
+    at: [src/evm/cache.rs:241-246, src/evm/history.rs:402-403, src/evm/history.rs:520-521, src/evm/history.rs:601-602]
+    reach: [src/evm/cache.rs:241-246, src/evm/history.rs:395-417, src/evm/history.rs:512-529, src/evm/history.rs:599-609]
+    row: duplicated knowledge (fact stated in two files' comments)
+    claim: >-
+      The rule "a log that carries block_timestamp needs no block header; otherwise the timestamp comes
+      from the cached block header" is stated in the migration-6 SQL comment at src/evm/cache.rs:242-246
+      ("Lets the query path stamp EvmEvent.timestamp directly, skipping the eth_getBlockByNumber header
+      fetch ... the reader falls back to the cached block header") and again in three comments in
+      src/evm/history.rs (402-403, 520-521, 601-602). The code that enforces the rule lives only in
+      history.rs (iter closure 404-409, log_to_evm_event 522, build_fetcher 603), so the schema comment in
+      cache.rs describes another module's read policy and goes stale independently of it. Neither batch
+      sees both halves: b1-1 removes the cache.rs copy, b2-2 consolidates the history.rs copies.
+    fix: >-
+      One owner: the doc of the new history.rs helper log_timestamp from b2-1/b2-2 ("Returns the block
+      timestamp of the given log. Uses the timestamp that the provider supplied with the log when there is
+      one. Otherwise uses the block header's timestamp, read from the cache or fetched and cached. Errors
+      when the header lookup fails."). The cache.rs:241-246 comment shrinks to the column's own facts, as
+      b1-1 proposes: "-- The block's Unix timestamp in seconds, when the provider sent it with the log in
+      its eth_getLogs response. This is a common but non-standard extension. The column is NULL when the
+      provider omitted it, and on rows written before this migration." No mention of EvmEvent, the query
+      path, the reader or the header fallback in cache.rs.
+    decision: FIX
+    score: 6
+    reason: >-
+      Same fact in two batches' changed comments, with the enforcing code in only one of them. Both edits
+      are on changed lines and already planned by b1-1 and b2-2; this finding ties them so the fixers keep
+      exactly one statement (history.rs) and the cache.rs wording does not re-introduce the policy.
+    same: [b1-1, b2-2, b2-1]
+  - id: x-2
+    at: [src/evm/history.rs:74, src/evm/history.rs:124, src/evm/history.rs:206-207, src/evm/cache/log_cache.rs:116, src/evm/cache/log_cache.rs:156, src/evm/cache/log_cache.rs:182]
+    reach: [src/evm/history.rs:70-207, src/evm/cache/log_cache.rs:90-374]
+    row: missing receiver
+    claim: >-
+      EvmLogHistory (src/evm/history.rs:74) holds a per-filter `filter_hash: [u8; 32]` computed once at
+      history.rs:124, while seven LogCache methods in src/evm/cache/log_cache.rs (insert_logs :116,
+      get_log_by_ref :156, get_logs_in_range :182, record_scanned_range, get_scanned_ranges, compact_ranges,
+      invalidate_reorged_ranges) take that same value as a parameter. The value lives in one batch and is
+      threaded as an argument in the other, so it wants to be the receiver of a per-filter LogCache handle.
+    fix: >-
+      A per-filter handle built from the hash, e.g. `LogCache::filter(&self, hash: FilterHash) -> FilterLogs`
+      with the seven methods moved onto it, and a `FilterHash` newtype returned by compute_filter_hash;
+      EvmLogHistory stores the handle (or the newtype) instead of a raw [u8; 32].
+    decision: PLAN
+    score: 5
+    reason: >-
+      Signatures and the stored field are unchanged lines; the changeset only edits bodies of insert_logs,
+      get_log_by_ref and get_logs_in_range. Public cross-module API change, beyond the changed lines.
+    same: [b1-6]

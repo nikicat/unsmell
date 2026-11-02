@@ -1,0 +1,81 @@
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 9623e37..c4ef4c2 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -2,6 +2,7 @@ package notification
+ 
+ import (
+ 	"fmt"
++	"html"
+ 	"log/slog"
+ 	"strings"
+ 
+@@ -76,7 +77,8 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ }
+ 
+ // formatSlowUpstreamBody builds the notification body from item labels and
+-// optional process chain.
++// optional process chain. The body is notification markup, so every
++// client-controlled value is HTML-escaped.
+ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+ 	var b strings.Builder
+ 
+@@ -85,11 +87,11 @@ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+ 	case 0:
+ 		// no items
+ 	case 1:
+-		b.WriteString(itemDisplayLabel(ctx.Items[0]))
++		b.WriteString(html.EscapeString(itemDisplayLabel(ctx.Items[0])))
+ 	default:
+ 		labels := make([]string, len(ctx.Items))
+ 		for i, item := range ctx.Items {
+-			labels[i] = itemDisplayLabel(item)
++			labels[i] = html.EscapeString(itemDisplayLabel(item))
+ 		}
+ 		fmt.Fprintf(&b, "%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
+ 	}
+@@ -103,7 +105,7 @@ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+ 			if i > 0 {
+ 				b.WriteString(" \u2190 ")
+ 			}
+-			b.WriteString(p.Name)
++			b.WriteString(html.EscapeString(p.Name))
+ 		}
+ 	}
+ 
+diff --git a/internal/notification/slow_upstream_test.go b/internal/notification/slow_upstream_test.go
+index 0a58570..ebfceb9 100644
+--- a/internal/notification/slow_upstream_test.go
++++ b/internal/notification/slow_upstream_test.go
+@@ -276,3 +276,31 @@ func TestSlowUpstreamNotifier_ProcessChainOnly(t *testing.T) {
+ 		t.Errorf("unexpected body: %q", mock.notified[0].body)
+ 	}
+ }
++
++func TestSlowUpstreamNotifier_EscapesMarkup(t *testing.T) {
++	mock := &mockNotifier{}
++	n := newSlowUpstreamNotifier(mock)
++
++	ctx := proxy.UpstreamCallContext{
++		Items: []approval.ItemInfo{
++			{Label: "a</b><b>x"},
++			{Path: "/p/<i>&"},
++		},
++		SenderInfo: approval.SenderInfo{
++			PID: 1234,
++			ProcessChain: []approval.ProcessInfo{
++				{Name: "a</b><b>x", PID: 1234},
++				{Name: "zsh", PID: 1000},
++			},
++		},
++	}
++	dismiss := n.NotifySlowUpstream(ctx)
++	defer dismiss()
++
++	mock.mu.Lock()
++	defer mock.mu.Unlock()
++	expected := "a&lt;/b&gt;&lt;b&gt;x, /p/&lt;i&gt;&amp; (2 items)\na&lt;/b&gt;&lt;b&gt;x ← zsh"
++	if mock.notified[0].body != expected {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].body, expected)
++	}
++}

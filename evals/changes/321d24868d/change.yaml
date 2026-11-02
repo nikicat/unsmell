@@ -1,0 +1,46 @@
+id: 321d24868d
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-7
+  at:
+  - src/evm/history.rs:405
+  - src/evm/history.rs:512-528
+  reach:
+  - src/evm/history.rs:395-417
+  - src/evm/history.rs:512-529
+  - src/evm/types.rs:72-95
+  row: unparsed input
+  claim: 'log_to_evm_event defaults every missing Option of the provider Log to 0 (block_number 519, log_index
+    524 with an `as u32` truncation, hashes 514-515). The changed line at history.rs:405 repeats `log.block_number.unwrap_or(0)`,
+    so a log without a block number is silently stamped with genesis'' timestamp. log_to_evm_event is
+    also a free function that only builds an EvmEvent, so it belongs with EvmEvent.
+
+    '
+  fix: '`impl TryFrom<&Log> for EvmEvent` (or `EvmEvent::from_log(log, timestamp)`) in src/evm/types.rs.
+    It errors with HistoryError on a log that has no block number, log index or block hash (a pending
+    log) and on a log index past u32. iter reads `event.block_number` instead of re-deriving it.
+
+    '
+  decision: PLAN
+  score: 5
+  reason: 'The root cause is on unchanged lines, and only line 405 was re-indented by the changeset. Rejecting
+    pending logs changes behaviour.
+
+    '
+  same: []
+  triage:
+    id: b2-7
+    decision: PLAN
+    score: 5
+    task: t7
+    reason: old defaulting; the changeset only re-indented :405
+check: ok

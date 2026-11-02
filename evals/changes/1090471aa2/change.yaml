@@ -1,0 +1,186 @@
+id: 1090471aa2
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t1
+judge: null
+labels: []
+findings:
+- id: b1-8
+  at:
+  - evals/run.py:60-67
+  reach:
+  - evals/run.py:57-68
+  - evals/test_run.py:9-25
+  row: inline generic machinery
+  claim: 'Delta.between parses `git diff -U0` by hand. The path is line[6:] of the +++ line, so every
+    deleted file becomes "ev/null". A file that one round deletes and a later round restores is therefore
+    not counted as a reversal. An added line whose text starts with "++", or a removed line starting with
+    "--" (a SQL or Lua comment), is taken for a file header: the line is dropped, and a "+++" line also
+    resets the path. A user''s diff.noprefix setting shifts every path.'
+  fix: Parse the diff with unidiff.PatchSet (run.py gets the uv script header that changes.py has), taking
+    the source path for removed lines and the target path for added lines. Or, without the dependency,
+    run git diff with --no-prefix and track headers by state, so that only lines before a file's first
+    @@ count as headers. test_run.py gains a case that deletes a file and restores it, and one with a
+    removed "-- " line.
+  decision: ASK
+  score: 9
+  reason: a bug in the reversal measure; the fix is either a new dependency or a hand-written parser,
+    so the user picks
+  same:
+  - b1-9
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 9
+    reason: a bug in the reversal measure. Fixing the existing parser to track headers by state is not
+      a new hand-written mechanism, so no dependency question is needed (patches only, no questions)
+    task: t1
+- id: b1-9
+  at:
+  - evals/run.py:65-66
+  reach:
+  - evals/run.py:57-68
+  row: misleading name
+  claim: The comment above `if len(text) > 3` has an unexplained "ponytail:" tag, joins two ideas with
+    a semicolon, and describes the line-set approach as a whole rather than the rule it sits on. The threshold
+    3 is not explained anywhere.
+  fix: Name the rule as a predicate on Delta, such as significant(text), whose doc says that lines of
+    three characters or fewer (braces, blank lines) carry no change of their own. The note that a moved
+    line counts as removed and added goes into Delta's docstring as two plain sentences.
+  decision: FIX
+  score: 5
+  reason: an inline rule with no name and a compressed comment that explains something else
+  same:
+  - b1-8
+  triage:
+    id: b1-9
+    decision: FIX
+    score: 5
+    reason: an inline rule with no name and a compressed comment that explains something else
+    task: t1
+- id: b1-10
+  at:
+  - evals/run.py:73-79
+  reach:
+  - evals/run.py:73-79
+  - evals/run.py:149-167
+  row: repeated derivation
+  claim: reversals and rework each build `set().union(*(d.X for d in earlier))` from the list of earlier
+    deltas that evaluate keeps.
+  fix: A classmethod Delta.union(deltas) that returns one Delta holding all added and all removed lines.
+    evaluate keeps that one accumulated Delta instead of a list, and reversals(earlier) and rework(earlier)
+    take it and intersect with its sets.
+  decision: FIX
+  score: 5
+  reason: the same derivation written twice
+  same: []
+  triage:
+    id: b1-10
+    decision: FIX
+    score: 5
+    reason: the fix stays inside Delta (one private union helper), so evaluate keeps its list of deltas
+    task: t1
+- id: b1-24
+  at:
+  - evals/run.py:54-55
+  reach:
+  - evals/run.py:50-79
+  row: unnamed tuple
+  claim: Delta.added and Delta.removed are bare sets of (path, text) tuples, so the element type says
+    nothing about what a line is.
+  fix: a NamedTuple Line(path, text), with the fields typed as set[Line]
+  decision: FIX
+  score: 5
+  reason: a collection whose element type says nothing
+  same: []
+  triage:
+    id: b1-24
+    decision: FIX
+    score: 5
+    reason: a collection whose element type says nothing
+    task: t1
+- id: b2-23
+  at:
+  - evals/changes.py:71-72
+  - evals/changes.py:162
+  - evals/changes.py:375-376
+  reach:
+  - evals/changes.py:69-73
+  - evals/changes.py:158-164
+  - evals/changes.py:374-376
+  - evals/run.py:60-63
+  row: repeated derivation
+  claim: The changed lines of a patch are filtered three times here (l[:1] in '+-' at 72 and 162, with
+    +++/--- headers kept, and startswith('+') minus '+++' at 375-376, with them dropped) and again in
+    run.py:63.
+  fix: One changed_lines(patch) helper (in run.py, which already parses diffs) that yields the changed
+    lines without headers, with the file names separate where change_id needs them.
+  decision: FIX
+  score: 5
+  reason: a derivation written four times, with inconsistent header handling
+  same: []
+  triage:
+    id: b2-23
+    decision: FIX
+    score: 5
+    reason: a derivation written four times, with inconsistent header handling
+    task: t1
+- id: cross-5
+  at:
+  - evals/run.py:60-67
+  - evals/changes.py:71-72
+  - evals/changes.py:162
+  - evals/changes.py:375-376
+  reach:
+  - evals/run.py:57-68
+  - evals/changes.py:69-73
+  - evals/changes.py:158-164
+  - evals/changes.py:374-376
+  row: repeated derivation
+  claim: 'The changed lines of a diff are picked out in both batches: by prefix in Delta.between (run.py:63,
+    headers detected by prefix), and three times in changes.py (l[:1] in "+-" at 72 and 162 with the +++/---
+    headers kept, startswith("+") minus "+++" at 375-376 with them dropped). The four sites disagree on
+    headers, and run.py''s version also mistakes a "++"/"--" content line for a header.'
+  fix: One diff-reading helper in run.py (unidiff.PatchSet, or a stateful parser that only treats lines
+    before a file's first @@ as headers) that yields changed lines as Line(path, text). Delta.between,
+    change_id, tokens and list_changes all use it.
+  decision: ASK
+  score: 6
+  reason: a derivation in two modules that disagree; the shared parser's form (a new dependency or a hand-written
+    one) is b1-8's open question
+  same:
+  - b2-23
+  - b1-8
+  - b1-24
+  triage:
+    id: cross-5
+    decision: FIX
+    score: 6
+    reason: with b1-8 decided as a stateful parser in run.py, the shared diff reader has one obvious home
+      there. change_id must keep producing the same ids, since they key the stored dataset
+    task: t1
+- id: b2-6
+  at:
+  - evals/changes.py:162-163
+  reach:
+  - evals/changes.py:162-163
+  row: bug
+  claim: tokens joins the changed lines and then appends the claims with no separator, so the last word
+    of the patch and the first word of the first claim fuse into one token (for example 'foo' + 'session'
+    becomes 'foosession').
+  fix: Join the patch text and the claims with a newline or space between them.
+  decision: FIX
+  score: 9
+  reason: a bug, though its effect on similarity is small
+  same:
+  - b2-5
+  triage:
+    id: b2-6
+    decision: FIX
+    score: 9
+    reason: a bug, though its effect on similarity is small. Fixed by t1, whose shared changed-lines reader
+      joins the patch lines and the claims with spaces
+    task: t1
+check: ok

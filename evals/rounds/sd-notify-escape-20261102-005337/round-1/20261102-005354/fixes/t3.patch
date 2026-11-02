@@ -1,0 +1,270 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 83ca469..da34f9e 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -5,7 +5,6 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
+-	"html"
+ 	"log/slog"
+ 	"os/exec"
+ 	"strings"
+@@ -580,37 +579,37 @@ func commitSubject(msg string) string {
+ }
+ 
+ // Appends the process chain on a new line, from the requestor up to its
+-// ancestors, with each process name escaped.
+-func writeProcessChain(b *strings.Builder, chain []approval.ProcessInfo, showPIDs bool) {
++// ancestors.
++func writeProcessChain(m *markup, chain []approval.ProcessInfo, showPIDs bool) {
+ 	for i, p := range chain {
+ 		if i == 0 {
+-			b.WriteString("\n")
++			m.raw("\n")
+ 		} else {
+-			b.WriteString(" ← ")
++			m.raw(" ← ")
+ 		}
+-		b.WriteString(html.EscapeString(p.Name))
++		m.text(p.Name)
+ 		if showPIDs {
+-			fmt.Fprintf(b, "[%d]", p.PID)
++			m.raw(fmt.Sprintf("[%d]", p.PID))
+ 		}
+ 	}
+ }
+ 
+-// Returns the attributes as "k=v, k=v" with keys and values escaped.
++// Returns the attributes as "k=v, k=v".
+ func formatSearchAttrs(attrs map[string]string) string {
+ 	pairs := make([]string, 0, len(attrs))
+ 	for k, v := range attrs {
+-		pairs = append(pairs, fmt.Sprintf("%s=%s", html.EscapeString(k), html.EscapeString(v)))
++		pairs = append(pairs, k+"="+v)
+ 	}
+ 	return strings.Join(pairs, ", ")
+ }
+ 
+-// Returns the escaped text that names what req asks for. It is the item label
+-// or item count, the search attributes or "all", or "" for other request types.
++// Returns the text that names what req asks for. It is the item label or item
++// count, the search attributes or "all", or "" for other request types.
+ func requestSubject(req *approval.Request) string {
+ 	switch req.Type {
+ 	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+ 		if len(req.Items) == 1 {
+-			return html.EscapeString(req.Items[0].Label)
++			return req.Items[0].Label
+ 		}
+ 		return fmt.Sprintf("%d items", len(req.Items))
+ 	case approval.RequestTypeSearch:
+@@ -622,50 +621,58 @@ func requestSubject(req *approval.Request) string {
+ 	return ""
+ }
+ 
+-// Returns the notification body for req in the markup that notification servers
+-// render. All client-controlled text is escaped, because the notification carries approve and
+-// deny buttons and injected markup could make a request look trustworthy.
++// Returns the notification body for req. It is built with markup because the
++// notification carries approve and deny buttons, and injected markup could make
++// a request look trustworthy.
+ func (h *Handler) formatBody(req *approval.Request) string {
+-	var b strings.Builder
++	var m markup
+ 	chain := req.SenderInfo.ProcessChain
+ 
+ 	switch req.Type {
+ 	case approval.RequestTypeGPGSign:
+ 		if req.GPGSignInfo != nil {
+-			fmt.Fprintf(&b, "<b>%s</b>: <i>%s</i>", html.EscapeString(req.GPGSignInfo.RepoName), html.EscapeString(commitSubject(req.GPGSignInfo.CommitMsg)))
+-			writeProcessChain(&b, chain, h.showPIDs)
++			m.bold(req.GPGSignInfo.RepoName)
++			m.raw(": ")
++			m.italic(commitSubject(req.GPGSignInfo.CommitMsg))
++			writeProcessChain(&m, chain, h.showPIDs)
+ 		}
+ 	case approval.RequestTypeSSHSign:
+ 		// Show key label and destination
+ 		if len(req.Items) > 0 {
+-			fmt.Fprintf(&b, "<b>%s</b>", html.EscapeString(req.Items[0].Label))
++			m.bold(req.Items[0].Label)
+ 			if dest, ok := req.Items[0].Attributes["destination"]; ok && dest != "" {
+-				fmt.Fprintf(&b, " → %s", html.EscapeString(dest))
++				m.raw(" → ")
++				m.text(dest)
+ 			}
+ 		}
+-		writeProcessChain(&b, chain, h.showPIDs)
++		writeProcessChain(&m, chain, h.showPIDs)
+ 	default:
+ 		subject := requestSubject(req)
+ 		if len(chain) > 0 {
+ 			// The subject, then the process chain from the requestor up to its ancestors.
+ 			if subject != "" {
+-				fmt.Fprintf(&b, "<b>%s</b>", subject)
++				m.bold(subject)
+ 			}
+-			writeProcessChain(&b, chain, h.showPIDs)
++			writeProcessChain(&m, chain, h.showPIDs)
+ 		} else {
+ 			// Fallback: old format for remote requests without process chain
+ 			if req.SenderInfo.InvokerName != "" {
+-				fmt.Fprintf(&b, "<b>%s</b>@%s[%d]: ", html.EscapeString(req.SenderInfo.InvokerName), html.EscapeString(req.Client), req.SenderInfo.PID)
++				m.bold(req.SenderInfo.InvokerName)
++				m.raw("@")
++				m.text(req.Client)
++				m.raw(fmt.Sprintf("[%d]: ", req.SenderInfo.PID))
+ 			} else if req.SenderInfo.PID != 0 {
+-				fmt.Fprintf(&b, "<b>%s</b>[%d]: ", html.EscapeString(req.Client), req.SenderInfo.PID)
++				m.bold(req.Client)
++				m.raw(fmt.Sprintf("[%d]: ", req.SenderInfo.PID))
+ 			} else {
+-				fmt.Fprintf(&b, "<b>%s</b>: ", html.EscapeString(req.Client))
++				m.bold(req.Client)
++				m.raw(": ")
+ 			}
+ 			if subject != "" {
+-				fmt.Fprintf(&b, "<i>%s</i>", subject)
++				m.italic(subject)
+ 			}
+ 		}
+ 	}
+ 
+-	return b.String()
++	return m.String()
+ }
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+new file mode 100644
+index 0000000..16971a6
+--- /dev/null
++++ b/internal/notification/markup.go
+@@ -0,0 +1,43 @@
++package notification
++
++import (
++	"html"
++	"strings"
++)
++
++// A notification body in the markup that notification servers render. Text
++// passed to text, bold and italic is escaped, so client-controlled values
++// cannot inject markup; only raw appends unescaped.
++type markup struct {
++	b strings.Builder
++}
++
++// Appends s, escaped.
++func (m *markup) text(s string) {
++	m.b.WriteString(html.EscapeString(s))
++}
++
++// Appends s, escaped, in bold.
++func (m *markup) bold(s string) {
++	m.b.WriteString("<b>" + html.EscapeString(s) + "</b>")
++}
++
++// Appends s, escaped, in italics.
++func (m *markup) italic(s string) {
++	m.b.WriteString("<i>" + html.EscapeString(s) + "</i>")
++}
++
++// Appends s unescaped. It is for literal separators, never for
++// client-controlled text.
++func (m *markup) raw(s string) {
++	m.b.WriteString(s)
++}
++
++// Reports whether nothing has been appended.
++func (m *markup) empty() bool {
++	return m.b.Len() == 0
++}
++
++func (m *markup) String() string {
++	return m.b.String()
++}
+diff --git a/internal/notification/markup_test.go b/internal/notification/markup_test.go
+new file mode 100644
+index 0000000..5cc2b9a
+--- /dev/null
++++ b/internal/notification/markup_test.go
+@@ -0,0 +1,17 @@
++package notification
++
++import "testing"
++
++func TestMarkup_EscapesText(t *testing.T) {
++	var m markup
++	m.bold(`<a href="x">&`)
++	m.raw(" | ")
++	m.italic("<b>")
++	m.raw(" | ")
++	m.text("</i>'")
++
++	want := `<b>&lt;a href=&#34;x&#34;&gt;&amp;</b> | <i>&lt;b&gt;</i> | &lt;/i&gt;&#39;`
++	if got := m.String(); got != want {
++		t.Errorf("got %q, want %q", got, want)
++	}
++}
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index c4ef4c2..12069fd 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -2,7 +2,6 @@ package notification
+ 
+ import (
+ 	"fmt"
+-	"html"
+ 	"log/slog"
+ 	"strings"
+ 
+@@ -76,38 +75,37 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ 	return item.Path
+ }
+ 
+-// formatSlowUpstreamBody builds the notification body from item labels and
+-// optional process chain. The body is notification markup, so every
+-// client-controlled value is HTML-escaped.
++// Returns the notification body: the item labels, then the process chain.
+ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+-	var b strings.Builder
++	var m markup
+ 
+ 	// Item labels (fall back to Path when Label is empty)
+ 	switch len(ctx.Items) {
+ 	case 0:
+ 		// no items
+ 	case 1:
+-		b.WriteString(html.EscapeString(itemDisplayLabel(ctx.Items[0])))
++		m.text(itemDisplayLabel(ctx.Items[0]))
+ 	default:
+ 		labels := make([]string, len(ctx.Items))
+ 		for i, item := range ctx.Items {
+-			labels[i] = html.EscapeString(itemDisplayLabel(item))
++			labels[i] = itemDisplayLabel(item)
+ 		}
+-		fmt.Fprintf(&b, "%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
++		m.text(strings.Join(labels, ", "))
++		m.raw(fmt.Sprintf(" (%d items)", len(ctx.Items)))
+ 	}
+ 
+ 	// Process chain (Name ← Name convention, matching desktop.go)
+ 	if len(ctx.SenderInfo.ProcessChain) > 0 {
+-		if b.Len() > 0 {
+-			b.WriteString("\n")
++		if !m.empty() {
++			m.raw("\n")
+ 		}
+ 		for i, p := range ctx.SenderInfo.ProcessChain {
+ 			if i > 0 {
+-				b.WriteString(" \u2190 ")
++				m.raw(" \u2190 ")
+ 			}
+-			b.WriteString(html.EscapeString(p.Name))
++			m.text(p.Name)
+ 		}
+ 	}
+ 
+-	return b.String()
++	return m.String()
+ }

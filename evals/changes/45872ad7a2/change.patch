@@ -1,0 +1,190 @@
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..8e87a0c 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -40,11 +40,30 @@ def git(repo, *args, env=None):
+                           capture_output=True, env=env).stdout
+ 
+ 
+-def snapshot(repo):
+-    """Returns the git tree of the working directory, leaving the index and HEAD alone."""
+-    env = os.environ | {"GIT_INDEX_FILE": str(repo / ".git" / "eval-index")}
+-    git(repo, "add", "-A", env=env)
+-    return git(repo, "write-tree", env=env).strip()
++@dataclass(frozen=True)
++class Repo:
++    """A git repo that a run changes round by round."""
++
++    path: Path
++
++    def git(self, *args, env=None):
++        return git(self.path, *args, env=env)
++
++    def snapshot(self):
++        """Returns the git tree of the working directory, leaving the index and HEAD alone."""
++        env = os.environ | {"GIT_INDEX_FILE": str(self.path / ".git" / "eval-index")}
++        self.git("add", "-A", env=env)
++        return self.git("write-tree", env=env).strip()
++
++    def diff(self, old, new):
++        """Returns the lines that tree new adds and removes against tree old."""
++        return Delta.parse(self.git("diff", "-U0", old, new))
++
++    def clear(self):
++        """Deletes the working tree, keeping .git."""
++        for item in self.path.iterdir():
++            if item.name != ".git":
++                shutil.rmtree(item) if item.is_dir() else item.unlink()
+ 
+ 
+ @dataclass
+@@ -55,9 +74,9 @@ class Delta:
+     removed: set = field(default_factory=set)
+ 
+     @classmethod
+-    def between(cls, repo, old, new):
++    def parse(cls, diff):
+         delta, path = cls(), None
+-        for line in git(repo, "diff", "-U0", old, new).splitlines():
++        for line in diff.splitlines():
+             if line.startswith("+++ "):
+                 path = line[6:]
+             elif line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+@@ -79,12 +98,6 @@ class Delta:
+         return len(self.removed & set().union(*(d.added for d in earlier)))
+ 
+ 
+-def clear(repo):
+-    for item in repo.iterdir():
+-        if item.name != ".git":
+-            shutil.rmtree(item) if item.is_dir() else item.unlink()
+-
+-
+ def copy_tree(source, rev, repo):
+     """Writes the files of source at rev into repo, without any of source's history."""
+     archive = subprocess.run(["git", "-C", str(source), "archive", rev], check=True, capture_output=True).stdout
+@@ -97,25 +110,25 @@ def materialize(fixture, spec, workdir):
+     A fixture names a commit in another repo (`source` and `commit` in fixture.toml), or it
+     holds the trees itself in base/ and head/.
+     """
+-    repo = workdir / "repo"
+-    repo.mkdir(parents=True)
+-    git(repo, "init", "-q", "-b", "main")
+-    git(repo, "config", "user.email", "eval@unsmell")
+-    git(repo, "config", "user.name", "unsmell eval")
++    repo = Repo(workdir / "repo")
++    repo.path.mkdir(parents=True)
++    repo.git("init", "-q", "-b", "main")
++    repo.git("config", "user.email", "eval@unsmell")
++    repo.git("config", "user.name", "unsmell eval")
+     # The round commits are scratch state, so they must not trigger the user's signing setup.
+-    git(repo, "config", "commit.gpgsign", "false")
++    repo.git("config", "commit.gpgsign", "false")
+     source = Path(spec.get("source", "")).expanduser()
+     if "commit" in spec:
+-        copy_tree(source, f"{spec['commit']}^", repo)
++        copy_tree(source, f"{spec['commit']}^", repo.path)
+     elif (fixture / "base").is_dir():
+-        shutil.copytree(fixture / "base", repo, dirs_exist_ok=True)
+-    git(repo, "add", "-A")
+-    git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+-    clear(repo)
++        shutil.copytree(fixture / "base", repo.path, dirs_exist_ok=True)
++    repo.git("add", "-A")
++    repo.git("commit", "-q", "--allow-empty", "-m", "base")
++    repo.clear()
+     if "commit" in spec:
+-        copy_tree(source, spec["commit"], repo)
++        copy_tree(source, spec["commit"], repo.path)
+     else:
+-        shutil.copytree(fixture / "head", repo, dirs_exist_ok=True)
++        shutil.copytree(fixture / "head", repo.path, dirs_exist_ok=True)
+     return repo
+ 
+ 
+@@ -126,13 +139,13 @@ def run_skill(repo, log, args):
+            # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
+            "--allowedTools", *ALLOWED]
+     env = os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)}
+-    out = subprocess.run(cmd, cwd=repo, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
++    out = subprocess.run(cmd, cwd=repo.path, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
+     log.write_text(out.stdout + out.stderr)
+     # The skill's own record of the round (§3.0 of SKILL.md): batches, findings, decisions.
+-    record = repo / ".git" / "unsmell"
++    record = repo.path / ".git" / "unsmell"
+     if record.exists():
+         shutil.move(record, log.with_suffix(""))
+-        git(repo, "worktree", "prune")  # editors' worktrees the skill left behind
++        repo.git("worktree", "prune")  # editors' worktrees the skill left behind
+     try:
+         return json.loads(out.stdout).get("total_cost_usd", 0.0)
+     except json.JSONDecodeError:
+@@ -146,19 +159,19 @@ def evaluate(fixture, rounds, args):
+     repo = materialize(fixture, spec, workdir)
+     # Which skill text the rounds ran, so that their changes can be traced to it.
+     (workdir / "skill.sha256").write_text(hashlib.sha256((SKILL_REPO / "skills" / "unsmell" / "SKILL.md").read_bytes()).hexdigest())
+-    trees, deltas, report = [snapshot(repo)], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
+-    git(repo, "update-ref", "refs/rounds/0", git(repo, "commit-tree", trees[0], "-m", "round 0").strip())
++    trees, deltas, report = [repo.snapshot()], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
++    repo.git("update-ref", "refs/rounds/0", repo.git("commit-tree", trees[0], "-m", "round 0").strip())
+     for n in range(1, rounds + 1):
+         cost = run_skill(repo, workdir / f"round-{n}.json", args)
+-        trees.append(snapshot(repo))
+-        delta = Delta.between(repo, trees[-2], trees[-1])
+-        ok = subprocess.run(check, shell=True, cwd=repo, capture_output=True).returncode == 0
++        trees.append(repo.snapshot())
++        delta = repo.diff(trees[-2], trees[-1])
++        ok = subprocess.run(check, shell=True, cwd=repo.path, capture_output=True).returncode == 0
+         report["rounds"].append({
+             "round": n, "cost_usd": cost, "added": len(delta.added), "removed": len(delta.removed),
+             "reversals": delta.reversals(deltas), "rework": delta.rework(deltas), "check": ok, "tree": trees[-1],
+         })
+-        git(repo, "update-ref", f"refs/rounds/{n}",
+-            git(repo, "commit-tree", trees[-1], "-m", f"round {n}").strip())
++        repo.git("update-ref", f"refs/rounds/{n}",
++                 repo.git("commit-tree", trees[-1], "-m", f"round {n}").strip())
+         print(f"{fixture.name} round {n}: +{len(delta.added)} -{len(delta.removed)} "
+               f"reversals={report['rounds'][-1]['reversals']} rework={report['rounds'][-1]['rework']} check={'ok' if ok else 'FAIL'} ${cost:.2f}",
+               flush=True)
+diff --git a/evals/test_run.py b/evals/test_run.py
+index f3c1cd5..552c2b0 100755
+--- a/evals/test_run.py
++++ b/evals/test_run.py
+@@ -3,26 +3,26 @@
+ import tempfile
+ from pathlib import Path
+ 
+-from run import CACHE, Delta, git, snapshot
++from run import CACHE, Repo
+ 
+ 
+ def test_reversal(root):
+-    repo = root / "repo"
+-    repo.mkdir()
+-    git(repo, "init", "-q")
+-    f = repo / "a.py"
++    repo = Repo(root / "repo")
++    repo.path.mkdir()
++    repo.git("init", "-q")
++    f = repo.path / "a.py"
+     f.write_text("x = compute_once()\n")
+-    t0 = snapshot(repo)
++    t0 = repo.snapshot()
+     f.write_text("x = compute_twice()\n")
+-    t1 = snapshot(repo)
++    t1 = repo.snapshot()
+     f.write_text("x = compute_once()\n")
+-    t2 = snapshot(repo)
+-    first, second = Delta.between(repo, t0, t1), Delta.between(repo, t1, t2)
++    t2 = repo.snapshot()
++    first, second = repo.diff(t0, t1), repo.diff(t1, t2)
+     assert first.reversals([]) == 0
+     assert second.reversals([first]) == 1, second
+     assert second.rework([first]) == 1, second
+-    assert Delta.between(repo, t2, snapshot(repo)).empty()
+-    assert git(repo, "status", "--porcelain") == "?? a.py\n", "snapshot must not stage"
++    assert repo.diff(t2, repo.snapshot()).empty()
++    assert repo.git("status", "--porcelain") == "?? a.py\n", "snapshot must not stage"
+ 
+ 
+ if __name__ == "__main__":

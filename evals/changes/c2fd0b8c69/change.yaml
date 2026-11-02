@@ -1,0 +1,47 @@
+id: c2fd0b8c69
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261101-210501
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: unsure
+  by: user
+  date: '2026-11-01'
+findings:
+- id: b1-11
+  at:
+  - internal/proxy/prompter.go:90
+  - internal/proxy/prompter.go:132-137
+  reach:
+  - internal/proxy/prompter.go:60-94
+  - internal/proxy/prompter.go:129-138
+  row: unparsed input
+  claim: The bridge now claims the backend name even when the front bus never gets a SystemPrompter owner,
+    for example in a non-GNOME session or while gnome-shell is still down. In that case every BeginPrompting
+    fails with the front bus's error (a ServiceUnknown-style error) after exportCallback has already exported
+    a callback proxy that nothing unexports (:133, then :137). Before this change, the bridge stayed inactive
+    in that case and the fallback kept the name. No doc states this outcome, and the newPrompterBridge
+    doc assumes gnome-shell is up "by which point".
+  fix: At minimum, the BeginPrompting doc or the type doc says that prompts fail when no front prompter
+    owns the name, and BeginPrompting unexports the callback when forwarding fails. Whether the bridge
+    should hand the name back, or never claim it outside GNOME, is a design question for the user.
+  decision: ASK
+  score: 6
+  reason: This is a plausible behaviour regression that the change introduced, and fixing it needs a design
+    decision. The callback leak on forward failure is older code, but this change now makes it reachable
+    at startup.
+  same: []
+  triage:
+    id: b1-11
+    decision: ASK
+    score: 6
+    reason: partly holds. The callback proxy leaks when forwarding fails, but an unowned front name is
+      D-Bus-activated to gcr-prompter wherever gcr is installed, so prompts do not always fail outside
+      GNOME. The patch unexports on failure and adds a pinning test. Its doc line "Errors when no front
+      prompter owns ..." overstates for the same reason and needs "Errors when the front prompter cannot
+      be reached or rejects the call". The design call (give the name back, or skip outside GNOME) stays
+      open
+    task: t4
+check: ok

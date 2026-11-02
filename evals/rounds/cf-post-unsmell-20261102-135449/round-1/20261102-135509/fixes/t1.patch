@@ -1,0 +1,206 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..4f3704b 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -4,7 +4,7 @@
+ 
+ use alloy::primitives::{Address, B256};
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, Topic};
++use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow, Topic};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -49,9 +49,11 @@ impl SignatureCache for SqliteSignatureCache {
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+-                &entry.signature,
+-                Topic::from(B256::from(entry.topic0)),
+-                entry.abi_json.as_deref(),
++                &EventSignatureRow {
++                    signature: entry.signature.clone(),
++                    topic0: Topic::from(B256::from(entry.topic0)),
++                    abi_json: entry.abi_json.clone(),
++                },
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index e246a16..f0c2ee4 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -19,10 +19,11 @@
+ 
+ use std::sync::{Arc, Mutex};
+ 
++use alloy::primitives::B256;
+ use rusqlite::Connection;
+-use rusqlite::types::{ToSql, ToSqlOutput};
++use rusqlite::types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
+ 
+-use crate::evm::types::{ChainId, FilterHash};
++use crate::evm::types::{ChainId, FilterHash, Topic};
+ 
+ mod erc20_cache;
+ mod event_signature_cache;
+@@ -55,6 +56,21 @@ impl ToSql for FilterHash {
+     }
+ }
+ 
++/// Stores a topic as its 32 raw bytes in a `BLOB` column.
++impl ToSql for Topic {
++    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
++        Ok(ToSqlOutput::from(self.as_slice()))
++    }
++}
++
++/// Reads a topic from a 32-byte `BLOB` column. Errors when the value is not a
++/// blob or has another length.
++impl FromSql for Topic {
++    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
++        <[u8; 32]>::column_result(value).map(|bytes| Self::new(B256::from(bytes)))
++    }
++}
++
+ // ============================================================
+ // Versioning
+ // ============================================================
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..14f806c 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -7,7 +7,8 @@
+ //! `SignatureCache`) to avoid colliding with the
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
++use rusqlite::OptionalExtension;
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+@@ -17,9 +18,10 @@ use crate::evm::types::{ChainId, Topic};
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+     pub signature: String,
+-    /// `topic0` — the keccak256 hash of the signature.
++    /// The keccak256 hash of `signature`.
+     pub topic0: Topic,
+-    /// JSON of the matched ABI event item, when populated.
++    /// JSON of the matched ABI event item. None on rows written before the
++    /// column was added.
+     pub abi_json: Option<String>,
+ }
+ 
+@@ -56,24 +58,18 @@ impl EventSignatureCache {
+             "SELECT signature, topic0, abi_json FROM event_signatures
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+         )?;
+-        let mut rows = stmt.query_map(
++        stmt.query_row(
+             rusqlite::params![chain_id, address.as_slice(), event_name],
+             |row| {
+-                let sig: String = row.get(0)?;
+-                let topic: Vec<u8> = row.get(1)?;
+-                let abi: Option<String> = row.get(2)?;
+-                Ok((sig, topic, abi))
++                Ok(EventSignatureRow {
++                    signature: row.get(0)?,
++                    topic0: row.get(1)?,
++                    abi_json: row.get(2)?,
++                })
+             },
+-        )?;
+-        match rows.next() {
+-            Some(Ok((sig, topic, abi))) if topic.len() == 32 => Ok(Some(EventSignatureRow {
+-                signature: sig,
+-                topic0: Topic::from(B256::from_slice(&topic)),
+-                abi_json: abi,
+-            })),
+-            Some(Err(e)) => Err(e.into()),
+-            _ => Ok(None),
+-        }
++        )
++        .optional()
++        .map_err(CacheError::from)
+     }
+ 
+     pub fn insert_event_signature(
+@@ -81,9 +77,7 @@ impl EventSignatureCache {
+         chain_id: ChainId,
+         address: &Address,
+         event_name: &str,
+-        signature: &str,
+-        topic0: Topic,
+-        abi_json: Option<&str>,
++        row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+         conn.execute(
+@@ -94,9 +88,9 @@ impl EventSignatureCache {
+                 chain_id,
+                 address.as_slice(),
+                 event_name,
+-                signature,
+-                topic0.as_slice(),
+-                abi_json,
++                row.signature,
++                row.topic0,
++                row.abi_json,
+             ],
+         )?;
+         Ok(())
+@@ -109,10 +103,12 @@ impl EventSignatureCache {
+ 
+ #[cfg(test)]
+ mod tests {
++    use alloy::primitives::B256;
++
+     use super::*;
+ 
+     const ADDR: Address = Address::repeat_byte(0x42);
+-    const TOPIC0: B256 = B256::repeat_byte(0xDD);
++    const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
+ 
+     #[test]
+     fn signature_round_trip_with_abi() {
+@@ -122,9 +118,11 @@ mod tests {
+                 ChainId::new(1),
+                 &ADDR,
+                 "Transfer",
+-                "Transfer(address,address,uint256)",
+-                Topic::from(TOPIC0),
+-                Some("{\"type\":\"event\"}"),
++                &EventSignatureRow {
++                    signature: "Transfer(address,address,uint256)".to_owned(),
++                    topic0: TOPIC0,
++                    abi_json: Some("{\"type\":\"event\"}".to_owned()),
++                },
+             )
+             .unwrap();
+         let row = cache
+@@ -132,7 +130,7 @@ mod tests {
+             .unwrap()
+             .unwrap();
+         assert_eq!(row.signature, "Transfer(address,address,uint256)");
+-        assert_eq!(row.topic0, Topic::from(TOPIC0));
++        assert_eq!(row.topic0, TOPIC0);
+         assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
+     }
+ 
+@@ -155,9 +153,11 @@ mod tests {
+                 ChainId::new(1),
+                 &ADDR,
+                 "Approval",
+-                "Approval()",
+-                Topic::from(TOPIC0),
+-                None,
++                &EventSignatureRow {
++                    signature: "Approval()".to_owned(),
++                    topic0: TOPIC0,
++                    abi_json: None,
++                },
+             )
+             .unwrap();
+         let row = cache

@@ -1,0 +1,227 @@
+diff --git a/evals/README.md b/evals/README.md
+index 72c422a..82b5637 100644
+--- a/evals/README.md
++++ b/evals/README.md
+@@ -82,9 +82,11 @@ evals/changes.py label ID bad -f b1-4 -n "says how, not what"
+ evals/changes.py score ~/.cache/unsmell-eval/runs/<run>...     # 5. count by label
+ ```
+ 
+-`next` and `show` rebuild the fixture with the earlier rounds as commits and
+-leave the change unstaged, so `git diff` in the printed directory shows exactly
+-the change in its context. A label from a person always wins over the judge's. A
++`next` and `show ID` rebuild the review repo for the change and print its
++directory. HEAD there is the fixture's base. The index holds the changeset under
++review, the earlier rounds and the changes this one is stacked on. The working
++tree adds the change, so `git diff` shows exactly the change in its context.
++Uncommitted edits in the review repo are discarded. A label from a person always wins over the judge's. A
+ run that brings back a change labelled `bad` is a regression, whatever its
+ convergence; a `good` change on the original code that a run no longer makes is
+ a loss of recall.
+diff --git a/evals/changes.py b/evals/changes.py
+index cbd057d..109d7ca 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -21,7 +21,7 @@ evals/changes/<id>/change.patch beside change.yaml, which holds where it came
+ from, the findings with their decisions, the judge's proposal and the labels. The
+ id hashes the patch's changed lines, so a later run that makes the same change
+ lands in the same directory. evals/rounds/<run>/ keeps the
+-full patch and the report of every round, so that a review worktree can be rebuilt
++full patch and the report of every round, so that a review repo can be rebuilt
+ from the fixture without the run directory.
+ """
+ import argparse
+@@ -45,6 +45,8 @@ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+ ROUNDS = EVALS / "rounds"
+ REVIEW = CACHE / "review"
++# The repo that review_repo builds under REVIEW, where a person reviews the current change.
++REVIEW_REPO = REVIEW / "repo"
+ # The id of the change in the review repo, which show and label use when given none.
+ CURRENT = REVIEW / "current"
+ LABELS = ("good", "bad", "neutral", "unsure")  # unsure: looked at, but cannot judge it
+@@ -75,7 +77,7 @@ def change_id(patch):
+ 
+ @dataclass(frozen=True)
+ class Rounds:
+-    """The stored rounds of one run in evals/rounds/<run>/, which rebuild a review worktree without the run directory."""
++    """The stored rounds of one run in evals/rounds/<run>/, which rebuild a review repo without the run directory."""
+ 
+     run: str
+ 
+@@ -287,20 +289,18 @@ def ancestors(meta):
+     return order
+ 
+ 
+-def worktree(meta, root=None):
+-    """Returns the review repo as the skill saw it, with the change on top: HEAD is the fixture's base,
+-    the index holds the changeset under review (and any earlier rounds), and the working tree adds the change.
++def build_rounds(change, build):
++    """Returns a scratch repo at build with the change's fixture and the rounds before the change's own.
+ 
+-    It is always the same directory, so an editor can keep it open across changes. Each change is
+-    built in a scratch repo and fetched into it, so the review repo is reset, never recreated.
++    The tag base marks the fixture's base. The tag round-0 marks the fixture as the skill first saw it.
++    HEAD is the last round before the change was made. Errors with CalledProcessError when a round
++    does not apply.
+     """
+-    first = meta["seen"][0]
++    first = change["seen"][0]
+     rounds = Rounds(first["run"])
+-    root = root or REVIEW
+-    build = root / "build"
+     if build.exists():
+         shutil.rmtree(build)
+-    built = Fixture.named(meta["fixture"]).materialize(build / "repo")
++    built = Fixture.named(change["fixture"]).materialize(build / "repo")
+     git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+@@ -309,7 +309,14 @@ def worktree(meta, root=None):
+         git(built, "apply", "--binary", str(rounds.patch(n)))
+         git(built, "add", "-A")
+         git(built, "commit", "-q", "-m", f"round {n}")
+-    repo = root / "repo"
++    return built
++
++
++def sync(repo, built):
++    """Makes repo hold built's tree staged on top of the fixture's base, creating repo when missing.
++
++    Uncommitted edits in repo are discarded. Build output there is kept.
++    """
+     if not (repo / ".git").exists():
+         repo.mkdir(parents=True, exist_ok=True)
+         git(repo, "init", "-q")
+@@ -320,12 +327,33 @@ def worktree(meta, root=None):
+     git(repo, "clean", "-q", "-fdx", "-e", "target/", "-e", "node_modules/", "-e", ".venv/")
+     git(repo, "checkout", "-q", "-f", "--detach", "FETCH_HEAD")
+     git(repo, "reset", "-q", "--soft", "base")
+-    shutil.rmtree(build)
+-    for parent in ancestors(meta):  # staged with the changeset, so that git diff shows only what this change adds
++
++
++def stage(change, repo):
++    """Stages the changes this one is stacked on, then applies this change to the working tree.
++
++    Errors with CalledProcessError when a patch does not apply.
++    """
++    for parent in ancestors(change):  # staged with the changeset, so that git diff shows only what this change adds
+         git(repo, "apply", "--index", str(CHANGES / parent / "change.patch"))
+-    patch = CHANGES / meta["id"] / "change.patch"
++    patch = CHANGES / change["id"] / "change.patch"
+     if patch.read_text().strip():
+         git(repo, "apply", "--intent-to-add", str(patch))  # new files show up in git diff too
++
++
++def review_repo(change, root=REVIEW):
++    """Returns a repo under root that shows the change as the skill saw it.
++
++    HEAD is the fixture's base. The index holds the changeset under review, the earlier rounds and
++    the changes this one is stacked on. The working tree adds the change. Uncommitted edits in that
++    repo are discarded. Errors with CalledProcessError when a patch does not apply.
++    """
++    build = root / "build"
++    built = build_rounds(change, build)
++    repo = root / "repo"
++    sync(repo, built)
++    shutil.rmtree(build)
++    stage(change, repo)
+     return repo
+ 
+ 
+@@ -335,45 +363,47 @@ def current():
+     return CURRENT.read_text().strip()
+ 
+ 
+-def show(meta, rebuild=True):
+-    """Prints the change, after putting it in the review repo unless it is already there."""
+-    if rebuild:
+-        worktree(meta)
+-        CURRENT.write_text(meta["id"])
+-    repo = REVIEW / "repo"
+-    first = meta["seen"][0]
+-    print(paint(f"change {meta['id']}", "1") + f": {meta['fixture']} round {first['round']}"
+-          f" (seen {len(meta['seen'])}x)")
+-    if meta.get("after"):
+-        print(f"  stacked on {', '.join(meta['after'])}, staged with the changeset")
+-    for f in meta["findings"]:
++def select(change):
++    """Puts the change in the review repo and makes it the current one."""
++    review_repo(change)
++    CURRENT.write_text(change["id"])
++
++
++def show(change):
++    """Prints the change, its findings and labels, and how to see it in the review repo."""
++    first = change["seen"][0]
++    print(paint(f"change {change['id']}", "1") + f": {change['fixture']} round {first['round']}"
++          f" (seen {len(change['seen'])}x)")
++    if change.get("after"):
++        print(f"  stacked on {', '.join(change['after'])}, staged with the changeset")
++    for f in change["findings"]:
+         t = f["triage"]
+         decision = paint(f"{t['decision']} {t.get('score')}", COLORS.get(t["decision"]))
+         print(f"\n  {paint(f['id'], '1')}  {decision}  {f.get('row', '')}  {paint(', '.join(f.get('at', [])), '2')}"
+               f"\n    {paint('claim:', '2')}  {f.get('claim', '').strip()}"
+               f"\n    {paint('fix:', '2')}    {f.get('fix', '').strip()}"
+               f"\n    {paint('triage:', '2')} {t.get('reason', '').strip()}")
+-    if not (CHANGES / meta["id"] / "change.patch").read_text().strip():
++    if not (CHANGES / change["id"] / "change.patch").read_text().strip():
+         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
+-    if match := prior(meta):
++    if match := prior(change):
+         other, share = match
+         newest = [l for l in other["labels"] if l["by"].startswith("user")][-1]
+         print(f"\n  closest labelled change from an earlier run: {other['id']}, {share:.0%} of words shared,"
+               f" labelled {paint(newest['label'], COLORS[newest['label']])}"
+               f"{': ' + newest['note'] if newest.get('note') else ''}")
+-    if meta["judge"]:
+-        j = meta["judge"]
++    if change["judge"]:
++        j = change["judge"]
+         print(f"judge: {paint(j['label'], COLORS.get(j['label']))} ({j['confidence']:.2f}): {j['reason']}")
+-    for l in meta["labels"]:
++    for l in change["labels"]:
+         about = f" on {l['finding']}" if l.get("finding") else ""
+         print(f"label: {paint(l['label'], COLORS[l['label']])}{about} by {l['by']}: {l.get('note', '')}")
+     color = "--color=always" if TTY else "--color=never"
+-    print("\n" + git(repo, "diff", color, "--stat").rstrip())
+-    print(f"\nStaged, the changeset under review (git diff --cached):\n{git(repo, 'diff', color, '--cached', '--stat').rstrip()}")
+-    print(paint(f"\n  cd {repo} && git diff        # the change", "2"))
++    print("\n" + git(REVIEW_REPO, "diff", color, "--stat").rstrip())
++    print(f"\nStaged, the changeset under review (git diff --cached):\n{git(REVIEW_REPO, 'diff', color, '--cached', '--stat').rstrip()}")
++    print(paint(f"\n  cd {REVIEW_REPO} && git diff        # the change", "2"))
+     print(paint("  git diff --cached            # the changeset under review, which the findings call \"the change\"", "2"))
+     print(paint(f"  report: {Rounds(first['run']).report(first['round'])}", "2"))
+-    print(paint(f"  labels: {CHANGES / meta['id'] / 'change.yaml'}", "2"))
++    print(paint(f"  labels: {CHANGES / change['id'] / 'change.yaml'}", "2"))
+     print("  evals/changes.py label good|bad|neutral|unsure [-f FINDING] -n NOTE")
+ 
+ 
+@@ -389,7 +419,7 @@ def check(ids):
+         if ids and meta["id"] not in ids or not ids and "check" in meta:
+             continue
+         try:
+-            repo = worktree(meta, root)
++            repo = review_repo(meta, root)
+         except subprocess.CalledProcessError as e:
+             meta["check"] = "no-apply"
+             dump(CHANGES / meta["id"] / "change.yaml", meta)
+@@ -470,10 +500,15 @@ def main():
+         if not todo:
+             sys.exit("every change has a user label")
+         # The least certain judgements first: they are where a label teaches the judge most.
+-        show(min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1))
++        change = min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1)
++        select(change)
++        show(change)
+         print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
+     elif a.cmd == "show":
+-        show(load(CHANGES / (a.id or current()) / "change.yaml"), rebuild=bool(a.id))
++        change = load(CHANGES / (a.id or current()) / "change.yaml")
++        if a.id:
++            select(change)
++        show(change)
+     elif a.cmd == "label":
+         if len(a.args) > 2 or a.args[-1] not in LABELS:
+             sys.exit(f"usage: changes.py label [ID] LABEL, with LABEL one of {', '.join(LABELS)}")

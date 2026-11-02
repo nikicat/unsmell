@@ -1,0 +1,531 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..7d9ef43 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -23,11 +23,18 @@ const (
+ 	notifyInterface = "org.freedesktop.Notifications"
+ )
+ 
++// The text and icon of one desktop notification.
++type Message struct {
++	Summary string
++	Body    string // markup that the notification server may render
++	Icon    string // freedesktop icon name, or empty for none
++}
++
+ // Notifier defines the interface for sending desktop notifications.
+ type Notifier interface {
+ 	// Notify sends a notification and returns its ID.
+ 	// The actions parameter takes alternating (id, label) pairs per the FreeDesktop spec.
+-	Notify(summary, body, icon string, actions []string) (uint32, error)
++	Notify(msg Message, actions []string) (uint32, error)
+ 	// Close closes a notification by ID.
+ 	Close(id uint32) error
+ }
+@@ -158,34 +165,34 @@ func (n *DBusNotifier) processSignals(ch <-chan *dbus.Signal) {
+ 
+ // Notify sends a desktop notification with optional action buttons.
+ // If the D-Bus connection is dead, it reconnects and retries once.
+-func (n *DBusNotifier) Notify(summary, body, icon string, actions []string) (uint32, error) {
++func (n *DBusNotifier) Notify(msg Message, actions []string) (uint32, error) {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+ 
+-	id, err := n.doNotify(summary, body, icon, actions, 2) // urgency: critical
++	id, err := n.doNotify(msg, actions, 2) // urgency: critical
+ 	if err != nil && errors.Is(err, dbus.ErrClosed) {
+ 		if reconnErr := n.reconnect(); reconnErr != nil {
+ 			return 0, fmt.Errorf("notify call: %w (reconnect failed: %v)", err, reconnErr)
+ 		}
+-		id, err = n.doNotify(summary, body, icon, actions, 2)
++		id, err = n.doNotify(msg, actions, 2)
+ 	}
+ 	return id, err
+ }
+ 
+-func (n *DBusNotifier) doNotify(summary, body, icon string, actions []string, urgency byte) (uint32, error) {
+-	return n.doNotifyFull(summary, body, icon, actions, urgency, -1)
++func (n *DBusNotifier) doNotify(msg Message, actions []string, urgency byte) (uint32, error) {
++	return n.doNotifyFull(msg, actions, urgency, -1)
+ }
+ 
+-func (n *DBusNotifier) doNotifyFull(summary, body, icon string, actions []string, urgency byte, expireTimeout int32) (uint32, error) {
++func (n *DBusNotifier) doNotifyFull(msg Message, actions []string, urgency byte, expireTimeout int32) (uint32, error) {
+ 	obj := n.conn.Object(notifyDest, notifyPath)
+ 	call := obj.Call(
+ 		notifyInterface+".Notify",
+ 		0,
+ 		"secrets-dispatcher", // app_name
+ 		uint32(0),            // replaces_id (0 = new notification)
+-		icon,                 // app_icon
+-		summary,              // summary
+-		body,                 // body
++		msg.Icon,             // app_icon
++		msg.Summary,          // summary
++		msg.Body,             // body
+ 		actions,              // actions (alternating id, label pairs)
+ 		map[string]dbus.Variant{
+ 			"urgency": dbus.MakeVariant(urgency),
+@@ -205,16 +212,16 @@ func (n *DBusNotifier) doNotifyFull(summary, body, icon string, actions []string
+ 
+ // NotifyPersistent sends a critical notification that never auto-expires.
+ // Dismiss it with Close (CloseNotification).
+-func (n *DBusNotifier) NotifyPersistent(summary, body, icon string) (uint32, error) {
++func (n *DBusNotifier) NotifyPersistent(msg Message) (uint32, error) {
+ 	n.mu.Lock()
+ 	defer n.mu.Unlock()
+ 
+-	id, err := n.doNotifyFull(summary, body, icon, nil, 2, 0) // critical, never expire
++	id, err := n.doNotifyFull(msg, nil, 2, 0) // critical, never expire
+ 	if err != nil && errors.Is(err, dbus.ErrClosed) {
+ 		if reconnErr := n.reconnect(); reconnErr != nil {
+ 			return 0, fmt.Errorf("notify call: %w (reconnect failed: %v)", err, reconnErr)
+ 		}
+-		id, err = n.doNotifyFull(summary, body, icon, nil, 2, 0)
++		id, err = n.doNotifyFull(msg, nil, 2, 0)
+ 	}
+ 	return id, err
+ }
+@@ -464,7 +471,7 @@ func (h *Handler) handleCreated(req *approval.Request) {
+ 
+ func (h *Handler) sendNotification(req *approval.Request) {
+ 	summary, icon := h.notificationMeta(req)
+-	body := h.formatBody(req)
++	msg := Message{Summary: summary, Body: h.formatBody(req), Icon: icon}
+ 	durLabel := formatDurationShort(h.autoApproveDuration)
+ 	actions := []string{
+ 		"default", "",
+@@ -473,7 +480,7 @@ func (h *Handler) sendNotification(req *approval.Request) {
+ 		"deny", "Deny",
+ 	}
+ 
+-	id, err := h.notifier.Notify(summary, body, icon, actions)
++	id, err := h.notifier.Notify(msg, actions)
+ 	if err != nil {
+ 		slog.Error("failed to send notification", "error", err, "request_id", req.ID)
+ 		return
+@@ -528,11 +535,14 @@ func (h *Handler) handleCancelled(req *approval.Request) {
+ 	if invoker == "" {
+ 		invoker = "client"
+ 	}
+-	summary := fmt.Sprintf("%s timed out", invoker)
+-	body := fmt.Sprintf("Auto-approve similar requests for %s?", formatDurationShort(h.autoApproveDuration))
++	msg := Message{
++		Summary: fmt.Sprintf("%s timed out", invoker),
++		Body:    fmt.Sprintf("Auto-approve similar requests for %s?", formatDurationShort(h.autoApproveDuration)),
++		Icon:    "dialog-question",
++	}
+ 	actions := []string{"auto_approve", "Auto-approve", "dismiss", "Dismiss"}
+ 
+-	newID, err := h.notifier.Notify(summary, body, "dialog-question", actions)
++	newID, err := h.notifier.Notify(msg, actions)
+ 	if err != nil {
+ 		slog.Error("failed to send auto-approve notification", "error", err, "request_id", req.ID)
+ 		return
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..46b068d 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -28,25 +28,23 @@ type mockNotifier struct {
+ }
+ 
+ type notifyCall struct {
+-	summary string
+-	body    string
+-	icon    string
++	Message
+ 	actions []string
+ }
+ 
+-func (m *mockNotifier) Notify(summary, body, icon string, actions []string) (uint32, error) {
++func (m *mockNotifier) Notify(msg Message, actions []string) (uint32, error) {
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
+ 	if m.notifyErr != nil {
+ 		return 0, m.notifyErr
+ 	}
+ 	m.nextID++
+-	m.notified = append(m.notified, notifyCall{summary, body, icon, actions})
++	m.notified = append(m.notified, notifyCall{msg, actions})
+ 	return m.nextID, nil
+ }
+ 
+-func (m *mockNotifier) NotifyPersistent(summary, body, icon string) (uint32, error) {
+-	return m.Notify(summary, body, icon, nil)
++func (m *mockNotifier) NotifyPersistent(msg Message) (uint32, error) {
++	return m.Notify(msg, nil)
+ }
+ 
+ func (m *mockNotifier) Close(id uint32) error {
+@@ -168,14 +166,14 @@ func TestHandler_OnEvent_RequestCreated(t *testing.T) {
+ 	}
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Secret requested" {
+-		t.Errorf("unexpected summary: %s", call.summary)
++	if call.Summary != "Secret requested" {
++		t.Errorf("unexpected summary: %s", call.Summary)
+ 	}
+-	if !contains(call.body, "<b>ssh-agent.service</b>@user@remote[1234]") {
+-		t.Errorf("body should contain proc@client[pid] header: %s", call.body)
++	if !contains(call.Body, "<b>ssh-agent.service</b>@user@remote[1234]") {
++		t.Errorf("body should contain proc@client[pid] header: %s", call.Body)
+ 	}
+-	if !contains(call.body, "<i>GitHub Token</i>") {
+-		t.Errorf("body should contain italic secret label: %s", call.body)
++	if !contains(call.Body, "<i>GitHub Token</i>") {
++		t.Errorf("body should contain italic secret label: %s", call.Body)
+ 	}
+ }
+ 
+@@ -293,11 +291,11 @@ func TestHandler_FormatBody_Search(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Secrets searched" {
+-		t.Errorf("expected summary 'Secrets searched', got %q", call.summary)
++	if call.Summary != "Secrets searched" {
++		t.Errorf("expected summary 'Secrets searched', got %q", call.Summary)
+ 	}
+-	if !contains(call.body, "<i>service=github</i>") {
+-		t.Errorf("body should contain italic search attributes: %s", call.body)
++	if !contains(call.Body, "<i>service=github</i>") {
++		t.Errorf("body should contain italic search attributes: %s", call.Body)
+ 	}
+ }
+ 
+@@ -318,8 +316,8 @@ func TestHandler_FormatBody_MultipleItems(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<i>3 items</i>") {
+-		t.Errorf("body should show italic item count: %s", call.body)
++	if !contains(call.Body, "<i>3 items</i>") {
++		t.Errorf("body should show italic item count: %s", call.Body)
+ 	}
+ }
+ 
+@@ -340,8 +338,8 @@ func TestHandler_FormatBody_PIDOnly(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>user@host</b>[5678]") {
+-		t.Errorf("body should show client[pid]: %s", call.body)
++	if !contains(call.Body, "<b>user@host</b>[5678]") {
++		t.Errorf("body should show client[pid]: %s", call.Body)
+ 	}
+ }
+ 
+@@ -372,20 +370,20 @@ func TestHandler_OnEvent_GPGSignRequest(t *testing.T) {
+ 	}
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Sign commit" {
+-		t.Errorf("expected summary 'Sign commit', got %q", call.summary)
++	if call.Summary != "Sign commit" {
++		t.Errorf("expected summary 'Sign commit', got %q", call.Summary)
+ 	}
+-	if call.icon != "emblem-important" {
+-		t.Errorf("expected icon 'emblem-important', got %q", call.icon)
++	if call.Icon != "emblem-important" {
++		t.Errorf("expected icon 'emblem-important', got %q", call.Icon)
+ 	}
+-	if !contains(call.body, "<b>my-project</b>: ") {
+-		t.Errorf("body should contain bold repo: %s", call.body)
++	if !contains(call.Body, "<b>my-project</b>: ") {
++		t.Errorf("body should contain bold repo: %s", call.Body)
+ 	}
+-	if !contains(call.body, "<i>Add feature</i>") {
+-		t.Errorf("body should contain italic commit subject: %s", call.body)
++	if !contains(call.Body, "<i>Add feature</i>") {
++		t.Errorf("body should contain italic commit subject: %s", call.Body)
+ 	}
+-	if contains(call.body, "Some body text") {
+-		t.Errorf("body should NOT contain commit body text: %s", call.body)
++	if contains(call.Body, "Some body text") {
++		t.Errorf("body should NOT contain commit body text: %s", call.Body)
+ 	}
+ }
+ 
+@@ -408,11 +406,11 @@ func TestHandler_FormatBody_GPGSign_PIDOnly(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>my-project</b>: ") {
+-		t.Errorf("body should contain bold repo without process name: %s", call.body)
++	if !contains(call.Body, "<b>my-project</b>: ") {
++		t.Errorf("body should contain bold repo without process name: %s", call.Body)
+ 	}
+-	if !contains(call.body, "<i>Fix bug</i>") {
+-		t.Errorf("body should contain italic commit subject: %s", call.body)
++	if !contains(call.Body, "<i>Fix bug</i>") {
++		t.Errorf("body should contain italic commit subject: %s", call.Body)
+ 	}
+ }
+ 
+@@ -440,7 +438,7 @@ func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+ 	}
+ 
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+-	body := mock.lastNotify().body
++	body := mock.lastNotify().Body
+ 
+ 	// No raw attacker-supplied tags survive.
+ 	assert.NotContains(t, body, "<b>Verified", "injected bold reassurance must be escaped")
+@@ -479,14 +477,14 @@ func TestHandler_OnEvent_DeleteRequest(t *testing.T) {
+ 	}
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Deletion requested" {
+-		t.Errorf("expected summary 'Deletion requested', got %q", call.summary)
++	if call.Summary != "Deletion requested" {
++		t.Errorf("expected summary 'Deletion requested', got %q", call.Summary)
+ 	}
+-	if call.icon != "dialog-warning" {
+-		t.Errorf("expected icon 'dialog-warning', got %q", call.icon)
++	if call.Icon != "dialog-warning" {
++		t.Errorf("expected icon 'dialog-warning', got %q", call.Icon)
+ 	}
+-	if !contains(call.body, "GitHub Token") {
+-		t.Errorf("body should contain item label: %s", call.body)
++	if !contains(call.Body, "GitHub Token") {
++		t.Errorf("body should contain item label: %s", call.Body)
+ 	}
+ }
+ 
+@@ -511,11 +509,11 @@ func TestHandler_FormatBody_DeleteWithProcessChain(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>My Secret</b>") {
+-		t.Errorf("body should contain bold item label: %s", call.body)
++	if !contains(call.Body, "<b>My Secret</b>") {
++		t.Errorf("body should contain bold item label: %s", call.Body)
+ 	}
+-	if !contains(call.body, "secret-tool") {
+-		t.Errorf("body should contain process chain: %s", call.body)
++	if !contains(call.Body, "secret-tool") {
++		t.Errorf("body should contain process chain: %s", call.Body)
+ 	}
+ }
+ 
+@@ -535,14 +533,14 @@ func TestHandler_OnEvent_WriteRequest(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Secret write requested" {
+-		t.Errorf("expected summary 'Secret write requested', got %q", call.summary)
++	if call.Summary != "Secret write requested" {
++		t.Errorf("expected summary 'Secret write requested', got %q", call.Summary)
+ 	}
+-	if call.icon != "dialog-warning" {
+-		t.Errorf("expected icon 'dialog-warning', got %q", call.icon)
++	if call.Icon != "dialog-warning" {
++		t.Errorf("expected icon 'dialog-warning', got %q", call.Icon)
+ 	}
+-	if !contains(call.body, "New Secret") {
+-		t.Errorf("body should contain item label: %s", call.body)
++	if !contains(call.Body, "New Secret") {
++		t.Errorf("body should contain item label: %s", call.Body)
+ 	}
+ }
+ 
+@@ -563,11 +561,11 @@ func TestHandler_OnEvent_GetSecretIcon(t *testing.T) {
+ 	}
+ 
+ 	call := mock.lastNotify()
+-	if call.summary != "Secret requested" {
+-		t.Errorf("expected summary 'Secret requested', got %q", call.summary)
++	if call.Summary != "Secret requested" {
++		t.Errorf("expected summary 'Secret requested', got %q", call.Summary)
+ 	}
+-	if call.icon != "dialog-password" {
+-		t.Errorf("expected icon 'dialog-password', got %q", call.icon)
++	if call.Icon != "dialog-password" {
++		t.Errorf("expected icon 'dialog-password', got %q", call.Icon)
+ 	}
+ }
+ 
+@@ -997,7 +995,7 @@ func TestDBusNotifier_NotifyReconnectsOnClosedConn(t *testing.T) {
+ 
+ 	// Notify should reconnect. It will fail because there's no notification
+ 	// daemon on the test bus, but it must NOT fail with ErrClosed.
+-	_, err := n.Notify("test", "after reconnect", "", nil)
++	_, err := n.Notify(Message{Summary: "test", Body: "after reconnect"}, nil)
+ 	if errors.Is(err, dbus.ErrClosed) {
+ 		t.Errorf("Notify should have reconnected, but got ErrClosed: %v", err)
+ 	}
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 9623e37..38fecf2 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -11,7 +11,7 @@ import (
+ 
+ // persistentNotifier sends persistent notifications and can dismiss them.
+ type persistentNotifier interface {
+-	NotifyPersistent(summary, body, icon string) (uint32, error)
++	NotifyPersistent(msg Message) (uint32, error)
+ 	Close(id uint32) error
+ }
+ 
+@@ -35,10 +35,11 @@ func newSlowUpstreamNotifier(notifier persistentNotifier) *SlowUpstreamNotifier
+ // NotifySlowUpstream shows a notification with the secret label(s) and
+ // optional process chain, then returns a function that dismisses it.
+ func (s *SlowUpstreamNotifier) NotifySlowUpstream(ctx proxy.UpstreamCallContext) func() {
+-	summary := slowUpstreamSummary(ctx.RequestType)
+-	body := formatSlowUpstreamBody(ctx)
+-
+-	id, err := s.notifier.NotifyPersistent(summary, body, "dialog-password")
++	id, err := s.notifier.NotifyPersistent(Message{
++		Summary: slowUpstreamSummary(ctx.RequestType),
++		Body:    formatSlowUpstreamBody(ctx),
++		Icon:    "dialog-password",
++	})
+ 	if err != nil {
+ 		slog.Debug("failed to send slow upstream notification", "error", err)
+ 		return func() {}
+diff --git a/internal/notification/slow_upstream_test.go b/internal/notification/slow_upstream_test.go
+index 0a58570..1c501b7 100644
+--- a/internal/notification/slow_upstream_test.go
++++ b/internal/notification/slow_upstream_test.go
+@@ -21,14 +21,14 @@ func TestSlowUpstreamNotifier_SingleItem(t *testing.T) {
+ 		t.Fatalf("expected 1 notify call, got %d", len(mock.notified))
+ 	}
+ 	call := mock.notified[0]
+-	if call.summary != "Waiting for keyring unlock" {
+-		t.Errorf("unexpected summary: %q", call.summary)
++	if call.Summary != "Waiting for keyring unlock" {
++		t.Errorf("unexpected summary: %q", call.Summary)
+ 	}
+-	if call.body != "my-secret" {
+-		t.Errorf("unexpected body: %q", call.body)
++	if call.Body != "my-secret" {
++		t.Errorf("unexpected body: %q", call.Body)
+ 	}
+-	if call.icon != "dialog-password" {
+-		t.Errorf("unexpected icon: %q", call.icon)
++	if call.Icon != "dialog-password" {
++		t.Errorf("unexpected icon: %q", call.Icon)
+ 	}
+ 	if call.actions != nil {
+ 		t.Errorf("expected nil actions (informational), got %v", call.actions)
+@@ -64,8 +64,8 @@ func TestSlowUpstreamNotifier_MultipleItems(t *testing.T) {
+ 	if len(mock.notified) != 1 {
+ 		t.Fatalf("expected 1 notify call, got %d", len(mock.notified))
+ 	}
+-	if mock.notified[0].body != "secret-a, secret-b, secret-c (3 items)" {
+-		t.Errorf("unexpected body: %q", mock.notified[0].body)
++	if mock.notified[0].Body != "secret-a, secret-b, secret-c (3 items)" {
++		t.Errorf("unexpected body: %q", mock.notified[0].Body)
+ 	}
+ }
+ 
+@@ -81,8 +81,8 @@ func TestSlowUpstreamNotifier_EmptyItems(t *testing.T) {
+ 	if len(mock.notified) != 1 {
+ 		t.Fatalf("expected 1 notify call, got %d", len(mock.notified))
+ 	}
+-	if mock.notified[0].body != "" {
+-		t.Errorf("expected empty body for nil items, got %q", mock.notified[0].body)
++	if mock.notified[0].Body != "" {
++		t.Errorf("expected empty body for nil items, got %q", mock.notified[0].Body)
+ 	}
+ }
+ 
+@@ -99,8 +99,8 @@ func TestSlowUpstreamNotifier_GPGSignSummary(t *testing.T) {
+ 
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+-	if mock.notified[0].summary != "Signing commit" {
+-		t.Errorf("expected summary 'Signing commit', got %q", mock.notified[0].summary)
++	if mock.notified[0].Summary != "Signing commit" {
++		t.Errorf("expected summary 'Signing commit', got %q", mock.notified[0].Summary)
+ 	}
+ }
+ 
+@@ -117,8 +117,8 @@ func TestSlowUpstreamNotifier_SSHSignSummary(t *testing.T) {
+ 
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+-	if mock.notified[0].summary != "SSH key signing" {
+-		t.Errorf("expected summary 'SSH key signing', got %q", mock.notified[0].summary)
++	if mock.notified[0].Summary != "SSH key signing" {
++		t.Errorf("expected summary 'SSH key signing', got %q", mock.notified[0].Summary)
+ 	}
+ }
+ 
+@@ -135,8 +135,8 @@ func TestSlowUpstreamNotifier_SearchSummary(t *testing.T) {
+ 
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+-	if mock.notified[0].summary != "Searching keyring" {
+-		t.Errorf("expected summary 'Searching keyring', got %q", mock.notified[0].summary)
++	if mock.notified[0].Summary != "Searching keyring" {
++		t.Errorf("expected summary 'Searching keyring', got %q", mock.notified[0].Summary)
+ 	}
+ }
+ 
+@@ -156,8 +156,8 @@ func TestSlowUpstreamNotifier_PathFallback(t *testing.T) {
+ 	if len(mock.notified) != 1 {
+ 		t.Fatalf("expected 1 notify call, got %d", len(mock.notified))
+ 	}
+-	if mock.notified[0].body != "/org/freedesktop/secrets/collection/Login" {
+-		t.Errorf("expected Path fallback in body, got %q", mock.notified[0].body)
++	if mock.notified[0].Body != "/org/freedesktop/secrets/collection/Login" {
++		t.Errorf("expected Path fallback in body, got %q", mock.notified[0].Body)
+ 	}
+ }
+ 
+@@ -177,8 +177,8 @@ func TestSlowUpstreamNotifier_PathFallbackMultiple(t *testing.T) {
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+ 	expected := "Login, /org/freedesktop/secrets/collection/Other (2 items)"
+-	if mock.notified[0].body != expected {
+-		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].body, expected)
++	if mock.notified[0].Body != expected {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].Body, expected)
+ 	}
+ }
+ 
+@@ -206,8 +206,8 @@ func TestSlowUpstreamNotifier_WithProcessChain(t *testing.T) {
+ 		t.Fatalf("expected 1 notify call, got %d", len(mock.notified))
+ 	}
+ 	expected := "my-password\ngit \u2190 zsh \u2190 claude"
+-	if mock.notified[0].body != expected {
+-		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].body, expected)
++	if mock.notified[0].Body != expected {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].Body, expected)
+ 	}
+ }
+ 
+@@ -232,8 +232,8 @@ func TestSlowUpstreamNotifier_GPGWithProcessChain(t *testing.T) {
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+ 	expected := "my-repo: fix bug\ngit \u2190 zsh"
+-	if mock.notified[0].body != expected {
+-		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].body, expected)
++	if mock.notified[0].Body != expected {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", mock.notified[0].Body, expected)
+ 	}
+ }
+ 
+@@ -250,8 +250,8 @@ func TestSlowUpstreamNotifier_UnlockSummary(t *testing.T) {
+ 
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+-	if mock.notified[0].summary != "Unlocking keyring" {
+-		t.Errorf("expected summary 'Unlocking keyring', got %q", mock.notified[0].summary)
++	if mock.notified[0].Summary != "Unlocking keyring" {
++		t.Errorf("expected summary 'Unlocking keyring', got %q", mock.notified[0].Summary)
+ 	}
+ }
+ 
+@@ -272,7 +272,7 @@ func TestSlowUpstreamNotifier_ProcessChainOnly(t *testing.T) {
+ 
+ 	mock.mu.Lock()
+ 	defer mock.mu.Unlock()
+-	if mock.notified[0].body != "secret-tool" {
+-		t.Errorf("unexpected body: %q", mock.notified[0].body)
++	if mock.notified[0].Body != "secret-tool" {
++		t.Errorf("unexpected body: %q", mock.notified[0].Body)
+ 	}
+ }

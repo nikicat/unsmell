@@ -1,0 +1,297 @@
+id: 972106f9d4
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t9
+judge: null
+labels: []
+findings:
+- id: b2-2
+  at:
+  - evals/changes.py:173
+  - evals/changes.py:314
+  - evals/changes.py:370
+  - evals/changes.py:409
+  - evals/changes.py:424
+  reach:
+  - evals/changes.py:173
+  - evals/changes.py:314
+  - evals/changes.py:370
+  - evals/changes.py:409
+  - evals/changes.py:424
+  - evals/changes.py:441-443
+  row: split protocol
+  claim: The author kind 'user' is written as the --by default at 409 and read as l['by'].startswith('user')
+    at 173, 314, 370 and 424; a writer and four readers must spell it alike.
+  fix: A Label dataclass (label, by, finding, note, date) with a by_user property, and Change.user_labels;
+    the four readers use it and the default comes from one constant.
+  decision: FIX
+  score: 7
+  reason: 'split protocol tell met in full: one writer, four readers'
+  same:
+  - b2-1
+  triage:
+    id: b2-2
+    decision: FIX
+    score: 7
+    reason: 'split protocol tell met in full: one writer, four readers'
+    task: t9
+    after: &id001
+    - t1
+    - t6
+    - t7
+    - t8
+- id: b2-3
+  at:
+  - evals/changes.py:281
+  - evals/changes.py:310
+  - evals/changes.py:425
+  reach:
+  - evals/changes.py:128-129
+  - evals/changes.py:281
+  - evals/changes.py:310
+  - evals/changes.py:424-425
+  row: repeated derivation
+  claim: Whether a change has a patch is derived three times as (CHANGES / id / 'change.patch').read_text().strip(),
+    and once more as patch.strip() in extract.
+  fix: Change.has_patch (property), used by worktree, show and next.
+  decision: FIX
+  score: 6
+  reason: a derivation written three times
+  same:
+  - b2-1
+  triage:
+    id: b2-3
+    decision: FIX
+    score: 6
+    reason: a derivation written three times
+    task: t9
+    after: *id001
+- id: b2-4
+  at:
+  - evals/changes.py:192
+  - evals/changes.py:200-201
+  - evals/changes.py:229
+  - evals/changes.py:372
+  - evals/changes.py:387
+  reach:
+  - evals/changes.py:192
+  - evals/changes.py:200-201
+  - evals/changes.py:228-230
+  - evals/changes.py:372
+  - evals/changes.py:387-388
+  row: repeated derivation
+  claim: The newest label (labels[-1]['label']) is derived at 192, 200-201 and 387, and the set of a change's
+    decisions (sorted({f['triage']['decision'] ...}) joined by '/') at 229 and 372.
+  fix: Change.newest_label and Change.decisions, used everywhere.
+  decision: FIX
+  score: 6
+  reason: two derivations written twice and three times
+  same:
+  - b2-1
+  triage:
+    id: b2-4
+    decision: FIX
+    score: 6
+    reason: two derivations written twice and three times
+    task: t9
+    after: *id001
+- id: b2-18
+  at:
+  - evals/changes.py:50-53
+  - evals/changes.py:194-196
+  - evals/changes.py:205-206
+  - evals/changes.py:331
+  - evals/changes.py:405-406
+  - evals/changes.py:435
+  reach:
+  - evals/changes.py:50-54
+  - evals/changes.py:194-206
+  - evals/changes.py:299-331
+  - evals/changes.py:405-406
+  - evals/changes.py:434-435
+  row: split protocol
+  claim: The label kinds are spelled in LABELS, again as COLORS keys, in the judge prompt (good, bad,
+    neutral, with no unsure), in show's hint at 331 and in the label usage strings. COLORS also spells
+    SKILL.md's decision kinds. The judge schema allows 'unsure' while the prompt offers three labels.
+  fix: A Label StrEnum with a color property, and a Decision StrEnum with its color; argparse choices,
+    the schema, the prompt and the hint are built from Label. The schema and prompt agree on which labels
+    the judge may give.
+  decision: FIX
+  score: 6
+  reason: a literal set spelled in five places
+  same:
+  - b2-30
+  triage:
+    id: b2-18
+    decision: FIX
+    score: 6
+    reason: a literal set spelled in five places
+    task: t9
+    after: *id001
+- id: b2-21
+  at:
+  - evals/changes.py:343-344
+  - evals/changes.py:348
+  - evals/changes.py:356
+  - evals/changes.py:378
+  - evals/changes.py:193
+  reach:
+  - evals/changes.py:193
+  - evals/changes.py:334-363
+  - evals/changes.py:378
+  row: computing loop with effects
+  claim: check's loop picks the changes to check (given ids, else those without a check) with an inline
+    condition and then builds, runs and writes in the same body; judge picks its to-do changes with the
+    same rule at 193. The status is the strings 'ok', 'fail' and 'no-apply', written at 348 and 356 and
+    read at 378.
+  fix: A pending(changes, ids, done) selection used by both; check loops over its result. A CheckStatus
+    StrEnum for the status.
+  decision: FIX
+  score: 5
+  reason: a selection repeated in two functions and mixed with effects
+  same: []
+  triage:
+    id: b2-21
+    decision: FIX
+    score: 5
+    reason: a selection repeated in two functions and mixed with effects
+    task: t9
+    after: *id001
+- id: b2-22
+  at:
+  - evals/changes.py:335-338
+  reach:
+  - evals/changes.py:335-338
+  row: wrong-layer doc
+  claim: 'check''s doc gives mechanism (''outside the review repo'', ''sharing one Rust target directory'')
+    and the caller''s reason (patches-only runs merge nothing), and leaves out what a caller needs: no
+    ids means every change not yet checked, and a failure leaves check.log.'
+  fix: '"Runs each fixture''s check on the changes in ids, or on every change not yet checked, and records
+    ok, fail or no-apply in change.yaml. A failure leaves its output in check.log."'
+  decision: FIX
+  score: 5
+  reason: doc leaves out an outcome and leaks mechanism
+  same:
+  - b2-21
+  triage:
+    id: b2-22
+    decision: FIX
+    score: 5
+    reason: doc leaves out an outcome and leaks mechanism
+    task: t9
+    after: *id001
+- id: b2-24
+  at:
+  - evals/changes.py:233-240
+  reach:
+  - evals/changes.py:233-240
+  row: inline generic machinery
+  claim: ancestors hand-rolls a dependency traversal with a list as its visited set (O(n²) membership)
+    and no cycle guard.
+  fix: graphlib.TopologicalSorter over the after-links, or a recursion that dedups with dict.fromkeys.
+  decision: FIX
+  score: 5
+  reason: the traversal row of the table
+  same: []
+  triage:
+    id: b2-24
+    decision: FIX
+    score: 5
+    reason: the traversal row of the table
+    task: t9
+    after: *id001
+- id: b2-25
+  at:
+  - evals/changes.py:384-389
+  reach:
+  - evals/changes.py:381-390
+  row: inline generic machinery
+  claim: score counts labels by hand with counts.get(label, 0) + 1.
+  fix: collections.Counter over the changes of the run, with the label choice named (Change.score_label).
+  decision: FIX
+  score: 5
+  reason: a hand-built counter
+  same: []
+  triage:
+    id: b2-25
+    decision: FIX
+    score: 5
+    reason: a hand-built counter
+    task: t9
+    after: *id001
+- id: b2-26
+  at:
+  - evals/changes.py:413-447
+  reach:
+  - evals/changes.py:393-447
+  row: concept mixing
+  claim: main dispatches on a.cmd with an if-chain, and the bodies of next and label are written inline
+    (with their selection, validation and writes), while the other commands are functions. label parses
+    '[ID] LABEL' by hand and writes the result back onto the argparse namespace (a.id, a.label).
+  fix: next_change() and add_label(id, label, finding, note, by) functions; dispatch through set_defaults(func=...)
+    or match; label's argument split happens in one parse function that returns (id, Label).
+  decision: FIX
+  score: 6
+  reason: inline command bodies beside named ones, and unparsed argv
+  same:
+  - b2-18
+  - b2-30
+  triage:
+    id: b2-26
+    decision: FIX
+    score: 6
+    reason: inline command bodies beside named ones, and unparsed argv
+    task: t9
+    after: *id001
+- id: b2-28
+  at:
+  - evals/changes.py:367
+  reach:
+  - evals/changes.py:367
+  row: interface read back
+  claim: 'list_changes'' doc lists the printed columns and already misses one: the check status at 378.'
+  fix: '"Prints one line per change, ordered by fixture, round and task."'
+  decision: FIX
+  score: 5
+  reason: the doc says less than the code and lists the output's fields
+  same: []
+  triage:
+    id: b2-28
+    decision: FIX
+    score: 5
+    reason: the doc says less than the code and lists the output's fields
+    task: t9
+    after: *id001
+- id: b2-30
+  at:
+  - evals/changes.py:8-16
+  reach:
+  - evals/changes.py:8-16
+  - evals/changes.py:394-410
+  row: duplicated knowledge
+  claim: The Usage block in the module doc is a hand-written copy of the argparse subparsers; argparse
+    prints it as the description, so --help shows the commands twice, and the label usage line is spelled
+    in four places (15, 331, 405, 435).
+  fix: Give each subparser help= and drop the Usage block; the label usage comes from argparse.
+  decision: FIX
+  score: 6
+  reason: one interface stated twice
+  same:
+  - b2-18
+  - b2-26
+  - b2-29
+  triage:
+    id: b2-30
+    decision: FIX
+    score: 6
+    reason: one interface stated twice
+    task: t9
+    after: *id001
+after:
+- 1090471aa2
+- c985410339
+- d660b7a4f1
+- 3562ecc3b6
+check: no-apply

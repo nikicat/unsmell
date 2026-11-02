@@ -1,0 +1,21 @@
+- {id: b2-1, decision: FIX, score: 7, task: t1, reason: "verified history.rs:401-409, 522, 603-609 each spell the timestamp-or-header rule; one helper owns it"}
+- {id: b2-2, decision: FIX, score: 6, task: t1, reason: "verified; the three comments restate the one rule, and :601-602 'persisted log' is inexact since iter also serves the in-memory tree"}
+- {id: b2-3, decision: FIX, score: 4, task: t1, reason: "under the threshold on its own, but its reach is inside t1, which removes it anyway"}
+- {id: b1-1, decision: FIX, score: 5, task: t1, reason: "verified cache.rs:241-246; it states history.rs's read policy, and x-1 links it to that fact"}
+- {id: x-1, decision: FIX, score: 6, task: t1, reason: "same fact as b1-1/b2-2; the t1 helper doc owns it"}
+- {id: b2-4, decision: FIX, score: 5, task: t2, reason: "verified history.rs:783-793 rebuilds warm_cache's setup"}
+- {id: b2-5, decision: SKIP, score: 4, task: t2, reason: "its reach overlaps t2's, so the t2 patch carries the doc as it lands"}
+- {id: b1-2, decision: ASK, score: 5, task: t3, reason: "the positional read at log_cache.rs:444 ties two SELECTs to one column order; by-name reads would differ from the rest of the repo. Patches only: not asked, a patch shows the proposal"}
+- {id: b2-6, decision: ASK, score: 6, task: t6, after: t1, reason: "t1's helper adds another fn taking (provider, store); a BlockHeaders receiver goes further and reshapes pub(crate) ensure_block_header_via, so it is the second shape stacked on t1"}
+- {id: b1-3, decision: PLAN, score: 5, task: t4, reason: "the CACHE_VERSION doc at cache.rs:36 is on unchanged lines and was already inexact before migration 6"}
+- {id: b1-6, decision: PLAN, score: 6, task: t5, reason: "unchanged public signatures"}
+- {id: x-2, decision: PLAN, score: 5, task: t5, reason: "same as b1-6"}
+- {id: b2-7, decision: PLAN, score: 5, task: t7, reason: "old defaulting; the changeset only re-indented :405"}
+- {id: b2-8, decision: PLAN, score: 5, task: t8, reason: "spans util.rs outside the changeset"}
+- {id: b2-10, decision: PLAN, score: 5, task: t9, reason: "doc on unchanged lines"}
+- {id: b1-4, decision: SKIP, score: 2, task: t10, reason: "test comments restate the test name"}
+- {id: b1-5, decision: SKIP, score: 4, task: t11, reason: "consistency needs all 22 cast sites"}
+- {id: b1-7, decision: SKIP, score: 3, task: t12, reason: "unchanged lines"}
+- {id: b1-8, decision: SKIP, score: 3, task: t13, reason: "unchanged lines"}
+- {id: b1-9, decision: SKIP, score: 2, task: t14, reason: "unchanged lines"}
+- {id: b2-9, decision: SKIP, score: 3, task: t15, reason: "dead fixture on unchanged lines"}

@@ -1,0 +1,376 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..e3433e5 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -5,7 +5,6 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
+-	"html"
+ 	"log/slog"
+ 	"os/exec"
+ 	"strings"
+@@ -580,99 +579,74 @@ func commitSubject(msg string) string {
+ }
+ 
+ func (h *Handler) formatBody(req *approval.Request) string {
+-	var b strings.Builder
+-
+-	// esc escapes client-controlled substrings before they are interpolated into
+-	// the org.freedesktop.Notifications markup body. Every dynamic value here
+-	// (repo/commit/label/search attrs, and process comm which is itself
+-	// attacker-settable via prctl) must be escaped; only our own literal <b>/<i>
+-	// tags are emitted raw. The notification carries approve/deny action buttons,
+-	// so unescaped markup could forge reassuring content on the consent surface.
+-	esc := html.EscapeString
+-
+-	// writeChain appends the process chain (comm names), escaping each name.
+-	writeChain := func(chain []approval.ProcessInfo) {
+-		for i, p := range chain {
+-			if i == 0 {
+-				b.WriteString("\n")
+-			} else {
+-				b.WriteString(" ← ")
+-			}
+-			b.WriteString(esc(p.Name))
+-			if h.showPIDs {
+-				fmt.Fprintf(&b, "[%d]", p.PID)
+-			}
+-		}
+-	}
+-
+-	// escapedSearchAttrs renders "k=v, k=v" with keys and values escaped.
+-	escapedSearchAttrs := func() string {
+-		attrs := make([]string, 0, len(req.SearchAttributes))
+-		for k, v := range req.SearchAttributes {
+-			attrs = append(attrs, fmt.Sprintf("%s=%s", esc(k), esc(v)))
+-		}
+-		return strings.Join(attrs, ", ")
+-	}
++	var b bodyMarkup
+ 
+ 	switch req.Type {
+ 	case approval.RequestTypeGPGSign:
+ 		if req.GPGSignInfo != nil {
+-			fmt.Fprintf(&b, "<b>%s</b>: <i>%s</i>", esc(req.GPGSignInfo.RepoName), esc(commitSubject(req.GPGSignInfo.CommitMsg)))
+-			writeChain(req.SenderInfo.ProcessChain)
++			b.bold(req.GPGSignInfo.RepoName)
++			b.text(": ")
++			b.italic(commitSubject(req.GPGSignInfo.CommitMsg))
++			b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
+ 		}
+ 	case approval.RequestTypeSSHSign:
+ 		// Show key label and destination
+ 		if len(req.Items) > 0 {
+-			fmt.Fprintf(&b, "<b>%s</b>", esc(req.Items[0].Label))
++			b.bold(req.Items[0].Label)
+ 			if dest, ok := req.Items[0].Attributes["destination"]; ok && dest != "" {
+-				fmt.Fprintf(&b, " → %s", esc(dest))
++				b.text(" → " + dest)
+ 			}
+ 		}
+-		writeChain(req.SenderInfo.ProcessChain)
++		b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
+ 	default:
+ 		if len(req.SenderInfo.ProcessChain) > 0 {
+ 			// New format: item label, then process chain (parent → child order)
+-			switch req.Type {
+-			case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+-				if len(req.Items) == 1 {
+-					fmt.Fprintf(&b, "<b>%s</b>", esc(req.Items[0].Label))
+-				} else {
+-					fmt.Fprintf(&b, "<b>%d items</b>", len(req.Items))
+-				}
+-			case approval.RequestTypeSearch:
+-				if len(req.SearchAttributes) > 0 {
+-					fmt.Fprintf(&b, "<b>%s</b>", escapedSearchAttrs())
+-				} else {
+-					b.WriteString("<b>all</b>")
+-				}
++			if subject, ok := requestSubject(req); ok {
++				b.bold(subject)
+ 			}
+-			writeChain(req.SenderInfo.ProcessChain)
++			b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
+ 		} else {
+ 			// Fallback: old format for remote requests without process chain
+ 			if req.SenderInfo.InvokerName != "" {
+-				fmt.Fprintf(&b, "<b>%s</b>@%s[%d]: ", esc(req.SenderInfo.InvokerName), esc(req.Client), req.SenderInfo.PID)
++				b.bold(req.SenderInfo.InvokerName)
++				b.text(fmt.Sprintf("@%s[%d]: ", req.Client, req.SenderInfo.PID))
+ 			} else if req.SenderInfo.PID != 0 {
+-				fmt.Fprintf(&b, "<b>%s</b>[%d]: ", esc(req.Client), req.SenderInfo.PID)
++				b.bold(req.Client)
++				b.text(fmt.Sprintf("[%d]: ", req.SenderInfo.PID))
+ 			} else {
+-				fmt.Fprintf(&b, "<b>%s</b>: ", esc(req.Client))
++				b.bold(req.Client)
++				b.text(": ")
+ 			}
+ 
+-			switch req.Type {
+-			case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+-				if len(req.Items) == 1 {
+-					fmt.Fprintf(&b, "<i>%s</i>", esc(req.Items[0].Label))
+-				} else {
+-					fmt.Fprintf(&b, "<i>%d items</i>", len(req.Items))
+-				}
+-			case approval.RequestTypeSearch:
+-				if len(req.SearchAttributes) > 0 {
+-					fmt.Fprintf(&b, "<i>%s</i>", escapedSearchAttrs())
+-				} else {
+-					b.WriteString("<i>all</i>")
+-				}
++			if subject, ok := requestSubject(req); ok {
++				b.italic(subject)
+ 			}
+ 		}
+ 	}
+ 
+ 	return b.String()
+ }
++
++// Returns the plain text that names what req asks for. For a get, delete or
++// write request it is the item label, or "N items" unless there is exactly one
++// item. For a search it is the attributes as "k=v, k=v", or "all" when there
++// are none. Reports false for every other request type.
++func requestSubject(req *approval.Request) (string, bool) {
++	switch req.Type {
++	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
++		if len(req.Items) == 1 {
++			return req.Items[0].Label, true
++		}
++		return fmt.Sprintf("%d items", len(req.Items)), true
++	case approval.RequestTypeSearch:
++		if len(req.SearchAttributes) == 0 {
++			return "all", true
++		}
++		attrs := make([]string, 0, len(req.SearchAttributes))
++		for k, v := range req.SearchAttributes {
++			attrs = append(attrs, k+"="+v)
++		}
++		return strings.Join(attrs, ", "), true
++	}
++	return "", false
++}
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..e38a2ff 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -416,44 +416,121 @@ func TestHandler_FormatBody_GPGSign_PIDOnly(t *testing.T) {
+ 	}
+ }
+ 
+-// TestHandler_FormatBody_EscapesInjectedMarkup is the regression test for Vuln 7:
+-// client-controlled fields must be HTML-escaped before being interpolated into the
+-// notification markup body, so an attacker cannot forge reassuring markup on the
+-// (directly actionable) consent surface. The notification carries approve/deny
+-// buttons, so injected bold/italic text would aid a consent spoof.
++// Pins that client-controlled text reaches the body escaped while the body's own tags stay raw.
+ func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+-	h, mock, _ := newTestHandler()
+-
+-	// A crafted commit message that tries to close the <i> and inject a bold
+-	// "Verified" reassurance, plus a process comm that injects markup too.
+-	req := &approval.Request{
+-		ID:     "inject-1",
+-		Client: "user@host",
+-		Type:   approval.RequestTypeGPGSign,
+-		GPGSignInfo: &approval.GPGSignInfo{
+-			RepoName:  "repo<script>",
+-			CommitMsg: "docs: typo</i> <b>Verified · GNOME Keyring</b>",
++	chain := []approval.ProcessInfo{{Name: "evil</b><b>git", PID: 9}}
++	const escChain = "\nevil&lt;/b&gt;&lt;b&gt;git"
++
++	tests := []struct {
++		name     string
++		showPIDs bool
++		req      *approval.Request
++		raw      []string // injected markup that must not survive
++		want     []string // escaped text inside our own tags
++	}{
++		{
++			name:     "gpg repo commit and chain",
++			showPIDs: true,
++			req: &approval.Request{
++				Type: approval.RequestTypeGPGSign,
++				GPGSignInfo: &approval.GPGSignInfo{
++					RepoName:  "repo<script>",
++					CommitMsg: "docs: typo</i> <b>Verified · GNOME Keyring</b>\nbody",
++				},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			raw:  []string{"<script>", "typo</i>", "<b>Verified", "evil</b><b>git"},
++			want: []string{"<b>repo&lt;script&gt;</b>: <i>docs: typo&lt;/i&gt; &lt;b&gt;Verified · GNOME Keyring&lt;/b&gt;</i>", escChain + "[9]"},
+ 		},
+-		SenderInfo: approval.SenderInfo{
+-			ProcessChain: []approval.ProcessInfo{{Name: "evil</b><b>git", PID: 9}},
++		{
++			name: "ssh label destination and chain",
++			req: &approval.Request{
++				Type: approval.RequestTypeSSHSign,
++				Items: []approval.ItemInfo{{
++					Label:      "key<u>1</u>",
++					Attributes: map[string]string{"destination": "host<i>x</i>"},
++				}},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			raw:  []string{"<u>1</u>", "<i>x</i>", "evil</b><b>git"},
++			want: []string{"<b>key&lt;u&gt;1&lt;/u&gt;</b> → host&lt;i&gt;x&lt;/i&gt;" + escChain},
++		},
++		{
++			name: "get secret label with chain",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGetSecret,
++				Items:      []approval.ItemInfo{{Label: "tok</b><b>en"}},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			raw:  []string{"tok</b><b>en", "evil</b><b>git"},
++			want: []string{"<b>tok&lt;/b&gt;&lt;b&gt;en</b>" + escChain},
++		},
++		{
++			name: "search attrs with chain",
++			req: &approval.Request{
++				Type:             approval.RequestTypeSearch,
++				SearchAttributes: map[string]string{"k<i>": "v</b>"},
++				SenderInfo:       approval.SenderInfo{ProcessChain: chain},
++			},
++			raw:  []string{"k<i>", "v</b>", "evil</b><b>git"},
++			want: []string{"<b>k&lt;i&gt;=v&lt;/b&gt;</b>" + escChain},
++		},
++		{
++			name: "legacy invoker and client",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGetSecret,
++				Client:     "user<b>@host",
++				Items:      []approval.ItemInfo{{Label: "lab<i>el"}},
++				SenderInfo: approval.SenderInfo{InvokerName: "svc</b>x", PID: 42},
++			},
++			raw:  []string{"user<b>@host", "svc</b>x", "lab<i>el"},
++			want: []string{"<b>svc&lt;/b&gt;x</b>@user&lt;b&gt;@host[42]: <i>lab&lt;i&gt;el</i>"},
++		},
++		{
++			name: "legacy pid only",
++			req: &approval.Request{
++				Type:       approval.RequestTypeDelete,
++				Client:     "user<b>@host",
++				Items:      []approval.ItemInfo{{Label: "a"}, {Label: "b"}},
++				SenderInfo: approval.SenderInfo{PID: 42},
++			},
++			raw:  []string{"user<b>@host"},
++			want: []string{"<b>user&lt;b&gt;@host</b>[42]: <i>2 items</i>"},
++		},
++		{
++			name: "legacy bare client",
++			req: &approval.Request{
++				Type:   approval.RequestTypeWrite,
++				Client: "user<b>@host",
++				Items:  []approval.ItemInfo{{Label: "lab<i>el"}},
++			},
++			raw:  []string{"user<b>@host", "lab<i>el"},
++			want: []string{"<b>user&lt;b&gt;@host</b>: <i>lab&lt;i&gt;el</i>"},
++		},
++		{
++			name: "legacy search attrs",
++			req: &approval.Request{
++				Type:             approval.RequestTypeSearch,
++				Client:           "c",
++				SearchAttributes: map[string]string{"k<i>": "v</b>"},
++			},
++			raw:  []string{"k<i>", "v</b>"},
++			want: []string{"<b>c</b>: <i>k&lt;i&gt;=v&lt;/b&gt;</i>"},
+ 		},
+ 	}
+ 
+-	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+-	body := mock.lastNotify().body
+-
+-	// No raw attacker-supplied tags survive.
+-	assert.NotContains(t, body, "<b>Verified", "injected bold reassurance must be escaped")
+-	assert.NotContains(t, body, "typo</i>", "injected closing tag must be escaped")
+-	assert.NotContains(t, body, "<script>", "injected repo markup must be escaped")
+-	assert.NotContains(t, body, "evil</b><b>git", "injected process-name markup must be escaped")
+-
+-	// The content is still present, escaped.
+-	assert.Contains(t, body, "&lt;b&gt;Verified", "escaped commit text should be present")
+-	assert.Contains(t, body, "repo&lt;script&gt;", "escaped repo name should be present")
+-
+-	// Our own wrapping markup is intact.
+-	assert.Contains(t, body, "<b>repo&lt;script&gt;</b>", "our own <b> tag must remain literal")
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			h := NewHandler(&mockNotifier{}, &mockApprover{}, "http://127.0.0.1:8484", tc.showPIDs, 2*time.Minute, 0)
++			body := h.formatBody(tc.req)
++			for _, r := range tc.raw {
++				assert.NotContains(t, body, r)
++			}
++			for _, w := range tc.want {
++				assert.Contains(t, body, w)
++			}
++		})
++	}
+ }
+ 
+ func TestHandler_OnEvent_DeleteRequest(t *testing.T) {
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+new file mode 100644
+index 0000000..489ee70
+--- /dev/null
++++ b/internal/notification/markup.go
+@@ -0,0 +1,56 @@
++package notification
++
++import (
++	"fmt"
++	"html"
++	"strings"
++
++	"github.com/nikicat/secrets-dispatcher/internal/approval"
++)
++
++// The one way formatters write a notification body. Its methods escape every
++// string they are given, so client text cannot add markup to the approve/deny
++// prompt.
++type bodyMarkup struct {
++	b strings.Builder
++}
++
++// Appends s as plain text.
++func (m *bodyMarkup) text(s string) {
++	m.b.WriteString(html.EscapeString(s))
++}
++
++// Appends s in bold.
++func (m *bodyMarkup) bold(s string) {
++	m.b.WriteString("<b>")
++	m.text(s)
++	m.b.WriteString("</b>")
++}
++
++// Appends s in italics.
++func (m *bodyMarkup) italic(s string) {
++	m.b.WriteString("<i>")
++	m.text(s)
++	m.b.WriteString("</i>")
++}
++
++// Appends the process names on a new line, joined by arrows. When showPIDs
++// is set, each name is followed by its PID in brackets.
++func (m *bodyMarkup) processChain(chain []approval.ProcessInfo, showPIDs bool) {
++	for i, p := range chain {
++		if i == 0 {
++			m.text("\n")
++		} else {
++			m.text(" ← ")
++		}
++		m.text(p.Name)
++		if showPIDs {
++			m.text(fmt.Sprintf("[%d]", p.PID))
++		}
++	}
++}
++
++// Returns the body written so far.
++func (m *bodyMarkup) String() string {
++	return m.b.String()
++}

@@ -1,0 +1,117 @@
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..1f07ea1 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -33,7 +33,7 @@ use alloy::eips::BlockNumberOrTag;
+ use alloy::network::Ethereum;
+ use alloy::primitives::{Address, B256};
+ use alloy::providers::Provider;
+-use alloy::rpc::types::{Filter, Log};
++use alloy::rpc::types::Filter;
+ use futures_util::StreamExt;
+ use futures_util::stream::{empty, once, poll_fn};
+ use tokio::sync::watch;
+@@ -398,14 +398,14 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistBackend<EvmEvent
+             async move {
+                 match result {
+                     Ok(log) => {
+-                        let mut event = log_to_evm_event(&log);
++                        let mut event = EvmEvent::try_from(&log)?;
+                         // Only round-trip to a block header when the log didn't
+                         // already carry its timestamp.
+                         if log.block_timestamp.is_none() {
+-                            let bn = log.block_number.unwrap_or(0);
+-                            event.timestamp = ensure_block_header_via(&provider, &store, bn)
+-                                .await?
+-                                .timestamp;
++                            event.timestamp =
++                                ensure_block_header_via(&provider, &store, event.block_number)
++                                    .await?
++                                    .timestamp;
+                         }
+                         let pos = event.position();
+                         Ok(Positioned::new(event, pos))
+@@ -509,25 +509,6 @@ fn apply_topics(mut filter: Filter, topics: &[Option<[u8; 32]>; 4]) -> Filter {
+     filter
+ }
+ 
+-fn log_to_evm_event(log: &Log) -> EvmEvent {
+-    let addr: [u8; 20] = log.address().0.0;
+-    let block_hash: [u8; 32] = log.block_hash.map_or([0; 32], |h| h.0);
+-    let tx_hash: [u8; 32] = log.transaction_hash.map_or([0; 32], |h| h.0);
+-
+-    EvmEvent {
+-        contract_address: addr,
+-        block_number: log.block_number.unwrap_or(0),
+-        // Provider-supplied per-log timestamp when present; otherwise 0, and
+-        // the caller fills it from the (cached) block header.
+-        timestamp: log.block_timestamp.unwrap_or(0),
+-        block_hash,
+-        log_index: log.log_index.unwrap_or(0) as u32,
+-        tx_hash,
+-        topics: log.topics().iter().map(|t| t.0).collect(),
+-        data: log.data().data.to_vec(),
+-    }
+-}
+-
+ /// Cache-first block-header lookup. Falls back to RPC and persists.
+ pub(crate) async fn ensure_block_header_via<P>(
+     provider: &P,
+@@ -628,6 +609,7 @@ mod tests {
+     use crate::arch::Position;
+     use alloy::primitives::{Address, B256, Bytes, Log as LogInner, LogData, U64};
+     use alloy::providers::ProviderBuilder;
++    use alloy::rpc::types::Log;
+     use alloy::transports::mock::Asserter;
+     use futures_util::TryStreamExt;
+ 
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 84ec6cc..e0486e6 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -5,7 +5,9 @@
+ 
+ use std::sync::Arc;
+ 
+-use crate::arch::{Position, Timestamp};
++use alloy::rpc::types::Log;
++
++use crate::arch::{HistoryError, Position, Timestamp};
+ 
+ // ============================================================
+ // EvmPosition — totally ordered (block, log_index)
+@@ -94,6 +96,34 @@ impl EvmEvent {
+     }
+ }
+ 
++/// Builds the event from a mined provider log. Fails on a log that lacks its
++/// block number, block hash, transaction hash or log index (a pending log), or
++/// whose log index does not fit in `u32`. A missing `block_timestamp` becomes
++/// 0, for the caller to fill from the block header.
++impl TryFrom<&Log> for EvmEvent {
++    type Error = HistoryError;
++
++    fn try_from(log: &Log) -> Result<Self, Self::Error> {
++        let missing = |field: &str| HistoryError::internal(format!("log has no {field}"));
++        let log_index = log.log_index.ok_or_else(|| missing("log_index"))?;
++        Ok(Self {
++            contract_address: log.address().0.0,
++            block_number: log.block_number.ok_or_else(|| missing("block_number"))?,
++            timestamp: log.block_timestamp.unwrap_or(0),
++            block_hash: log.block_hash.ok_or_else(|| missing("block_hash"))?.0,
++            log_index: u32::try_from(log_index).map_err(|_| {
++                HistoryError::internal(format!("log_index {log_index} exceeds u32"))
++            })?,
++            tx_hash: log
++                .transaction_hash
++                .ok_or_else(|| missing("transaction_hash"))?
++                .0,
++            topics: log.topics().iter().map(|t| t.0).collect(),
++            data: log.data().data.to_vec(),
++        })
++    }
++}
++
+ // ============================================================
+ // Block / Transaction
+ // ============================================================

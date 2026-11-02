@@ -1,0 +1,56 @@
+id: c74ed1a987
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-11
+  at:
+  - src/evm/cache/event_signature_cache.rs:36-41
+  reach:
+  - src/evm/cache/event_signature_cache.rs:36-41
+  row: speculative generality
+  claim: EventSignatureCache::open(path) has no callers in the repo. The CLI uses CacheDb::signatures()
+    (events.rs:169), and the tests use open_in_memory. These are unchanged lines.
+  fix: delete open (and its doc); keep open_in_memory for the tests
+  decision: PLAN
+  score: 5
+  reason: dead code on unchanged lines; it is pub library API, so removal waits on the owner
+  same: []
+  triage:
+    id: b1-11
+    decision: PLAN
+    score: 5
+    reason: dead pub API on unchanged lines; removal waits on the owner
+    task: t6
+- id: b1-12
+  at:
+  - src/evm/cache/event_signature_cache.rs:36-38
+  - src/evm/cache/event_signature_cache.rs:43
+  reach:
+  - src/evm/cache/event_signature_cache.rs:36-45
+  row: narrating doc comment
+  claim: The open and open_in_memory docs are imperative ("Open …"). The open doc reads back the body
+    ("Equivalent to CacheDb::open(path)?.signatures()"). The open_in_memory doc gives the caller's reason
+    ("Useful for tests."). These are unchanged lines.
+  fix: '"Opens the cache file at path, creating it and migrating its schema." and "Opens a cache that
+    lives only in memory." (moot for open if b1-11 deletes it)'
+  decision: SKIP
+  score: 3
+  reason: unchanged lines; rewording correct docs
+  same:
+  - b1-11
+  triage:
+    id: b1-12
+    decision: SKIP
+    score: 3
+    reason: rewording correct docs on unchanged lines; shares t6 with b1-11 since the open doc goes with
+      it
+    task: t6
+check: ok

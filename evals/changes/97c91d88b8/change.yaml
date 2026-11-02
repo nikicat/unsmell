@@ -1,0 +1,39 @@
+id: 97c91d88b8
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-135449
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-13
+  at:
+  - src/evm/cache/event_signature_cache.rs:122-136
+  - src/evm/cache/event_signature_cache.rs:155-164
+  reach:
+  - src/evm/cache/event_signature_cache.rs:110-169
+  row: repeated derivation
+  claim: The test fixture literals repeat. "Transfer(address,address,uint256)" appears at :125 and :134,
+    "{\"type\":\"event\"}" at :127 and :136, and ChainId::new(1) appears five times. Each test builds
+    its insert call inline.
+  fix: test consts CHAIN, SIG, ABI beside ADDR/TOPIC0
+  decision: SKIP
+  score: 3
+  reason: test-local fixture repetition; low value
+  same:
+  - b1-4
+  triage:
+    id: b1-13
+    decision: SKIP
+    score: 3
+    reason: test fixture repetition, low value
+    task: t8
+    after:
+    - t1
+after:
+- bc19c04051
+check: ok

@@ -1,0 +1,42 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 4f3704b..8b2fe78 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -4,7 +4,7 @@
+ 
+ use alloy::primitives::{Address, B256};
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow, Topic};
++use chainfold::evm::{CacheError, ChainId, EventSignatureCache, EventSignatureRow, Topic};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -17,6 +17,11 @@ impl SqliteSignatureCache {
+     }
+ }
+ 
++/// Wraps a cache failure as a resolver error.
++fn cache_error(e: CacheError) -> SignatureError {
++    SignatureError::Cache(e.to_string())
++}
++
+ #[async_trait]
+ impl SignatureCache for SqliteSignatureCache {
+     async fn get(
+@@ -34,7 +39,7 @@ impl SignatureCache for SqliteSignatureCache {
+                     abi_json: row.abi_json,
+                 })
+             })
+-            .map_err(|e| SignatureError::Cache(e.to_string()))
++            .map_err(cache_error)
+     }
+ 
+     async fn put(
+@@ -55,6 +60,6 @@ impl SignatureCache for SqliteSignatureCache {
+                     abi_json: entry.abi_json.clone(),
+                 },
+             )
+-            .map_err(|e| SignatureError::Cache(e.to_string()))
++            .map_err(cache_error)
+     }
+ }

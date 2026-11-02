@@ -1,0 +1,111 @@
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..53d4f55 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -39,29 +39,46 @@ pub fn compute_filter_hash(address: &[u8; 20], topics: &[Option<[u8; 32]>; 4]) -
+ ///
+ /// Both `requested` and each entry in `scanned` are inclusive `[start, end]` ranges.
+ pub fn compute_gaps(requested: (u64, u64), scanned: &[(u64, u64)]) -> Vec<(u64, u64)> {
++    let (lo, hi) = requested;
++    let covered = coalesce_ranges(
++        scanned
++            .iter()
++            .filter(|&&(start, end)| start <= hi && end >= lo)
++            .map(|&(start, end)| (start.max(lo), end.min(hi), ())),
++    );
+     let mut gaps = Vec::new();
+-    let mut cursor = requested.0;
+-    for &(start, end) in scanned {
+-        if start > requested.1 {
+-            break;
+-        }
+-        if end < cursor {
+-            continue;
+-        }
++    let mut cursor = lo;
++    for (start, end, ()) in covered {
+         if start > cursor {
+             gaps.push((cursor, start - 1));
+         }
+-        cursor = cursor.max(end + 1);
+-        if cursor > requested.1 {
+-            break;
+-        }
++        cursor = end + 1;
+     }
+-    if cursor <= requested.1 {
+-        gaps.push((cursor, requested.1));
++    if cursor <= hi {
++        gaps.push((cursor, hi));
+     }
+     gaps
+ }
+ 
++/// Merge inclusive `(start, end, payload)` ranges, sorted by `start`, whose
++/// spans overlap or touch. Each merged range keeps the payload of its first
++/// member with the highest `end`.
++fn coalesce_ranges<P>(sorted: impl IntoIterator<Item = (u64, u64, P)>) -> Vec<(u64, u64, P)> {
++    let mut merged: Vec<(u64, u64, P)> = Vec::new();
++    for (start, end, payload) in sorted {
++        match merged.last_mut() {
++            Some(last) if last.1.saturating_add(1) >= start => {
++                if end > last.1 {
++                    last.1 = end;
++                    last.2 = payload;
++                }
++            }
++            _ => merged.push((start, end, payload)),
++        }
++    }
++    merged
++}
++
+ // ============================================================
+ // Types
+ // ============================================================
+@@ -293,24 +310,14 @@ impl LogCache {
+             return Ok(());
+         }
+ 
+-        let mut merged: Vec<(u64, u64, Vec<u8>)> = Vec::new();
+-        let mut ids_to_delete: Vec<i64> = Vec::new();
+-        for (id, start, end, end_hash) in &ranges {
+-            ids_to_delete.push(*id);
+-            if let Some(last) = merged.last_mut()
+-                && last.1 + 1 >= *start
+-            {
+-                if *end > last.1 {
+-                    last.1 = *end;
+-                    last.2.clone_from(end_hash);
+-                }
+-                continue;
+-            }
+-            merged.push((*start, *end, end_hash.clone()));
+-        }
++        let merged = coalesce_ranges(
++            ranges
++                .iter()
++                .map(|(_, start, end, end_hash)| (*start, *end, end_hash)),
++        );
+ 
+         if merged.len() < ranges.len() {
+-            for id in &ids_to_delete {
++            for (id, ..) in &ranges {
+                 tx.execute("DELETE FROM scanned_ranges WHERE id = ?1", [id])?;
+             }
+             for (start, end, end_hash) in &merged {
+@@ -704,6 +711,14 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn coalesce_merges_touching_and_keeps_highest_end_payload() {
++        assert_eq!(
++            coalesce_ranges([(1, 5, 'a'), (6, 9, 'b'), (7, 8, 'c'), (11, 12, 'd')]),
++            vec![(1, 9, 'b'), (11, 12, 'd')]
++        );
++    }
++
+     #[test]
+     fn gaps_partial_coverage() {
+         assert_eq!(

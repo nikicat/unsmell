@@ -1,0 +1,58 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..78a55d5 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -1,6 +1,5 @@
+-//! Adapter: implements the [`SignatureCache`] resolver trait over the
+-//! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+-//! file for event-signature caching.
++//! Implements the [`SignatureCache`] resolver trait over the cache database's
++//! [`EventSignatureCache`].
+ 
+ use alloy::primitives::{Address, B256};
+ use async_trait::async_trait;
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..350fa6b 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -12,7 +12,7 @@ use alloy::primitives::{Address, B256};
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+ 
+-/// A single resolved row from `event_signatures`.
++/// The cached resolution of one contract event.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+@@ -23,7 +23,8 @@ pub struct EventSignatureRow {
+     pub abi_json: Option<String>,
+ }
+ 
+-/// Durable SQLite-backed event-signature cache.
++/// A persistent store of resolved event signatures. Each entry is keyed by
++/// chain, contract address and event name.
+ pub struct EventSignatureCache {
+     conn: SharedConn,
+ }
+@@ -33,14 +34,17 @@ impl EventSignatureCache {
+         Self { conn }
+     }
+ 
+-    /// Open a standalone signature cache at the given path. Creates the DB and
+-    /// runs migrations if needed. Equivalent to
+-    /// `CacheDb::open(path)?.signatures()`.
++    /// Opens a signature cache over the database at `path`. Creates the
++    /// database and brings its schema up to date when needed.
++    ///
++    /// Errors when the database cannot be opened or migrated.
+     pub fn open(path: &str) -> Result<Self, CacheError> {
+         Ok(super::CacheDb::open(path)?.signatures())
+     }
+ 
+-    /// Open a standalone in-memory signature cache. Useful for tests.
++    /// Opens a signature cache over a new in-memory database.
++    ///
++    /// Errors when the database cannot be set up.
+     pub fn open_in_memory() -> Result<Self, CacheError> {
+         Ok(super::CacheDb::open_in_memory()?.signatures())
+     }

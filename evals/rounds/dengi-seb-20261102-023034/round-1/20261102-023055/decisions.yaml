@@ -1,0 +1,123 @@
+- id: b1-1
+  decision: FIX
+  score: 6
+  reason: full tell, plus the PSU global that main must set first
+  task: t1
+- id: b1-2
+  decision: FIX
+  score: 6
+  reason: the settings edge, merged into the client constructor
+  task: t1
+- id: b1-3
+  decision: FIX
+  score: 7
+  reason: expiry rule on its owner; the session file format is unchanged
+  task: t1
+- id: b1-4
+  decision: FIX
+  score: 7
+  reason: the account key rule on its owner; its reach overlaps b1-3 and b1-1
+  task: t1
+- id: b1-5
+  decision: ASK
+  score: 9
+  reason: 'a confirmed bug. Per the Enable Banking docs, uid is valid only while its session is authorized,
+    and identification_hash matches the account across sessions. Still ASK, because the fix renames a
+    stored column and rekeys rows. Without t6 or an ALTER, an existing dengi.db fails with ''no such column:
+    account'''
+  task: t5
+  after:
+  - t1
+- id: b1-6
+  decision: FIX
+  score: 7
+  reason: unparsed CLI date. Its reach overlaps b1-7 and b1-1
+  task: t1
+- id: b1-7
+  decision: FIX
+  score: 6
+  reason: mixed altitude in main; the store gets its own type
+  task: t1
+- id: b1-8
+  decision: FIX
+  score: 5
+  reason: a fact stated twice. seb.py:98 lies inside the reach of b1-7
+  task: t1
+- id: b1-9
+  decision: FIX
+  score: 5
+  reason: the doc says the function marks a request, which it does not. seb.py:36-38 lies inside the reach
+    of b1-1
+  task: t1
+- id: b1-10
+  decision: FIX
+  score: 5
+  reason: the module doc leaves out the interactive login and its exit
+  task: t2
+- id: b1-11
+  decision: FIX
+  score: 8
+  reason: it keeps a private key and bank data out of git
+  task: t3
+- id: b1-12
+  decision: ASK
+  score: 5
+  reason: it changes the stored schema, and existing databases would not get the change (b1-14)
+  task: t4
+- id: b1-13
+  decision: FIX
+  score: 5
+  reason: compressed trailing comments; seb.py:54 lies inside the reach of b1-1
+  task: t1
+- id: b1-14
+  decision: PLAN
+  score: 5
+  reason: needs a migration-or-rebuild decision; the repo has no plan file, so its location is pending
+  task: t6
+  after:
+  - t1
+- id: b1-15
+  decision: SKIP
+  score: 4
+  reason: a local gain with one user
+  task: t7
+  after:
+  - t1
+- id: b1-16
+  decision: SKIP
+  score: 4
+  reason: the failure is already loud
+  task: t8
+  after:
+  - t1
+- id: b1-17
+  decision: SKIP
+  score: 4
+  reason: a specific error for a generic one is a feature (§5)
+  task: t9
+  after:
+  - t1
+- id: b1-18
+  decision: SKIP
+  score: 3
+  reason: no caller needs to recover
+  task: t10
+  after:
+  - t1
+- id: b1-19
+  decision: SKIP
+  score: 2
+  reason: the proposed fix is no change, so it has no patch
+  task: t11
+- id: b1-20
+  decision: DISCARD
+  score: 1
+  reason: the JWT audience is fixed by Enable Banking, not derived from API; they change for different
+    reasons
+- id: e-1
+  decision: PLAN
+  score: 6
+  reason: a latent KeyError on a closed account. Found after the survey; the plan location is pending
+  task: t12
+  after:
+  - t1

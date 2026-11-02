@@ -1,0 +1,33 @@
+id: 8a2f6a0878
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t14
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-9
+  at:
+  - src/evm/cache.rs:123-131
+  - src/evm/cache.rs:162-171
+  reach:
+  - src/evm/cache.rs:123-171
+  row: long comment
+  claim: The cached_logs and scanned_ranges schema comments run 9 and 10 lines, mixing column docs with
+    design history and caller behaviour.
+  fix: Per-column comments beside each column, design reasons kept to one or two lines.
+  decision: SKIP
+  score: 2
+  reason: Unchanged lines; schema documentation that is correct.
+  same: []
+  triage:
+    id: b1-9
+    decision: SKIP
+    score: 2
+    task: t14
+    reason: unchanged lines
+check: ok

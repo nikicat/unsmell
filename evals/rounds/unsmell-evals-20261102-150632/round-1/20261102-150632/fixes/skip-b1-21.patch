@@ -1,0 +1,14 @@
+diff --git a/evals/README.md b/evals/README.md
+index e8764a0..7185ce8 100644
+--- a/evals/README.md
++++ b/evals/README.md
+@@ -3,7 +3,8 @@
+ These evals check that unsmell reaches a fixed point on its own. Running it
+ again on its own output must change nothing, and no round may undo an earlier
+ round. A skill that finds nothing would pass that test trivially, so the
+-fixtures also measure whether real smells get fixed.
++labelled changes (see [Changes and labels](#changes-and-labels)) measure whether
++real smells get fixed.
+ 
+ ## Running
+ 

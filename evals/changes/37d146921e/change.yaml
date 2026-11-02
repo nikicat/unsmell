@@ -1,0 +1,45 @@
+id: 37d146921e
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-11
+  at:
+  - internal/proxy/prompter.go:47
+  - internal/proxy/prompter.go:129
+  - internal/proxy/prompter.go:140
+  - internal/proxy/prompter.go:146
+  - internal/proxy/prompter.go:196
+  - internal/proxy/prompter.go:204
+  - internal/proxy/prompter.go:210
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  - internal/proxy/prompter_test.go:60
+  reach:
+  - internal/proxy/prompter.go:23-214
+  - internal/proxy/prompter_test.go:14-66
+  row: tautological comment
+  claim: Ten docs on unchanged lines open with their declaration's own name ('prompterBridge reconnects',
+    'BeginPrompting starts', 'TestPrompterBridge is', and so on). No revive `exported` or stylecheck rule
+    is enabled. The changed-line cases (newPrompterBridge :60, activate :96, the second test :143) are
+    covered by b1-1 and b1-5.
+  fix: Drop the leading name. Each function doc starts at its verb ('Starts a prompt…', 'Relays…') and
+    each type doc at its noun phrase.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines. Fix all of them in one pass when the file is next touched.
+  same: []
+  triage:
+    id: b1-11
+    decision: PLAN
+    score: 5
+    reason: docs on unchanged lines open with their own name
+    task: t6
+check: ok

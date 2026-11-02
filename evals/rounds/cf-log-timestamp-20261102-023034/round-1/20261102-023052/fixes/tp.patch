@@ -1,0 +1,29 @@
+diff --git a/TODO.md b/TODO.md
+index e0bfb5f..0b498d4 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -31,3 +31,24 @@ No way to discover which `--chain <name>` values resolve without consulting `cha
+ - Refuse to proceed (or warn loudly) when `red_flags` is non-empty — DefiLlama flags chains with known scam/spam issues.
+ 
+ When either is wired up, the field stops being dead and the corresponding `#[allow]` can be removed.
++
++## Unsmell run 2026-11-02 (`block_timestamp` on `cached_logs`)
++
++Smells found while reviewing the `block_timestamp` change. None of them sits on its changed lines.
++
++- **Logs are not parsed at the edge** (`src/evm/cache/log_cache.rs` `insert_logs`, `src/evm/history.rs` `log_to_evm_event`, `log_timestamp`, the `build_fetcher` prefetch). Optional `Log` fields are defaulted to 0 at each use: block number, log index, transaction index. A missing `transaction_hash` goes into a NOT NULL column, where `INSERT OR IGNORE` drops the row silently. `insert_logs` also selects logs and inserts them in one loop. Fix: a mined-log type with these fields required and `block_timestamp` optional, parsed once where provider logs enter (the fetcher page, the subscriber), and taken by `insert_logs` and `log_to_evm_event`.
++- **`filter_hash` is threaded through seven `LogCache` methods** (`log_cache.rs`). Every caller passes its own `self.filter_hash`. Fix: a per-filter view, for example `LogCache::for_filter(fh) -> FilterLogs`, with those methods.
++- **Raw `[u8; 32]` for both filter hashes and block hashes** (`log_cache.rs`). They sit next to each other in two signatures and are easy to swap. `insert_block_header` takes `BlockHeader`'s four fields loose, and `ensure_block_header_via` and the history tests pass them loose. Fix: a `FilterHash` newtype, `B256` for block hashes, and `insert_block_header(&BlockHeader)`.
++- **Block ranges are positional tuples** (`log_cache.rs` `compute_gaps`, `compact_ranges`). `compact_ranges` merges intervals inline beside its DB writes, and the `scanned_ranges` INSERT is written twice. Fix: a `BlockRange` type that owns gap computation and merging, as a pure function run before the writes.
++- **The not-reorged subquery is written in four statements** (`log_cache.rs`). Options: a SQL view added by a migration, or leave the statements as they are.
++- **Facts stated three times** (`cache.rs` and `log_cache.rs` module, schema and `LogCache` docs). "Navigation queries live in `LogIndex`" and the reorg-tombstone rule each appear three times. Fix: keep each in one owner (the `cache.rs` module doc, and the `cached_logs` schema comment) and remove the copies.
++- **Entity docs list members** (`cache.rs` module doc and `CacheDb`, `log_cache.rs` module doc and `LogCache`). Fix: rewrite each as the thing's place in the system in two lines.
++- **`CacheDb::open` and `open_in_memory` repeat their body** (`cache.rs`). Fix: a private `from_connection(conn)` that both call.
++- **`get_log_by_ref` doc describes its caller** (`log_cache.rs`). Fix: say what it returns, and that unlike `get_logs_in_range` it also returns logs from reorged blocks.
++- **Hand-written `match rows.next()`** in `get_log_by_ref` and `get_block_header` (`log_cache.rs`). Fix: `query_row(..).optional()`, as `src/matcher/anchor_store_sqlite.rs` already does.
++- **`provider` and `store` travel as a pair** (`history.rs` `ensure_block_header_via`, `log_timestamp`, `build_fetcher`, the `iter` closures). Fix: a `BlockHeaders { provider, store }` receiver with `header()` and `log_timestamp()`. A patch that makes this change is saved as `fixes/t5.patch` in the run directory `.git/unsmell/20261102-023052/`.
++- **`get_block_number` call chain written twice** (`history.rs`, in construction and in the tip update). Fix: one `block_number(provider)` helper.
++- **The log filter is built twice, and `address` and `topics` travel together** (`history.rs` `build_filter`, `build_fetcher`, `fmt_topic`). Fix: a `LogFilter { address, topics }` type with `hash()`, `to_alloy(from, to)` and `Display`.
++- **`EvmPosition::new(b, u32::MAX)` is spelled at about 20 sites** (`history.rs` and the rest of the repo). Fix: `EvmPosition::end_of_block(block)` in `types.rs`.
++- **`_unused_warmup` is dead code** kept alive by `allow(dead_code)` (`history.rs` tests). Fix: delete it.
++- **`warm_cache` returns a filter hash that every caller discards** (`history.rs` tests). Fix: return `Arc<LogCache>` only.

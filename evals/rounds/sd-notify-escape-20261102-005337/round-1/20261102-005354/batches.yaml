@@ -1,0 +1,2 @@
+- id: b1
+  paths: [internal/notification/desktop.go, internal/notification/desktop_test.go]

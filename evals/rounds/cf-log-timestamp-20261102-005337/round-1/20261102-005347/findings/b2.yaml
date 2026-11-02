@@ -1,0 +1,184 @@
+read: [src/evm/history.rs]
+unread: []
+findings:
+  - id: b2-1
+    at: [src/evm/history.rs:401-409, src/evm/history.rs:520-522, src/evm/history.rs:600-608]
+    reach: [src/evm/history.rs:395-417, src/evm/history.rs:512-529, src/evm/history.rs:599-609]
+    row: repeated derivation
+    claim: >
+      The changeset split one rule ("a log's timestamp is its block_timestamp, else its block header's")
+      over three places. log_to_evm_event at history.rs:522 writes block_timestamp.unwrap_or(0), so 0 means
+      "not filled yet" and its comment explains what 0 means. The iter closure at history.rs:404 re-reads the
+      same Option with is_none() to overwrite the placeholder. The build_fetcher prefetch loop at history.rs:603
+      repeats the predicate as is_some(). The event is half-built until the caller completes it (temporal coupling).
+    fix: >
+      One helper next to ensure_block_header_via,
+      `async fn log_timestamp<P: Provider<Ethereum>>(provider: &P, store: &LogCache, log: &Log) -> Result<Timestamp, HistoryError>`,
+      which returns `log.block_timestamp` when it is Some and otherwise
+      `ensure_block_header_via(provider, store, log.block_number.unwrap_or(0)).await?.timestamp`.
+      log_to_evm_event takes `timestamp: Timestamp` as a second parameter and sets it directly (no 0 placeholder,
+      comment at 520-521 deleted). The iter closure becomes
+      `let timestamp = log_timestamp(&provider, &store, &log).await?; let event = log_to_evm_event(&log, timestamp);`
+      (no `mut`, no inline if). The prefetch loop becomes
+      `for log in &logs { let _ = log_timestamp(&provider, &store, log).await; }`. Behaviour: a log with no
+      block_number would now warm block 0's header instead of being skipped; eth_getLogs over a closed block range
+      never returns such a log, but the report should name it. If that is unwanted, the loop keeps
+      `.filter(|log| log.block_number.is_some())` before the call.
+    decision: FIX
+    score: 7
+    reason: >
+      Full tell on changed lines. One predicate is written twice, and a sentinel value is completed by the caller.
+      The change is local and private, and the patch is about 20 lines.
+    same: [b2-2, b2-3]
+  - id: b2-2
+    at: [src/evm/history.rs:402-403, src/evm/history.rs:520-521, src/evm/history.rs:601-602]
+    reach: [src/evm/history.rs:402-403, src/evm/history.rs:520-521, src/evm/history.rs:601-602, src/evm/history.rs:531]
+    row: duplicated knowledge
+    claim: >
+      The changeset added three comments that state one fact, that a log carrying block_timestamp needs no block
+      header. history.rs:520-521 describes what the caller does (wrong layer, from above) and joins its ideas with a
+      semicolon. history.rs:601-602 joins them with an em-dash, names an unnamed "query path", and says the timestamp
+      is read "off the persisted log", although iter can also serve logs from LogIndex's in-memory tree before they
+      are drained to LogCache. history.rs:402-403 restates the `if` below it, and "round-trip" is inaccurate because
+      ensure_block_header_via is cache-first.
+    fix: >
+      With b2-1, the fact gets one owner, the doc of log_timestamp:
+      "/// Returns the block timestamp of the given log. Uses the timestamp that the provider supplied with the log
+      when there is one. Otherwise uses the block header's timestamp, read from the cache or fetched and cached.
+      Errors when the header lookup fails." All three `//` comments are deleted.
+    decision: FIX
+    score: 6
+    reason: >
+      One fact is written in three copies on changed lines, and one copy is slightly false ("persisted").
+      It is fixed in the same patch as b2-1.
+    same: [b2-1]
+  - id: b2-3
+    at: [src/evm/history.rs:600-609]
+    reach: [src/evm/history.rs:600-609]
+    row: computing loop with effects
+    claim: >
+      The changeset added `if log.block_timestamp.is_some() { continue; }` at history.rs:603. The prefetch loop in
+      build_fetcher now selects logs (skip when there is a timestamp, skip when there is no block number) and fetches
+      headers in the same body.
+    fix: >
+      Covered by b2-1. The loop body becomes a single `log_timestamp` call, so the selection lives in the helper. As a
+      standalone alternative, iterate
+      `logs.iter().filter(|l| l.block_timestamp.is_none()).filter_map(|l| l.block_number)` and keep only the effect
+      in the body.
+    decision: FIX
+    score: 4
+    reason: Small on its own. It falls out of b2-1 and shares that task.
+    same: [b2-1]
+  - id: b2-4
+    at: [src/evm/history.rs:783-796]
+    reach: [src/evm/history.rs:664-689, src/evm/history.rs:782-796]
+    row: repeated derivation
+    claim: >
+      The new test iter_uses_log_block_timestamp_without_header_fetch at history.rs:783-796 rebuilds warm_cache's
+      fixture inline. It repeats open_in_memory with compute_filter_hash, the block 0 and block 200 header inserts
+      (same arguments as 669 and 678), and record_scanned_range(&fh, 0, 200, &BH_200) (same as 687).
+    fix: >
+      Extract `fn anchored_cache() -> (Arc<LogCache>, [u8; 32])` in the tests module. It opens the in-memory cache,
+      computes fh, inserts the headers for blocks 0 and 200, and records the scanned range 0..=200 with BH_200.
+      warm_cache calls it and then adds the headers for blocks 100 and 101 and the three logs. The new test calls it
+      and then inserts its block-150 log. First check that LogCache allows record_scanned_range before insert_logs.
+      warm_cache currently records the range after inserting the logs.
+    decision: FIX
+    score: 5
+    reason: A fixture is built twice, one copy on changed lines. The change is test-only and small.
+    same: []
+  - id: b2-5
+    at: [src/evm/history.rs:777-780]
+    reach: [src/evm/history.rs:777-780]
+    row: compressed doc
+    claim: >
+      The doc of the new test at history.rs:777-780 runs four lines and hangs its proof on an em-dash appositive
+      ("— proven by leaving no header cached …").
+    fix: >
+      "/// Checks that a log with its own `block_timestamp` gives its event that timestamp without a block-header fetch.
+      /// The cache holds no header for the log's block, and the mock provider has no reply queued, so a fetch would
+      /// fail the walk."
+    decision: SKIP
+    score: 4
+    reason: The doc is correct and only compressed. Rewording it scores under the threshold.
+    same: []
+  - id: b2-6
+    at: [src/evm/history.rs:532-536, src/evm/history.rs:392-397, src/evm/history.rs:406, src/evm/history.rs:599, src/evm/history.rs:607]
+    reach: [src/evm/history.rs:70-73, src/evm/history.rs:136, src/evm/history.rs:251, src/evm/history.rs:392-409, src/evm/history.rs:531-619]
+    row: missing receiver
+    claim: >
+      Every call of ensure_block_header_via (136, 251, 406, 599, 607) passes the same (provider, store) pair. iter
+      clones both into its stream closure at history.rs:392-397 only to pass them on. The changed lines 406 and 607
+      are two of these calls.
+    fix: >
+      A `BlockHeaders<P> { provider: P, store: Arc<LogCache> }` with `async fn get(&self, block_number) ->
+      Result<BlockHeader, HistoryError>` (and log_timestamp from b2-1 as its method). It is built once in with_options
+      and held by EvmLogHistory and by the fetcher closure.
+    decision: PLAN
+    score: 6
+    reason: >
+      ensure_block_header_via itself is unchanged and is pub(crate). The fix touches construction and every caller,
+      so it goes beyond the changed lines.
+    same: []
+  - id: b2-7
+    at: [src/evm/history.rs:405, src/evm/history.rs:512-528]
+    reach: [src/evm/history.rs:395-417, src/evm/history.rs:512-529, src/evm/types.rs:72-95]
+    row: unparsed input
+    claim: >
+      log_to_evm_event defaults every missing Option of the provider Log to 0 (block_number 519, log_index 524 with an
+      `as u32` truncation, hashes 514-515). The changed line at history.rs:405 repeats
+      `log.block_number.unwrap_or(0)`, so a log without a block number is silently stamped with genesis' timestamp.
+      log_to_evm_event is also a free function that only builds an EvmEvent, so it belongs with EvmEvent.
+    fix: >
+      `impl TryFrom<&Log> for EvmEvent` (or `EvmEvent::from_log(log, timestamp)`) in src/evm/types.rs. It errors with
+      HistoryError on a log that has no block number, log index or block hash (a pending log) and on a log index past
+      u32. iter reads `event.block_number` instead of re-deriving it.
+    decision: PLAN
+    score: 5
+    reason: >
+      The root cause is on unchanged lines, and only line 405 was re-indented by the changeset. Rejecting pending logs
+      changes behaviour.
+    same: []
+  - id: b2-8
+    at: [src/evm/history.rs:802-803, src/evm/history.rs:252, src/evm/history.rs:474]
+    reach: [src/evm/types.rs:47-56, src/evm/history.rs:252, src/evm/history.rs:474, src/evm/history.rs:715, src/evm/history.rs:730, src/evm/history.rs:769, src/evm/history.rs:802-803, src/evm/history.rs:835, src/evm/history.rs:839, src/evm/history.rs:908, src/bin/chainfold/util.rs:49-65]
+    row: repeated derivation
+    claim: >
+      The end-of-block cut `EvmPosition::new(b, u32::MAX)` has no name. It is written at history.rs:252 and 474, in
+      many tests, and in src/bin/chainfold/util.rs:49, 63 and 65. The new test adds two more copies at 802-803.
+    fix: >
+      Add `pub const fn end_of_block(block: u64) -> Self` on EvmPosition in src/evm/types.rs and use it at every site.
+    decision: PLAN
+    score: 5
+    reason: >
+      The changed lines only add test copies. The real sites are unchanged and span batches, so this is for the
+      cross-file agent.
+    same: []
+  - id: b2-9
+    at: [src/evm/history.rs:926-930]
+    reach: [src/evm/history.rs:926-930]
+    row: speculative generality
+    claim: >
+      `_unused_warmup` with `#[allow(dead_code)]` exists to silence unused-constant warnings "during phase work", but
+      warm_cache already uses all of BH_0, BH_100, BH_101 and BH_200.
+    fix: Delete the function and its comment.
+    decision: SKIP
+    score: 3
+    reason: Dead test code on unchanged lines. The gain is small.
+    same: []
+  - id: b2-10
+    at: [src/evm/history.rs:531]
+    reach: [src/evm/history.rs:531]
+    row: narrating doc comment
+    claim: >
+      The doc of ensure_block_header_via, which the changed lines 406 and 607 call, is a noun phrase that names the
+      mechanism ("Cache-first … Falls back to RPC and persists"). It states no error contract.
+    fix: >
+      "/// Returns the header of the given block, from the cache when it is there, and otherwise fetched and cached.
+      /// Errors when the block does not exist or the cache or RPC call fails." (Folds into b2-6 when that lands.)
+    decision: PLAN
+    score: 5
+    reason: >
+      The doc is missing its error contract, which scores 5. It sits on unchanged lines, and the changeset only adds
+      callers.
+    same: [b2-6]

@@ -1,0 +1,158 @@
+id: 73f1604662
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-2
+  at:
+  - internal/proxy/prompter.go:66-68
+  - internal/proxy/prompter_test.go:147-149
+  - internal/proxy/prompter.go:28-30
+  - internal/proxy/prompter_test.go:61-63
+  reach:
+  - internal/proxy/prompter.go:23-46
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:60-66
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/proxy.go:164-167
+  - internal/proxy/forward.go:68-71
+  row: duplicated knowledge
+  claim: The changeset added text at prompter.go:66-68 and prompter_test.go:148-149 saying that in the
+    local-takeover topology the gcr-prompter fallback 'actually draws its own (GTK) dialog instead of
+    just hanging'. The type doc (prompter.go:28-30), TestPrompterBridge's doc (prompter_test.go:61-63),
+    proxy.go:165-166 and forward.go:71 all say the fallback is display-less, cannot draw, and the unlock
+    hangs. One of the two statements is false. The fact also has six copies, and that is how they came
+    to disagree.
+  fix: Ask the user which is true. State it once, in the prompterBridge type doc, which owns why the bridge
+    exists. The constructor doc, both test docs and proxy.go:164-167 then drop their copies (they may
+    say 'see prompterBridge'). The nameHasOwner doc at forward.go:68-71 drops its prompter-bridge sentence
+    (see b1-8).
+  decision: ASK
+  score: 9
+  reason: A doc states something false. Which side is false is a domain fact the code cannot tell, so
+    ask. Once it is answered, the dedup is a mechanical FIX.
+  same:
+  - b1-1
+  - b1-5
+  triage:
+    id: b1-2
+    decision: ASK
+    score: 9
+    reason: the changeset's new text and four unchanged sites disagree on whether the gcr-prompter fallback
+      draws a dialog or hangs; only the user knows. Patch proposes the changeset's newer claim, owned
+      by the type doc
+    task: t4
+    after:
+    - t1
+- id: cross-1
+  at:
+  - internal/proxy/prompter.go:66-68
+  - internal/proxy/prompter_test.go:147-149
+  - internal/proxy/prompter.go:28-30
+  - internal/proxy/prompter_test.go:61-63
+  - internal/proxy/proxy.go:164-167
+  - internal/proxy/forward.go:69-71
+  reach:
+  - internal/proxy/prompter.go:23-46
+  - internal/proxy/prompter.go:60-74
+  - internal/proxy/prompter_test.go:60-66
+  - internal/proxy/prompter_test.go:143-150
+  - internal/proxy/proxy.go:164-167
+  - internal/proxy/forward.go:68-71
+  row: duplicated knowledge
+  claim: 'The reason the bridge exists (it pre-empts the gcr-prompter fallback on the backend bus) is
+    stated in four files: the prompterBridge type doc (prompter.go:28-33), the newPrompterBridge doc (prompter.go:64-68,
+    rewritten by the changeset), two test docs (prompter_test.go:61-63, :146-149), the call-site comment
+    at proxy.go:164-166, and the nameHasOwner doc at forward.go:69-71. The copies disagree. The changeset''s
+    text at prompter.go:66-68 and prompter_test.go:148-149 says the fallback draws a GTK dialog. proxy.go:166
+    and forward.go:71, which the changeset did not touch, still say it is display-less and the unlock
+    hangs, as does the type doc.'
+  fix: Ask the user which behaviour is true. State it once, in the prompterBridge type doc. proxy.go:164-167
+    keeps only 'No-op when the topology doesn't need it.' (or is dropped), and forward.go:68-71 drops
+    its prompter-bridge sentence. The constructor and test docs drop their copies. One task with b1-2
+    and b1-8.
+  decision: ASK
+  score: 9
+  reason: One fact in four files, and the copies contradict each other. Which side is true is a domain
+    fact the code cannot settle.
+  same:
+  - b1-2
+  - b1-8
+  triage:
+    id: cross-1
+    decision: ASK
+    score: 9
+    reason: same contradiction as b1-2, seen across files
+    task: t4
+    after:
+    - t1
+- id: b1-6
+  at:
+  - internal/proxy/prompter.go:23-46
+  reach:
+  - internal/proxy/prompter.go:23-46
+  row: interface read back
+  claim: 'The prompterBridge type doc is 24 lines. It opens with its own name and lists the protocol''s
+    methods for each direction, which is the interface read back. It also carries mechanism (WAYLAND_DISPLAY,
+    D-Bus activation) and the verbatim-payload fact, which has four copies (Fact E: prompter.go:34-36,
+    :141, :204-205, forward.go:39-41). These are unchanged lines, but the doc is the owner that b1-2 settles.'
+  fix: 'Two to three lines on its place in the system: ''The only route from the backend gnome-keyring
+    to the user''s unlock dialog. It owns the system prompter name on the backend bus so that gnome-keyring
+    never falls back to <the true fact from b1-2>, and it relays the prompter conversation to gnome-shell
+    without reading it.'' The per-direction method list moves to `//` comments at the Prompter and Callback
+    method groups. The verbatim fact stays on callForwarder only.'
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines that are not the root cause of a changed-line smell, apart from the fact b1-2
+    settles.
+  same:
+  - b1-2
+  triage:
+    id: b1-6
+    decision: ASK
+    score: 5
+    reason: the type doc is the owner b1-2 settles; rewriting it there is one fix, so it rides with the
+      ASK instead of a separate PLAN
+    task: t4
+    after:
+    - t1
+- id: b1-8
+  at:
+  - internal/proxy/forward.go:68-71
+  - internal/proxy/proxy.go:164-167
+  reach:
+  - internal/proxy/forward.go:68-71
+  - internal/proxy/proxy.go:164-167
+  row: wrong-layer doc
+  claim: The nameHasOwner doc explains its result with its caller ('which is what lets the prompter bridge
+    claim … before the display-less gcr-prompter fallback would be activated'). That is caller-layer text,
+    and it is another copy of Facts A and B. The proxy.go:164-167 call-site comment repeats the same reason.
+    nameHasOwner is still used in production (prompter.go:76, the backend check), so it is not test-only
+    after the changeset.
+  fix: nameHasOwner doc becomes 'Checks whether name currently has an owner on conn. A name that is activatable
+    but not running has none. Returns false when the query fails.' proxy.go:164-167 keeps only 'No-op
+    when the topology doesn't need it.' or is dropped.
+  decision: PLAN
+  score: 5
+  reason: Outside the batch and on unchanged lines. It becomes part of b1-2's task if the main agent folds
+    the dedup there.
+  same:
+  - b1-2
+  triage:
+    id: b1-8
+    decision: ASK
+    score: 5
+    reason: forward.go and proxy.go copies of the same fact; linked to b1-2 by same
+    task: t4
+    after:
+    - t1
+after:
+- ead6dc04d1
+check: ok

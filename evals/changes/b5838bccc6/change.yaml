@@ -1,0 +1,44 @@
+id: b5838bccc6
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: bad
+  note: new comments are not better than old
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-8
+  at:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  reach:
+  - internal/proxy/prompter_test.go:75-76
+  - internal/proxy/prompter_test.go:98
+  - e2e/gnome/vm/demo-driver-install.sh:138-139
+  row: ambiguous noun
+  claim: the changeset removed the front-bus guard nameHasOwner(frontConn, systemPrompterName) at HEAD
+    prompter.go:87, so the comment '(so the bridge's guard sees it and activates)' at prompter_test.go:75-76
+    and the assert message 'bridge should activate when the front bus has a prompter and the backend does
+    not' at :98 are now false; e2e/gnome/vm/demo-driver-install.sh:138-139 still says the bridge 're-establishes'
+    the forwarding after the relogin
+  fix: prompter_test.go:75-76 becomes 'gnome-shell's prompter on the front bus.'; the :98 message becomes
+    'bridge should be created when the backend bus has no prompter'; the demo script's parenthesis is
+    dropped or says the bridge holds the backend name from startup
+  decision: FIX
+  score: 9
+  reason: unchanged lines, but the changeset made them false; the fix belongs with the guard's removal
+    (§6)
+  same: []
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 9
+    reason: 'checked: prompter_test.go:75-76 and :98 describe the front-bus guard removed at HEAD prompter.go:87;
+      demo-driver-install.sh:138-139 says the bridge re-establishes after relogin, which it no longer
+      does'
+    task: t5
+check: ok

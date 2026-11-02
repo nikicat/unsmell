@@ -1,0 +1,75 @@
+id: f8cb7754f0
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-3
+  at:
+  - seb.py:20-22
+  - seb.py:57
+  reach:
+  - seb.py:19-24
+  - seb.py:57
+  - seb.py:91-95
+  - pyproject.toml:5-8
+  row: unparsed input
+  claim: 'settings arrive as raw env strings at import time: EB_APP_ID defaults to an all-zero placeholder
+    UUID that the API can only reject, EB_KEY is read from disk on import (importing seb fails without
+    private.pem), EB_REDIRECT is an unchecked str, and EB_ASPSP is read deep inside authorize() rather
+    than at the edge; with the argv date and the hardcoded paths that is about six settings at one edge'
+  fix: 'a pydantic-settings Settings(BaseSettings, env_prefix=''EB_'') with app_id: UUID (required), key:
+    FilePath, redirect: HttpUrl, aspsp: str = ''SEB'', read once in main and handed to the EnableBanking
+    client (b1-2)'
+  decision: ASK
+  score: 6
+  reason: a settings parser with validation is a library's job (§5); adds a dependency and makes EB_APP_ID
+    required, which a user can notice
+  same:
+  - b1-2
+  - b1-17
+  triage:
+    id: b1-3
+    decision: ASK
+    score: 6
+    reason: pydantic-settings is a new dependency and makes EB_APP_ID required
+    task: t3
+    after:
+    - t1
+- id: b1-18
+  at:
+  - seb.py:23
+  - seb.py:21
+  - seb.py:94
+  - seb.py:95
+  reach:
+  - seb.py:19-24
+  - seb.py:94-95
+  row: unparsed input
+  claim: private.pem, session.json and dengi.db resolve against the current directory while schema.sql
+    resolves against the module; run from another directory, the script creates a new empty ledger and
+    asks for a new login
+  fix: the paths become settings (b1-3) with one documented default base, e.g. a platformdirs/XDG data
+    directory, or the project directory
+  decision: ASK
+  score: 6
+  reason: changes where user data lives, which the user notices; several defensible bases
+  same:
+  - b1-3
+  triage:
+    id: b1-18
+    decision: ASK
+    score: 6
+    reason: where user data lives is user-visible; joins the settings task
+    task: t3
+    after:
+    - t1
+after:
+- 2233303edb
+check: ok

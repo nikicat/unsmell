@@ -1,0 +1,43 @@
+id: eaac504915
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-4
+  at:
+  - internal/notification/desktop.go:582-678
+  reach:
+  - internal/notification/desktop.go:582-678
+  row: if-forest
+  claim: formatBody is 97 lines with a switch on req.Type whose default arm switches on req.Type again,
+    inside a branch on whether a process chain exists (new vs legacy format). The changeset also added
+    a detail role at the top (the esc alias and two closures, desktop.go:585-615) to a function that was
+    decision plus assembly, so it now mixes three roles inline.
+  fix: 'After b1-1 and b1-3, split per request kind: gpgBody, sshBody and itemsBody (new format with chain)
+    / legacyBody (no chain), each writing to the markup builder; formatBody becomes the dispatch on req.Type.'
+  decision: PLAN
+  score: 5
+  reason: The nesting predates the changeset; b1-1 and b1-3 remove the added detail role and the duplicated
+    arms, so what is left is a pre-existing structural smell. Restructuring the rest churns about 60 lines
+    (score 7 minus 2).
+  same:
+  - b1-1
+  - b1-3
+  triage:
+    id: b1-4
+    decision: PLAN
+    score: 5
+    reason: the nested switch predates the changeset; t1 removes the added detail role
+    task: t3
+    after:
+    - t1
+after:
+- 11fbded8a9
+check: ok

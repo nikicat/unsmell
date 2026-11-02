@@ -1,0 +1,113 @@
+id: c103c86ba8
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261101-210501
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-01'
+findings:
+- id: b1-14
+  at:
+  - internal/proxy/prompter.go:201
+  - internal/proxy/prompter.go:161
+  reach:
+  - internal/proxy/prompter.go:159-162
+  - internal/proxy/prompter.go:199-202
+  row: speculative generality
+  claim: prompterCallback.logger is set in exportCallback and never read. PromptReady and PromptDone only
+    forward. This was already true at HEAD.
+  fix: Delete the field and its initialiser.
+  decision: PLAN
+  score: 5
+  reason: Dead code on unchanged lines, not caused by the change.
+  same: []
+  triage:
+    id: b1-14
+    decision: PLAN
+    score: 5
+    reason: dead field on unchanged lines, predates the change
+    task: t5
+- id: b1-15
+  at:
+  - internal/proxy/prompter.go:177-178
+  - internal/proxy/prompter.go:185-186
+  reach:
+  - internal/proxy/prompter.go:170-187
+  row: duplication
+  claim: '"Unexport a callback proxy and forget it", written as `_ = b.frontConn.Export(nil, path, prompterCallbackInterface);
+    delete(b.callbacks, path)`, appears in both unexportCallback and close.'
+  fix: Add an unexportLocked(path) helper that both call under mu.
+  decision: SKIP
+  score: 3
+  reason: A small tidy-up on unchanged lines.
+  same: []
+  triage:
+    id: b1-15
+    decision: SKIP
+    score: 3
+    reason: under threshold
+    task: t5
+- id: b1-16
+  at:
+  - internal/proxy/prompter.go:18
+  - internal/proxy/prompter.go:117
+  - internal/proxy/prompter_test.go:109
+  - internal/proxy/prompter_test.go:192
+  reach:
+  - internal/proxy/prompter.go:18
+  - internal/proxy/prompter.go:117
+  - internal/proxy/prompter_test.go:109
+  - internal/proxy/prompter_test.go:192
+  row: primitive obsession
+  claim: systemPrompterPath is an untyped string constant, but every use converts it with dbus.ObjectPath(...).
+  fix: Declare it as `systemPrompterPath dbus.ObjectPath = "/org/gnome/keyring/Prompter"` and drop the
+    conversions.
+  decision: SKIP
+  score: 3
+  reason: A small type tidy-up on unchanged lines.
+  same: []
+  triage:
+    id: b1-16
+    decision: SKIP
+    score: 3
+    reason: under threshold
+    task: t5
+- id: b1-17
+  at:
+  - internal/proxy/prompter.go:23
+  - internal/proxy/prompter.go:129
+  - internal/proxy/prompter.go:140
+  - internal/proxy/prompter.go:146
+  - internal/proxy/prompter.go:196
+  - internal/proxy/prompter.go:204
+  - internal/proxy/prompter.go:210
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  - internal/proxy/prompter_test.go:60
+  reach:
+  - internal/proxy/prompter.go:23
+  - internal/proxy/prompter.go:129-146
+  - internal/proxy/prompter.go:196-211
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  - internal/proxy/prompter_test.go:60
+  row: tautological comment
+  claim: These docs on unchanged items open with the declaration's own name. staticcheck's default config
+    does not enable ST1020-22, so no linter rule asks for the name. StopPrompting's doc also joins an
+    imperative half with a semicolon (:146).
+  fix: Drop each name and start at the verb (for functions) or at a noun phrase (for types).
+  decision: SKIP
+  score: 2
+  reason: Rewording correct docs on unchanged lines.
+  same: []
+  triage:
+    id: b1-17
+    decision: SKIP
+    score: 2
+    reason: under threshold, rewording correct docs on unchanged lines
+    task: t5
+check: ok

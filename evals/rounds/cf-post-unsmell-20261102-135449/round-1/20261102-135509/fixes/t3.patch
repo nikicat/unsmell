@@ -1,0 +1,345 @@
+diff --git a/src/bin/chainfold/evm/events.rs b/src/bin/chainfold/evm/events.rs
+index 6d43344..7296580 100644
+--- a/src/bin/chainfold/evm/events.rs
++++ b/src/bin/chainfold/evm/events.rs
+@@ -11,7 +11,7 @@ use chainfold::evm::{
+     CacheDb, ChainId, ChainProvider, DEFAULT_BLOCK_TIME, EvmEvent, EvmLogHistory, EvmPosition,
+     SubscribeTransport, Topic,
+ };
+-use chainfold::signatures::{resolve_event, topic_from_signature};
++use chainfold::signatures::{EventKey, resolve_event, topic_from_signature};
+ use futures_util::StreamExt;
+ 
+ use crate::cli::{EventsArgs, EvmArgs};
+@@ -169,14 +169,12 @@ async fn resolve_lookup(
+         let sig_cache = SqliteSignatureCache::new(cache.signatures());
+         // `signatures` is source-agnostic and speaks `[u8; 20]`/`[u8; 32]`;
+         // convert at this boundary.
+-        let resolved = resolve_event(
+-            &sig_cache,
+-            chain_id.get(),
+-            address.0.0,
+-            name,
+-            config.etherscan_api_key(),
+-        )
+-        .await?;
++        let key = EventKey {
++            chain_id: chain_id.get(),
++            address: address.0.0,
++            event_name: name,
++        };
++        let resolved = resolve_event(&sig_cache, key, config.etherscan_api_key()).await?;
+         return Ok(Lookup {
+             signature: Some(resolved.signature),
+             topic0: B256::from(resolved.topic0),
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 4f3704b..6fa8d61 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -2,10 +2,10 @@
+ //! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+ //! file for event-signature caching.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::B256;
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow, Topic};
+-use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
++use chainfold::evm::{EventSignatureCache, EventSignatureRow, Topic};
++use chainfold::signatures::{EventKey, ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+     cache: EventSignatureCache,
+@@ -19,14 +19,9 @@ impl SqliteSignatureCache {
+ 
+ #[async_trait]
+ impl SignatureCache for SqliteSignatureCache {
+-    async fn get(
+-        &self,
+-        chain_id: u64,
+-        address: [u8; 20],
+-        event_name: &str,
+-    ) -> Result<Option<ResolvedEvent>, SignatureError> {
++    async fn get(&self, key: EventKey<'_>) -> Result<Option<ResolvedEvent>, SignatureError> {
+         self.cache
+-            .get_event_signature(ChainId::new(chain_id), &Address::from(address), event_name)
++            .get_event_signature(&key.into())
+             .map(|opt| {
+                 opt.map(|row| ResolvedEvent {
+                     signature: row.signature,
+@@ -37,18 +32,10 @@ impl SignatureCache for SqliteSignatureCache {
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+ 
+-    async fn put(
+-        &self,
+-        chain_id: u64,
+-        address: [u8; 20],
+-        event_name: &str,
+-        entry: &ResolvedEvent,
+-    ) -> Result<(), SignatureError> {
++    async fn put(&self, key: EventKey<'_>, entry: &ResolvedEvent) -> Result<(), SignatureError> {
+         self.cache
+             .insert_event_signature(
+-                ChainId::new(chain_id),
+-                &Address::from(address),
+-                event_name,
++                &key.into(),
+                 &EventSignatureRow {
+                     signature: entry.signature.clone(),
+                     topic0: Topic::from(B256::from(entry.topic0)),
+diff --git a/src/evm.rs b/src/evm.rs
+index c1ac979..b505ba0 100644
+--- a/src/evm.rs
++++ b/src/evm.rs
+@@ -30,7 +30,8 @@ pub use types::{
+ 
+ pub use cache::{
+     BlockHeader, CACHE_VERSION, CacheDb, CacheError, CachedErc20Metadata, Erc20Cache,
+-    EventSignatureCache, EventSignatureRow, LogCache, compute_filter_hash, compute_gaps,
++    EventSignatureCache, EventSignatureKey, EventSignatureRow, LogCache, compute_filter_hash,
++    compute_gaps,
+     versioned_path,
+ };
+ pub use chain_provider::ChainProvider;
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index f0c2ee4..f7aebbc 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -30,7 +30,7 @@ mod event_signature_cache;
+ mod log_cache;
+ 
+ pub use erc20_cache::{CachedErc20Metadata, Erc20Cache};
+-pub use event_signature_cache::{EventSignatureCache, EventSignatureRow};
++pub use event_signature_cache::{EventSignatureCache, EventSignatureKey, EventSignatureRow};
+ pub use log_cache::{BlockHeader, LogCache, compute_filter_hash, compute_gaps};
+ 
+ /// `ChainId` persists as its underlying `u64` in an `INTEGER` column. Defining
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index 14f806c..f2ec396 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -12,6 +12,25 @@ use rusqlite::OptionalExtension;
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
++use crate::signatures::EventKey;
++
++/// Identifies a row of `event_signatures` by its primary key.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct EventSignatureKey<'a> {
++    pub chain_id: ChainId,
++    pub address: Address,
++    pub event_name: &'a str,
++}
++
++impl<'a> From<EventKey<'a>> for EventSignatureKey<'a> {
++    fn from(key: EventKey<'a>) -> Self {
++        Self {
++            chain_id: ChainId::new(key.chain_id),
++            address: Address::from(key.address),
++            event_name: key.event_name,
++        }
++    }
++}
+ 
+ /// A single resolved row from `event_signatures`.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -49,9 +68,7 @@ impl EventSignatureCache {
+ 
+     pub fn get_event_signature(
+         &self,
+-        chain_id: ChainId,
+-        address: &Address,
+-        event_name: &str,
++        key: &EventSignatureKey<'_>,
+     ) -> Result<Option<EventSignatureRow>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+         let mut stmt = conn.prepare_cached(
+@@ -59,7 +76,7 @@ impl EventSignatureCache {
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+         )?;
+         stmt.query_row(
+-            rusqlite::params![chain_id, address.as_slice(), event_name],
++            rusqlite::params![key.chain_id, key.address.as_slice(), key.event_name],
+             |row| {
+                 Ok(EventSignatureRow {
+                     signature: row.get(0)?,
+@@ -74,9 +91,7 @@ impl EventSignatureCache {
+ 
+     pub fn insert_event_signature(
+         &self,
+-        chain_id: ChainId,
+-        address: &Address,
+-        event_name: &str,
++        key: &EventSignatureKey<'_>,
+         row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+@@ -85,9 +100,9 @@ impl EventSignatureCache {
+              (chain_id, address, event_name, signature, topic0, abi_json)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             rusqlite::params![
+-                chain_id,
+-                address.as_slice(),
+-                event_name,
++                key.chain_id,
++                key.address.as_slice(),
++                key.event_name,
+                 row.signature,
+                 row.topic0,
+                 row.abi_json,
+@@ -110,14 +125,20 @@ mod tests {
+     const ADDR: Address = Address::repeat_byte(0x42);
+     const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
+ 
++    fn key(event_name: &str) -> EventSignatureKey<'_> {
++        EventSignatureKey {
++            chain_id: ChainId::new(1),
++            address: ADDR,
++            event_name,
++        }
++    }
++
+     #[test]
+     fn signature_round_trip_with_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+             .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Transfer",
++                &key("Transfer"),
+                 &EventSignatureRow {
+                     signature: "Transfer(address,address,uint256)".to_owned(),
+                     topic0: TOPIC0,
+@@ -126,7 +147,7 @@ mod tests {
+             )
+             .unwrap();
+         let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
++            .get_event_signature(&key("Transfer"))
+             .unwrap()
+             .unwrap();
+         assert_eq!(row.signature, "Transfer(address,address,uint256)");
+@@ -139,7 +160,7 @@ mod tests {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         assert!(
+             cache
+-                .get_event_signature(ChainId::new(1), &ADDR, "Nope")
++                .get_event_signature(&key("Nope"))
+                 .unwrap()
+                 .is_none()
+         );
+@@ -150,9 +171,7 @@ mod tests {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+             .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Approval",
++                &key("Approval"),
+                 &EventSignatureRow {
+                     signature: "Approval()".to_owned(),
+                     topic0: TOPIC0,
+@@ -161,7 +180,7 @@ mod tests {
+             )
+             .unwrap();
+         let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Approval")
++            .get_event_signature(&key("Approval"))
+             .unwrap()
+             .unwrap();
+         assert!(row.abi_json.is_none());
+diff --git a/src/signatures.rs b/src/signatures.rs
+index 746e686..8f38fb4 100644
+--- a/src/signatures.rs
++++ b/src/signatures.rs
+@@ -54,26 +54,24 @@ pub struct ResolvedEvent {
+     pub abi_json: Option<String>,
+ }
+ 
++/// Identifies one event of one contract on one chain. Lookups and cache
++/// entries are keyed by it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct EventKey<'a> {
++    pub chain_id: u64,
++    pub address: [u8; 20],
++    pub event_name: &'a str,
++}
++
+ /// Cache surface used by [`resolve_event`].
+ #[async_trait]
+ pub trait SignatureCache: Send + Sync {
+-    async fn get(
+-        &self,
+-        chain_id: u64,
+-        address: [u8; 20],
+-        event_name: &str,
+-    ) -> Result<Option<ResolvedEvent>, SignatureError>;
+-
+-    async fn put(
+-        &self,
+-        chain_id: u64,
+-        address: [u8; 20],
+-        event_name: &str,
+-        entry: &ResolvedEvent,
+-    ) -> Result<(), SignatureError>;
++    async fn get(&self, key: EventKey<'_>) -> Result<Option<ResolvedEvent>, SignatureError>;
++
++    async fn put(&self, key: EventKey<'_>, entry: &ResolvedEvent) -> Result<(), SignatureError>;
+ }
+ 
+-/// Resolve `(chain_id, contract address, event_name) → ResolvedEvent`.
++/// Resolve `key → ResolvedEvent`.
+ ///
+ /// Consults `cache` first; on miss (or on a cache hit missing `abi_json`),
+ /// fetches the contract ABI from Sourcify (always tried) and falls back to
+@@ -81,12 +79,10 @@ pub trait SignatureCache: Send + Sync {
+ /// resolution back through `cache`.
+ pub async fn resolve_event(
+     cache: &dyn SignatureCache,
+-    chain_id: u64,
+-    address: [u8; 20],
+-    event_name: &str,
++    key: EventKey<'_>,
+     etherscan_api_key: Option<&str>,
+ ) -> Result<ResolvedEvent, SignatureError> {
+-    if let Some(hit) = cache.get(chain_id, address, event_name).await?
++    if let Some(hit) = cache.get(key).await?
+         && hit.abi_json.is_some()
+     {
+         return Ok(hit);
+@@ -94,14 +90,14 @@ pub async fn resolve_event(
+     let client = reqwest::Client::builder()
+         .timeout(Duration::from_secs(30))
+         .build()?;
+-    let abi_json = fetch_abi_json(&client, chain_id, address, etherscan_api_key).await?;
+-    let (signature, topic0, item_json) = event_from_abi(&abi_json, event_name)?;
++    let abi_json = fetch_abi_json(&client, key.chain_id, key.address, etherscan_api_key).await?;
++    let (signature, topic0, item_json) = event_from_abi(&abi_json, key.event_name)?;
+     let entry = ResolvedEvent {
+         signature,
+         topic0,
+         abi_json: Some(item_json),
+     };
+-    cache.put(chain_id, address, event_name, &entry).await?;
++    cache.put(key, &entry).await?;
+     Ok(entry)
+ }
+ 
+@@ -109,12 +105,10 @@ pub async fn resolve_event(
+ /// [`resolve_event`] for callers that don't need decoding.
+ pub async fn resolve_event_topic(
+     cache: &dyn SignatureCache,
+-    chain_id: u64,
+-    address: [u8; 20],
+-    event_name: &str,
++    key: EventKey<'_>,
+     etherscan_api_key: Option<&str>,
+ ) -> Result<(String, [u8; 32]), SignatureError> {
+-    let r = resolve_event(cache, chain_id, address, event_name, etherscan_api_key).await?;
++    let r = resolve_event(cache, key, etherscan_api_key).await?;
+     Ok((r.signature, r.topic0))
+ }
+ 

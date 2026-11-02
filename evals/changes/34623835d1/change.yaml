@@ -1,0 +1,37 @@
+id: 34623835d1
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t10
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-15
+  at:
+  - internal/notification/desktop.go:30
+  - internal/notification/desktop.go:161-220
+  reach:
+  - internal/notification/desktop.go:26-220
+  - internal/notification/slow_upstream.go:12-16
+  row: data clump
+  claim: summary, body and icon travel together through Notify, doNotify, doNotifyFull, NotifyPersistent
+    and persistentNotifier; with the markup invariant of b1-1 the body is the one part that needs its
+    own type.
+  fix: Options for the user. (a) A notification struct {summary, body markup, icon} passed to the Notifier
+    methods. (b) Keep the strings and type only the body. Both change the exported Notifier interface.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines and an exported interface (would be an ASK if in scope).
+  same:
+  - b1-1
+  triage:
+    id: b1-15
+    decision: PLAN
+    score: 5
+    reason: unchanged lines and the exported Notifier interface
+    task: t10
+check: ok

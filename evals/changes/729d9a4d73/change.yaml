@@ -1,0 +1,40 @@
+id: 729d9a4d73
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-14
+  at:
+  - internal/proxy/prompter.go:73-74
+  - internal/proxy/prompter.go:77-78
+  reach:
+  - internal/proxy/prompter.go:73-78
+  - internal/proxy/proxy.go:164-167
+  row: duplicated knowledge
+  claim: the (nil, nil) no-bridge-needed contract is stated in newPrompterBridge's doc (prompter.go:73-74),
+    the comment at its check (prompter.go:77-78) and the caller's comment (proxy.go:166-167)
+  fix: newPrompterBridge's doc owns it; the proxy.go comment says only that a nil bridge means none is
+    needed, or drops it
+  decision: PLAN
+  score: 5
+  reason: unchanged lines, one copy outside the batch
+  same:
+  - b1-4
+  triage:
+    id: b1-14
+    decision: PLAN
+    score: 5
+    reason: copies at prompter.go:77-78 and proxy.go:164-167 are unchanged lines
+    task: t8
+    after:
+    - t3
+after:
+- 4bbb595b0f
+check: ok

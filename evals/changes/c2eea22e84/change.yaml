@@ -1,0 +1,46 @@
+id: c2eea22e84
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-12
+  at:
+  - src/evm/cache/event_signature_cache.rs:48-53
+  - src/evm/cache/event_signature_cache.rs:79-83
+  - src/bin/chainfold/signature_cache.rs:22-27
+  - src/bin/chainfold/signature_cache.rs:40-45
+  reach:
+  - src/signatures.rs:59-123
+  - src/evm/cache/event_signature_cache.rs:48-103
+  - src/bin/chainfold/signature_cache.rs:20-58
+  row: data clump
+  claim: 'The cache key (chain_id, address, event_name) is threaded through get_event_signature, insert_event_signature,
+    SignatureCache::get/put, resolve_event and resolve_event_topic: six functions, three values that always
+    travel together.
+
+    '
+  fix: 'an `EventSignatureKey { chain_id: ChainId, address: Address, event_name }` (borrowed name) passed
+    as one value through all six'
+  decision: PLAN
+  score: 6
+  reason: full data-clump tell, but on unchanged lines and across the public signatures trait
+  same:
+  - b1-3
+  triage:
+    id: b1-12
+    decision: PLAN
+    score: 6
+    reason: data clump on unchanged lines that crosses the public trait; stacked on t3, which rewrites
+      the same signatures
+    task: t5
+    after: t3
+after:
+- 1f4303c719
+check: ok

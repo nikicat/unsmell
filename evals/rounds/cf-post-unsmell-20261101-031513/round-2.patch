@@ -1,0 +1,191 @@
+diff --git a/TODO.md b/TODO.md
+index 90b42ba..33764a5 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -182,4 +182,35 @@ lines. Each is self-contained.
+ - **`erc20_cache.rs` repeats the hand-rolled optional row.**
+   `src/evm/cache/erc20_cache.rs:114-121,151-158` use `query_map` + `rows.next()`
+   + `match` with an inline `len() == 32` check. Use `query_row(..).optional()`
+-  and `Topic::from_slice` / `B256::try_from`, as `get_event_signature` now does.
++  and `Topic::try_from_slice` / `B256::try_from`, as `get_event_signature` now does.
++
++## Unsmell follow-ups — `src/evm/types.rs` docs and constructors (2026-11-01, second pass)
++
++Found on unchanged lines of `src/evm/types.rs` while reviewing the
++`Topic::try_from_slice` addition.
++
++- **Module doc reads back its contents.** `src/evm/types.rs:1` lists the types
++  after a colon. Rewrite as what the module decides (the EVM domain newtypes
++  everything chainfold-facing speaks).
++- **Long type docs carry history and mechanism.** `ChainId` (`:17-22`), `Topic`
++  (`:55-62`), `FilterHash` (`:132-143`), `LogIdx` (`:175-186`), `BlockNumber`
++  (`:264-272`, reads back its methods) and `:320-333`. Cut "pre-newtype"
++  history and where `ToSql` lives; state each type's place in the system.
++- **Compressed docs.** Colons or semicolons join a second idea at `:62`,
++  `:133`, `:142`, `:292`, `:360`, `:497`. `Topic::address` (`:87`) is
++  imperative ("Interpret…") rather than third person.
++- **Callers' reasons in docs.** `Topic::as_slice` "for hashing / `SQLite`
++  binds" (`:82`), and the hex-formatting notes at `:152`, `:157`. Drop them.
++- **Two constructors per newtype.** `new` and `From<prim>` both exist for
++  `ChainId` (`:30`/`:45`), `Topic` (`:67`/`:94`), `:207`/`:234`, `:295`/`:304`.
++  Pick one per type and update callers.
++- **`EvmPosition::new(block: u64, log_index: u32)`** (`:353`) takes raw integers
++  next to existing `BlockNumber`/`LogIdx` types; adjacent ints are easy to swap.
++- **`Amount.decimals` and `Erc20.decimals` must agree** (`:417-421`, `:485`)
++  but nothing ties them. Options: `Amount` borrows decimals from its token, or
++  a constructor that takes the `Erc20`.
++- **`Erc20Transfer/Mint/Burn` repeat `event, token, amount`** (`:452-474`).
++  Options: one struct with a `kind` enum, or a shared inner struct.
++- **`log_cache.rs:446` `B256::from_slice` panics on a short stored topic.**
++  Read it with `Topic::try_from_slice` and decide whether a malformed row is a
++  miss or a `CacheError`.
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index 8f32c60..b155eb1 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -8,7 +8,7 @@
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+ use alloy::primitives::{Address, B256};
+-use rusqlite::OptionalExtension;
++use rusqlite::{OptionalExtension, Row};
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+@@ -48,6 +48,23 @@ impl From<&ResolvedEvent> for EventSignatureRow {
+     }
+ }
+ 
++impl EventSignatureRow {
++    /// Reads the cached entry from `row`, one result row of an
++    /// `event_signatures` query. Returns `None` instead of an error when the
++    /// stored topic is not a valid [`Topic`] (see [`Topic::try_from_slice`]).
++    fn from_sql(row: &Row<'_>) -> rusqlite::Result<Option<Self>> {
++        let topic: Vec<u8> = row.get("topic0")?;
++        let Some(topic0) = Topic::try_from_slice(&topic) else {
++            return Ok(None);
++        };
++        Ok(Some(Self {
++            signature: row.get("signature")?,
++            topic0,
++            abi_json: row.get("abi_json")?,
++        }))
++    }
++}
++
+ /// Durable SQLite-backed event-signature cache.
+ pub struct EventSignatureCache {
+     conn: SharedConn,
+@@ -70,6 +87,8 @@ impl EventSignatureCache {
+         Ok(super::CacheDb::open_in_memory()?.signatures())
+     }
+ 
++    /// Returns the row cached for `event_name` on the contract at `address`,
++    /// or `None` when no well-formed row is cached.
+     pub fn get_event_signature(
+         &self,
+         chain_id: ChainId,
+@@ -84,24 +103,14 @@ impl EventSignatureCache {
+         let found = stmt
+             .query_row(
+                 rusqlite::params![chain_id, address.as_slice(), event_name],
+-                |row| {
+-                    let topic: Vec<u8> = row.get(1)?;
+-                    // A malformed topic reads as a miss, so the resolver
+-                    // fetches the event again and overwrites the row.
+-                    let Some(topic0) = Topic::from_slice(&topic) else {
+-                        return Ok(None);
+-                    };
+-                    Ok(Some(EventSignatureRow {
+-                        signature: row.get(0)?,
+-                        topic0,
+-                        abi_json: row.get(2)?,
+-                    }))
+-                },
++                EventSignatureRow::from_sql,
+             )
+             .optional()?;
+         Ok(found.flatten())
+     }
+ 
++    /// Stores `row` for `event_name` on the contract at `address`, replacing
++    /// any row already cached for it.
+     pub fn insert_event_signature(
+         &self,
+         chain_id: ChainId,
+@@ -150,6 +159,12 @@ mod tests {
+         assert_eq!(got.as_ref(), Some(row));
+     }
+ 
++    /// Asserts that looking up `event_name` in `cache` finds nothing.
++    fn assert_miss(cache: &EventSignatureCache, event_name: &str) {
++        let got = cache.get_event_signature(CHAIN, &ADDR, event_name).unwrap();
++        assert!(got.is_none());
++    }
++
+     #[test]
+     fn signature_round_trip_with_abi() {
+         assert_round_trips(
+@@ -165,12 +180,7 @@ mod tests {
+     #[test]
+     fn signature_missing_returns_none() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+-        assert!(
+-            cache
+-                .get_event_signature(CHAIN, &ADDR, "Nope")
+-                .unwrap()
+-                .is_none()
+-        );
++        assert_miss(&cache, "Nope");
+     }
+ 
+     #[test]
+@@ -187,23 +197,25 @@ mod tests {
+ 
+     #[test]
+     fn signature_malformed_topic_reads_as_miss() {
++        let event_name = "Short";
+         let cache = EventSignatureCache::open_in_memory().unwrap();
++        let row = EventSignatureRow {
++            signature: "Short()".to_owned(),
++            topic0: TOPIC0,
++            abi_json: None,
++        };
++        cache
++            .insert_event_signature(CHAIN, &ADDR, event_name, &row)
++            .unwrap();
+         cache
+             .conn
+             .lock()
+             .unwrap()
+             .execute(
+-                "INSERT INTO event_signatures
+-                 (chain_id, address, event_name, signature, topic0, abi_json)
+-                 VALUES (?1, ?2, 'Short', 'Short()', ?3, NULL)",
+-                rusqlite::params![CHAIN, ADDR.as_slice(), [0xDDu8; 31].as_slice()],
++                "UPDATE event_signatures SET topic0 = ?1",
++                [&TOPIC0.as_slice()[1..]],
+             )
+             .unwrap();
+-        assert!(
+-            cache
+-                .get_event_signature(CHAIN, &ADDR, "Short")
+-                .unwrap()
+-                .is_none()
+-        );
++        assert_miss(&cache, event_name);
+     }
+ }
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 7178711..1384b2e 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -75,7 +75,7 @@ impl Topic {
+ 
+     /// Returns the topic held in `bytes`, or `None` when `bytes` is not 32
+     /// bytes long.
+-    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
++    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+         B256::try_from(bytes).ok().map(Self)
+     }
+ 

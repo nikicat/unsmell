@@ -1,0 +1,8 @@
+line-length = 120
+target-version = "py312"
+# The fixtures are code under review, smells included; only the eval scripts are held to this config.
+extend-exclude = ["evals/fixtures"]
+force-exclude = true
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "ANN"]

@@ -1,0 +1,32 @@
+id: 0775a36f60
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t4
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-9
+  at:
+  - internal/notification/desktop_test.go:790-802
+  reach:
+  - internal/notification/desktop_test.go:790-802
+  row: inline generic machinery
+  claim: contains/stringContains hand-roll strings.Contains; the changeset's new test uses testify assert.Contains
+    beside them, so the file now has two styles for the same check.
+  fix: Delete both helpers and use strings.Contains (or assert.Contains) at every call site.
+  decision: PLAN
+  score: 5
+  reason: Unchanged lines, not the cause of a smell on changed lines.
+  same: []
+  triage:
+    id: b1-9
+    decision: PLAN
+    score: 5
+    reason: unchanged lines
+    task: t4
+check: ok

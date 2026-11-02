@@ -1,0 +1,243 @@
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index e3433e5..f563231 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -578,53 +578,72 @@ func commitSubject(msg string) string {
+ 	return msg
+ }
+ 
++// Returns the markup body of the notification for req.
+ func (h *Handler) formatBody(req *approval.Request) string {
+ 	var b bodyMarkup
+-
+-	switch req.Type {
+-	case approval.RequestTypeGPGSign:
+-		if req.GPGSignInfo != nil {
+-			b.bold(req.GPGSignInfo.RepoName)
+-			b.text(": ")
+-			b.italic(commitSubject(req.GPGSignInfo.CommitMsg))
+-			b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
+-		}
+-	case approval.RequestTypeSSHSign:
+-		// Show key label and destination
+-		if len(req.Items) > 0 {
+-			b.bold(req.Items[0].Label)
+-			if dest, ok := req.Items[0].Attributes["destination"]; ok && dest != "" {
+-				b.text(" → " + dest)
+-			}
+-		}
+-		b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
++	switch {
++	case req.Type == approval.RequestTypeGPGSign:
++		h.gpgBody(&b, req)
++	case req.Type == approval.RequestTypeSSHSign:
++		h.sshBody(&b, req)
++	case len(req.SenderInfo.ProcessChain) > 0:
++		h.itemsBody(&b, req)
+ 	default:
+-		if len(req.SenderInfo.ProcessChain) > 0 {
+-			// New format: item label, then process chain (parent → child order)
+-			if subject, ok := requestSubject(req); ok {
+-				b.bold(subject)
+-			}
+-			b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
+-		} else {
+-			// Fallback: old format for remote requests without process chain
+-			if req.SenderInfo.InvokerName != "" {
+-				b.bold(req.SenderInfo.InvokerName)
+-				b.text(fmt.Sprintf("@%s[%d]: ", req.Client, req.SenderInfo.PID))
+-			} else if req.SenderInfo.PID != 0 {
+-				b.bold(req.Client)
+-				b.text(fmt.Sprintf("[%d]: ", req.SenderInfo.PID))
+-			} else {
+-				b.bold(req.Client)
+-				b.text(": ")
+-			}
++		legacyBody(&b, req)
++	}
++	return b.String()
++}
+ 
+-			if subject, ok := requestSubject(req); ok {
+-				b.italic(subject)
+-			}
++// Writes the repo name, the commit subject and the process chain. Writes
++// nothing when req has no signing info.
++func (h *Handler) gpgBody(b *bodyMarkup, req *approval.Request) {
++	info := req.GPGSignInfo
++	if info == nil {
++		return
++	}
++	b.bold(info.RepoName)
++	b.text(": ")
++	b.italic(commitSubject(info.CommitMsg))
++	b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
++}
++
++// Writes the key label, the destination when there is one, and the process
++// chain.
++func (h *Handler) sshBody(b *bodyMarkup, req *approval.Request) {
++	if len(req.Items) > 0 {
++		b.bold(req.Items[0].Label)
++		if dest := req.Items[0].Attributes["destination"]; dest != "" {
++			b.text(" → " + dest)
+ 		}
+ 	}
++	b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
++}
+ 
+-	return b.String()
++// Writes the request subject, then the process chain from parent to child.
++func (h *Handler) itemsBody(b *bodyMarkup, req *approval.Request) {
++	if subject, ok := requestSubject(req); ok {
++		b.bold(subject)
++	}
++	b.processChain(req.SenderInfo.ProcessChain, h.showPIDs)
++}
++
++// Writes the sender and the request subject for a request without a process
++// chain, such as one from a remote client.
++func legacyBody(b *bodyMarkup, req *approval.Request) {
++	switch {
++	case req.SenderInfo.InvokerName != "":
++		b.bold(req.SenderInfo.InvokerName)
++		b.text(fmt.Sprintf("@%s[%d]: ", req.Client, req.SenderInfo.PID))
++	case req.SenderInfo.PID != 0:
++		b.bold(req.Client)
++		b.text(fmt.Sprintf("[%d]: ", req.SenderInfo.PID))
++	default:
++		b.bold(req.Client)
++		b.text(": ")
++	}
++	if subject, ok := requestSubject(req); ok {
++		b.italic(subject)
++	}
+ }
+ 
+ // Returns the plain text that names what req asks for. For a get, delete or
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index e38a2ff..8ffcaf8 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -533,6 +533,121 @@ func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+ 	}
+ }
+ 
++// Pins the whole body for each request kind, including the edge cases of each.
++func TestHandler_FormatBody_Exact(t *testing.T) {
++	chain := []approval.ProcessInfo{{Name: "bash", PID: 100}, {Name: "git", PID: 200}}
++
++	tests := []struct {
++		name     string
++		showPIDs bool
++		req      *approval.Request
++		want     string
++	}{
++		{
++			name:     "gpg with chain and pids",
++			showPIDs: true,
++			req: &approval.Request{
++				Type:        approval.RequestTypeGPGSign,
++				GPGSignInfo: &approval.GPGSignInfo{RepoName: "repo", CommitMsg: "subj\nbody"},
++				SenderInfo:  approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>repo</b>: <i>subj</i>\nbash[100] ← git[200]",
++		},
++		{
++			name: "gpg without info",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGPGSign,
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "",
++		},
++		{
++			name: "ssh with destination",
++			req: &approval.Request{
++				Type:       approval.RequestTypeSSHSign,
++				Items:      []approval.ItemInfo{{Label: "key", Attributes: map[string]string{"destination": "host"}}},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>key</b> → host\nbash ← git",
++		},
++		{
++			name: "ssh with empty destination",
++			req: &approval.Request{
++				Type:  approval.RequestTypeSSHSign,
++				Items: []approval.ItemInfo{{Label: "key", Attributes: map[string]string{"destination": ""}}},
++			},
++			want: "<b>key</b>",
++		},
++		{
++			name: "ssh without items",
++			req: &approval.Request{
++				Type:       approval.RequestTypeSSHSign,
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "\nbash ← git",
++		},
++		{
++			name: "items with chain",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGetSecret,
++				Items:      []approval.ItemInfo{{Label: "a"}, {Label: "b"}},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>2 items</b>\nbash ← git",
++		},
++		{
++			name: "search all with chain",
++			req: &approval.Request{
++				Type:       approval.RequestTypeSearch,
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>all</b>\nbash ← git",
++		},
++		{
++			name: "unlock with chain",
++			req: &approval.Request{
++				Type:       approval.RequestTypeUnlock,
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "\nbash ← git",
++		},
++		{
++			name: "legacy invoker",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGetSecret,
++				Client:     "c",
++				Items:      []approval.ItemInfo{{Label: "l"}},
++				SenderInfo: approval.SenderInfo{InvokerName: "svc", PID: 42},
++			},
++			want: "<b>svc</b>@c[42]: <i>l</i>",
++		},
++		{
++			name: "legacy pid only",
++			req: &approval.Request{
++				Type:       approval.RequestTypeSearch,
++				Client:     "c",
++				SenderInfo: approval.SenderInfo{PID: 42},
++			},
++			want: "<b>c</b>[42]: <i>all</i>",
++		},
++		{
++			name: "legacy unlock bare client",
++			req: &approval.Request{
++				Type:   approval.RequestTypeUnlock,
++				Client: "c",
++			},
++			want: "<b>c</b>: ",
++		},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			h := NewHandler(&mockNotifier{}, &mockApprover{}, "http://127.0.0.1:8484", tc.showPIDs, 2*time.Minute, 0)
++			assert.Equal(t, tc.want, h.formatBody(tc.req))
++		})
++	}
++}
++
+ func TestHandler_OnEvent_DeleteRequest(t *testing.T) {
+ 	h, mock, _ := newTestHandler()
+ 

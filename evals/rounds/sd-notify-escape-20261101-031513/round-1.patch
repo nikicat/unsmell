@@ -1,0 +1,458 @@
+diff --git a/TODO.md b/TODO.md
+index 7636cd7..521e599 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -12,3 +12,15 @@
+ - [x] Implement CLI for approving/rejecting
+ - [ ] Refactor
+ - [ ] Proxy webserver mode for development - load webapp from vite webserver instead of embedded html
++
++## Unsmell run 2026-11-01: notification markup escaping
++
++- [ ] `internal/notification/slow_upstream.go:formatSlowUpstreamBody` and `desktop.go:Handler.writeProcessChain` both render the process chain with " ← " (the slow-upstream comment says "matching desktop.go"). They differ in the leading newline and PIDs. Make one `markup` method that both call.
++- [ ] `internal/notification/desktop.go:searchAttrsText` and `internal/cli/format.go:formatAttrs` both render search attributes as "k=v, k=v"; the CLI copy is unsorted. Move one sorted formatter into `approval` and use it in both.
++- [ ] `internal/notification/desktop.go`: the SSH `"destination"` attribute key is written in `sshagent/proxy.go:73` and read here. Give it one named constant (or a typed field on the request).
++- [ ] `internal/notification/desktop.go:46`: the `Action` doc says "approve" or "deny", but six action keys exist, and the key literals are split between `sendNotification`/`handleCancelled` and `handleAction`. Use typed constants.
++- [ ] `internal/notification/desktop.go:161-236`: "retry once after reconnect on ErrClosed" is written three times (Notify, NotifyPersistent, Close). Extract one helper. The urgency `2` appears four times as a magic number.
++- [ ] `internal/notification/desktop.go:310,513-523`: `cancelledRequests` is written and pruned but never read. Delete it, or wire up the auto-approve lookup it was meant for. Its 5-minute expiry is stated in a comment and in the literal.
++- [ ] `internal/notification/desktop.go:326`: `NewHandler` takes six parameters, with two adjacent `time.Duration`s. Use an options struct.
++- [ ] `internal/notification/desktop.go` and `desktop_test.go`: about 25 doc comments open with their declaration's own name. The test file's `contains`/`stringContains` reimplement `strings.Contains`.
++- [ ] Notification bodies are sent as markup without checking the server's `body-markup` capability. A server without it shows `&lt;` literally.
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..2f1cef8 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -5,9 +5,10 @@ import (
+ 	"context"
+ 	"errors"
+ 	"fmt"
+-	"html"
+ 	"log/slog"
++	"maps"
+ 	"os/exec"
++	"slices"
+ 	"strings"
+ 	"sync"
+ 	"time"
+@@ -580,99 +581,112 @@ func commitSubject(msg string) string {
+ }
+ 
+ func (h *Handler) formatBody(req *approval.Request) string {
+-	var b strings.Builder
+-
+-	// esc escapes client-controlled substrings before they are interpolated into
+-	// the org.freedesktop.Notifications markup body. Every dynamic value here
+-	// (repo/commit/label/search attrs, and process comm which is itself
+-	// attacker-settable via prctl) must be escaped; only our own literal <b>/<i>
+-	// tags are emitted raw. The notification carries approve/deny action buttons,
+-	// so unescaped markup could forge reassuring content on the consent surface.
+-	esc := html.EscapeString
+-
+-	// writeChain appends the process chain (comm names), escaping each name.
+-	writeChain := func(chain []approval.ProcessInfo) {
+-		for i, p := range chain {
+-			if i == 0 {
+-				b.WriteString("\n")
+-			} else {
+-				b.WriteString(" ← ")
+-			}
+-			b.WriteString(esc(p.Name))
+-			if h.showPIDs {
+-				fmt.Fprintf(&b, "[%d]", p.PID)
+-			}
+-		}
+-	}
+-
+-	// escapedSearchAttrs renders "k=v, k=v" with keys and values escaped.
+-	escapedSearchAttrs := func() string {
+-		attrs := make([]string, 0, len(req.SearchAttributes))
+-		for k, v := range req.SearchAttributes {
+-			attrs = append(attrs, fmt.Sprintf("%s=%s", esc(k), esc(v)))
+-		}
+-		return strings.Join(attrs, ", ")
+-	}
++	var m markup
+ 
+ 	switch req.Type {
+ 	case approval.RequestTypeGPGSign:
+ 		if req.GPGSignInfo != nil {
+-			fmt.Fprintf(&b, "<b>%s</b>: <i>%s</i>", esc(req.GPGSignInfo.RepoName), esc(commitSubject(req.GPGSignInfo.CommitMsg)))
+-			writeChain(req.SenderInfo.ProcessChain)
++			writeGPGSubject(&m, req.GPGSignInfo)
++			h.writeProcessChain(&m, req.SenderInfo.ProcessChain)
+ 		}
+ 	case approval.RequestTypeSSHSign:
+-		// Show key label and destination
+ 		if len(req.Items) > 0 {
+-			fmt.Fprintf(&b, "<b>%s</b>", esc(req.Items[0].Label))
+-			if dest, ok := req.Items[0].Attributes["destination"]; ok && dest != "" {
+-				fmt.Fprintf(&b, " → %s", esc(dest))
+-			}
++			writeSSHSubject(&m, req.Items[0])
+ 		}
+-		writeChain(req.SenderInfo.ProcessChain)
++		h.writeProcessChain(&m, req.SenderInfo.ProcessChain)
+ 	default:
++		subject, hasSubject := itemsSubject(req)
+ 		if len(req.SenderInfo.ProcessChain) > 0 {
+-			// New format: item label, then process chain (parent → child order)
+-			switch req.Type {
+-			case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+-				if len(req.Items) == 1 {
+-					fmt.Fprintf(&b, "<b>%s</b>", esc(req.Items[0].Label))
+-				} else {
+-					fmt.Fprintf(&b, "<b>%d items</b>", len(req.Items))
+-				}
+-			case approval.RequestTypeSearch:
+-				if len(req.SearchAttributes) > 0 {
+-					fmt.Fprintf(&b, "<b>%s</b>", escapedSearchAttrs())
+-				} else {
+-					b.WriteString("<b>all</b>")
+-				}
++			if hasSubject {
++				m.bold(subject)
+ 			}
+-			writeChain(req.SenderInfo.ProcessChain)
++			h.writeProcessChain(&m, req.SenderInfo.ProcessChain)
+ 		} else {
+-			// Fallback: old format for remote requests without process chain
+-			if req.SenderInfo.InvokerName != "" {
+-				fmt.Fprintf(&b, "<b>%s</b>@%s[%d]: ", esc(req.SenderInfo.InvokerName), esc(req.Client), req.SenderInfo.PID)
+-			} else if req.SenderInfo.PID != 0 {
+-				fmt.Fprintf(&b, "<b>%s</b>[%d]: ", esc(req.Client), req.SenderInfo.PID)
+-			} else {
+-				fmt.Fprintf(&b, "<b>%s</b>: ", esc(req.Client))
++			// Remote requests carry no process chain, so the sender comes first.
++			writeSender(&m, req)
++			if hasSubject {
++				m.italic(subject)
+ 			}
++		}
++	}
+ 
+-			switch req.Type {
+-			case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
+-				if len(req.Items) == 1 {
+-					fmt.Fprintf(&b, "<i>%s</i>", esc(req.Items[0].Label))
+-				} else {
+-					fmt.Fprintf(&b, "<i>%d items</i>", len(req.Items))
+-				}
+-			case approval.RequestTypeSearch:
+-				if len(req.SearchAttributes) > 0 {
+-					fmt.Fprintf(&b, "<i>%s</i>", escapedSearchAttrs())
+-				} else {
+-					b.WriteString("<i>all</i>")
+-				}
+-			}
++	return m.String()
++}
++
++// Appends the repository in bold and the commit subject in italics.
++func writeGPGSubject(m *markup, info *approval.GPGSignInfo) {
++	m.bold(info.RepoName)
++	m.text(": ")
++	m.italic(commitSubject(info.CommitMsg))
++}
++
++// Appends the key label in bold and the destination host, when the request
++// names one.
++func writeSSHSubject(m *markup, key approval.ItemInfo) {
++	m.bold(key.Label)
++	if dest := key.Attributes["destination"]; dest != "" {
++		m.text(" → " + dest)
++	}
++}
++
++// Appends the process chain on a new line, starting with the requesting
++// process. Each process name is followed by its PID when the handler shows PIDs.
++func (h *Handler) writeProcessChain(m *markup, chain []approval.ProcessInfo) {
++	for i, p := range chain {
++		if i == 0 {
++			m.text("\n")
++		} else {
++			m.text(" ← ")
++		}
++		m.text(p.Name)
++		if h.showPIDs {
++			m.textf("[%d]", p.PID)
++		}
++	}
++}
++
++// Appends who sent the request. With an invoker name, the invoker is bold
++// and the client and PID follow it. Otherwise the client is bold, followed by
++// the PID when it is nonzero.
++func writeSender(m *markup, req *approval.Request) {
++	switch {
++	case req.SenderInfo.InvokerName != "":
++		m.bold(req.SenderInfo.InvokerName)
++		m.textf("@%s[%d]: ", req.Client, req.SenderInfo.PID)
++	case req.SenderInfo.PID != 0:
++		m.bold(req.Client)
++		m.textf("[%d]: ", req.SenderInfo.PID)
++	default:
++		m.bold(req.Client)
++		m.text(": ")
++	}
++}
++
++// Returns what a get, write, delete or search request is about. For a single
++// item, that is its label, and for any other number of items, the count. For a
++// search, it is the search attributes, or "all" when there are none. The
++// second result is false for any other request type.
++func itemsSubject(req *approval.Request) (string, bool) {
++	switch req.Type {
++	case approval.RequestTypeGetSecret, approval.RequestTypeDelete, approval.RequestTypeWrite:
++		if len(req.Items) == 1 {
++			return req.Items[0].Label, true
+ 		}
++		return fmt.Sprintf("%d items", len(req.Items)), true
++	case approval.RequestTypeSearch:
++		if len(req.SearchAttributes) == 0 {
++			return "all", true
++		}
++		return searchAttrsText(req.SearchAttributes), true
+ 	}
++	return "", false
++}
+ 
+-	return b.String()
++// Returns the search attributes as "k=v, k=v", sorted by key.
++func searchAttrsText(attrs map[string]string) string {
++	pairs := make([]string, 0, len(attrs))
++	for _, k := range slices.Sorted(maps.Keys(attrs)) {
++		pairs = append(pairs, k+"="+attrs[k])
++	}
++	return strings.Join(pairs, ", ")
+ }
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..b8837ac 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -416,11 +416,9 @@ func TestHandler_FormatBody_GPGSign_PIDOnly(t *testing.T) {
+ 	}
+ }
+ 
+-// TestHandler_FormatBody_EscapesInjectedMarkup is the regression test for Vuln 7:
+-// client-controlled fields must be HTML-escaped before being interpolated into the
+-// notification markup body, so an attacker cannot forge reassuring markup on the
+-// (directly actionable) consent surface. The notification carries approve/deny
+-// buttons, so injected bold/italic text would aid a consent spoof.
++// Client-supplied values must reach the body as escaped text. The notification
++// carries the approve and deny buttons, so markup injected by a client could
++// make a malicious request look trustworthy.
+ func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+ 	h, mock, _ := newTestHandler()
+ 
+@@ -448,14 +446,56 @@ func TestHandler_FormatBody_EscapesInjectedMarkup(t *testing.T) {
+ 	assert.NotContains(t, body, "<script>", "injected repo markup must be escaped")
+ 	assert.NotContains(t, body, "evil</b><b>git", "injected process-name markup must be escaped")
+ 
+-	// The content is still present, escaped.
++	// The content is still present, escaped, inside our own tags.
+ 	assert.Contains(t, body, "&lt;b&gt;Verified", "escaped commit text should be present")
+-	assert.Contains(t, body, "repo&lt;script&gt;", "escaped repo name should be present")
+-
+-	// Our own wrapping markup is intact.
+ 	assert.Contains(t, body, "<b>repo&lt;script&gt;</b>", "our own <b> tag must remain literal")
+ }
+ 
++func TestHandler_FormatBody_EscapesRequestText(t *testing.T) {
++	h, _, _ := newTestHandler()
++	chain := []approval.ProcessInfo{{Name: "<u>git", PID: 9}}
++
++	tests := []struct {
++		name string
++		req  *approval.Request
++		want string
++	}{
++		{
++			name: "ssh destination",
++			req: &approval.Request{
++				Type:       approval.RequestTypeSSHSign,
++				Items:      []approval.ItemInfo{{Label: "<u>key", Attributes: map[string]string{"destination": "<u>host"}}},
++				SenderInfo: approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>&lt;u&gt;key</b> → &lt;u&gt;host\n&lt;u&gt;git",
++		},
++		{
++			name: "search attributes with process chain",
++			req: &approval.Request{
++				Type:             approval.RequestTypeSearch,
++				SearchAttributes: map[string]string{"b<u>": "2", "a": "<u>1"},
++				SenderInfo:       approval.SenderInfo{ProcessChain: chain},
++			},
++			want: "<b>a=&lt;u&gt;1, b&lt;u&gt;=2</b>\n&lt;u&gt;git",
++		},
++		{
++			name: "remote invoker and client",
++			req: &approval.Request{
++				Type:       approval.RequestTypeGetSecret,
++				Client:     "<u>client",
++				Items:      []approval.ItemInfo{{Label: "<u>secret"}},
++				SenderInfo: approval.SenderInfo{InvokerName: "<u>proc", PID: 7},
++			},
++			want: "<b>&lt;u&gt;proc</b>@&lt;u&gt;client[7]: <i>&lt;u&gt;secret</i>",
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			assert.Equal(t, tt.want, h.formatBody(tt.req))
++		})
++	}
++}
++
+ func TestHandler_OnEvent_DeleteRequest(t *testing.T) {
+ 	h, mock, _ := newTestHandler()
+ 
+diff --git a/internal/notification/markup.go b/internal/notification/markup.go
+new file mode 100644
+index 0000000..fd1454b
+--- /dev/null
++++ b/internal/notification/markup.go
+@@ -0,0 +1,44 @@
++package notification
++
++import (
++	"fmt"
++	"html"
++	"strings"
++)
++
++// A notification body in the markup subset of the Desktop Notifications spec.
++// Text written through it is escaped, so the only markup in the body is the
++// tags that it writes itself.
++type markup struct {
++	b strings.Builder
++}
++
++func (m *markup) text(s string) {
++	m.b.WriteString(html.EscapeString(s))
++}
++
++func (m *markup) textf(format string, args ...any) {
++	m.text(fmt.Sprintf(format, args...))
++}
++
++func (m *markup) bold(s string) {
++	m.tagged("b", s)
++}
++
++func (m *markup) italic(s string) {
++	m.tagged("i", s)
++}
++
++func (m *markup) tagged(tag, s string) {
++	fmt.Fprintf(&m.b, "<%s>", tag)
++	m.text(s)
++	fmt.Fprintf(&m.b, "</%s>", tag)
++}
++
++func (m *markup) empty() bool {
++	return m.b.Len() == 0
++}
++
++func (m *markup) String() string {
++	return m.b.String()
++}
+diff --git a/internal/notification/markup_test.go b/internal/notification/markup_test.go
+new file mode 100644
+index 0000000..9b398d2
+--- /dev/null
++++ b/internal/notification/markup_test.go
+@@ -0,0 +1,16 @@
++package notification
++
++import "testing"
++
++func TestMarkup_EscapesTextInsideOwnTags(t *testing.T) {
++	var m markup
++	m.bold("<i>a&b")
++	m.text(" ")
++	m.italic(`"q"`)
++	m.textf(" [%s]", "</b>")
++
++	want := "<b>&lt;i&gt;a&amp;b</b> <i>&#34;q&#34;</i> [&lt;/b&gt;]"
++	if got := m.String(); got != want {
++		t.Errorf("got %q, want %q", got, want)
++	}
++}
+diff --git a/internal/notification/slow_upstream.go b/internal/notification/slow_upstream.go
+index 9623e37..3e7ca78 100644
+--- a/internal/notification/slow_upstream.go
++++ b/internal/notification/slow_upstream.go
+@@ -1,7 +1,6 @@
+ package notification
+ 
+ import (
+-	"fmt"
+ 	"log/slog"
+ 	"strings"
+ 
+@@ -75,37 +74,35 @@ func itemDisplayLabel(item approval.ItemInfo) string {
+ 	return item.Path
+ }
+ 
+-// formatSlowUpstreamBody builds the notification body from item labels and
+-// optional process chain.
++// Returns the notification body. It names the items, and the process chain
++// on its own line when the request has one.
+ func formatSlowUpstreamBody(ctx proxy.UpstreamCallContext) string {
+-	var b strings.Builder
++	var m markup
+ 
+-	// Item labels (fall back to Path when Label is empty)
+ 	switch len(ctx.Items) {
+ 	case 0:
+-		// no items
+ 	case 1:
+-		b.WriteString(itemDisplayLabel(ctx.Items[0]))
++		m.text(itemDisplayLabel(ctx.Items[0]))
+ 	default:
+ 		labels := make([]string, len(ctx.Items))
+ 		for i, item := range ctx.Items {
+ 			labels[i] = itemDisplayLabel(item)
+ 		}
+-		fmt.Fprintf(&b, "%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
++		m.textf("%s (%d items)", strings.Join(labels, ", "), len(ctx.Items))
+ 	}
+ 
+ 	// Process chain (Name ← Name convention, matching desktop.go)
+ 	if len(ctx.SenderInfo.ProcessChain) > 0 {
+-		if b.Len() > 0 {
+-			b.WriteString("\n")
++		if !m.empty() {
++			m.text("\n")
+ 		}
+ 		for i, p := range ctx.SenderInfo.ProcessChain {
+ 			if i > 0 {
+-				b.WriteString(" \u2190 ")
++				m.text(" \u2190 ")
+ 			}
+-			b.WriteString(p.Name)
++			m.text(p.Name)
+ 		}
+ 	}
+ 
+-	return b.String()
++	return m.String()
+ }
+diff --git a/internal/notification/slow_upstream_test.go b/internal/notification/slow_upstream_test.go
+index 0a58570..481e2fd 100644
+--- a/internal/notification/slow_upstream_test.go
++++ b/internal/notification/slow_upstream_test.go
+@@ -276,3 +276,14 @@ func TestSlowUpstreamNotifier_ProcessChainOnly(t *testing.T) {
+ 		t.Errorf("unexpected body: %q", mock.notified[0].body)
+ 	}
+ }
++
++func TestFormatSlowUpstreamBody_EscapesMarkup(t *testing.T) {
++	ctx := proxy.UpstreamCallContext{
++		Items:      []approval.ItemInfo{{Label: "<b>secret"}},
++		SenderInfo: approval.SenderInfo{ProcessChain: []approval.ProcessInfo{{Name: "<i>gpg"}}},
++	}
++	want := "&lt;b&gt;secret\n&lt;i&gt;gpg"
++	if got := formatSlowUpstreamBody(ctx); got != want {
++		t.Errorf("unexpected body:\ngot:  %q\nwant: %q", got, want)
++	}
++}

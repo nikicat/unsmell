@@ -1,0 +1,16 @@
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 8596f73..013027d 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -33,8 +33,9 @@ pub use log_cache::{BlockHeader, LogCache, compute_filter_hash, compute_gaps};
+ // Versioning
+ // ============================================================
+ 
+-/// Bump this when cache schema or semantics change.
+-/// The version is appended to the DB filename so stale caches are bypassed.
++/// Bump this when a change to the cache schema or its semantics cannot be
++/// applied to an existing cache by a migration in `migrations`. The version
++/// is appended to the DB filename, so a bump abandons every existing cache.
+ pub const CACHE_VERSION: u32 = 3;
+ 
+ /// Inserts the cache version before the file extension.

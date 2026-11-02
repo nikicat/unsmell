@@ -1,0 +1,56 @@
+diff --git a/internal/approval/manager.go b/internal/approval/manager.go
+index 7b998d4..9f40bba 100644
+--- a/internal/approval/manager.go
++++ b/internal/approval/manager.go
+@@ -64,6 +64,10 @@ type ItemInfo struct {
+ 	Attributes map[string]string `json:"attributes"`
+ }
+ 
++// The ItemInfo.Attributes key that holds the host an ssh_sign request
++// connects to.
++const AttrSSHDestination = "destination"
++
+ // RequestType indicates the type of secret access request.
+ type RequestType string
+ 
+diff --git a/internal/notification/desktop.go b/internal/notification/desktop.go
+index 4a8dc83..7e5f293 100644
+--- a/internal/notification/desktop.go
++++ b/internal/notification/desktop.go
+@@ -624,7 +624,7 @@ func (h *Handler) formatBody(req *approval.Request) string {
+ 		// Show key label and destination
+ 		if len(req.Items) > 0 {
+ 			fmt.Fprintf(&b, "<b>%s</b>", esc(req.Items[0].Label))
+-			if dest, ok := req.Items[0].Attributes["destination"]; ok && dest != "" {
++			if dest := req.Items[0].Attributes[approval.AttrSSHDestination]; dest != "" {
+ 				fmt.Fprintf(&b, " → %s", esc(dest))
+ 			}
+ 		}
+diff --git a/internal/sshagent/proxy.go b/internal/sshagent/proxy.go
+index c11e6e9..4d356a0 100644
+--- a/internal/sshagent/proxy.go
++++ b/internal/sshagent/proxy.go
+@@ -70,7 +70,7 @@ func (p *proxyAgent) signWithApproval(key ssh.PublicKey, data []byte, flags agen
+ 		"fingerprint": fingerprint,
+ 	}
+ 	if p.destination != "" {
+-		attrs["destination"] = p.destination
++		attrs[approval.AttrSSHDestination] = p.destination
+ 	}
+ 
+ 	items := []approval.ItemInfo{{
+diff --git a/internal/sshagent/proxy_test.go b/internal/sshagent/proxy_test.go
+index ed9408e..c96cd5a 100644
+--- a/internal/sshagent/proxy_test.go
++++ b/internal/sshagent/proxy_test.go
+@@ -109,8 +109,8 @@ func TestProxyAgent_SignApproved(t *testing.T) {
+ 	if req.Items[0].Label != "test-key@localhost" {
+ 		t.Errorf("expected label %q, got %q", "test-key@localhost", req.Items[0].Label)
+ 	}
+-	if req.Items[0].Attributes["destination"] != "example.com" {
+-		t.Errorf("expected destination %q, got %q", "example.com", req.Items[0].Attributes["destination"])
++	if dest := req.Items[0].Attributes[approval.AttrSSHDestination]; dest != "example.com" {
++		t.Errorf("expected destination %q, got %q", "example.com", dest)
+ 	}
+ 
+ 	// Approve

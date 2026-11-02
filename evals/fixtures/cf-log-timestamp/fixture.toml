@@ -1,0 +1,4 @@
+# Rust, 3 files, 90 lines: a perf change in the EVM event path. Small tier.
+source = "~/src/chainfold"
+commit = "d1133bb"
+check = "CARGO_TARGET_DIR=$HOME/.cache/unsmell-eval/target/chainfold cargo check --all-targets --all-features --locked"

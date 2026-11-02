@@ -1,0 +1,303 @@
+diff --git a/TODO.md b/TODO.md
+index 33764a5..ee9e5d7 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -160,7 +160,7 @@ lines. Each is self-contained.
+   bytes stay raw there; the conversion now lives in
+   `event_signature_cache.rs` `From` impls. Revisit if `signatures` ever takes
+   an EVM dependency.
+-- **Unused `EventSignatureCache::open`.** `src/evm/cache/event_signature_cache.rs:39`
++- **Unused `EventSignatureCache::open`.** `src/evm/cache/event_signature_cache.rs` (`EventSignatureCache::open`)
+   has no callers; `open_in_memory` is test-only. Delete `open`, or keep both if
+   the standalone-open pattern of `log_cache.rs`/`erc20_cache.rs` is deliberate
+   (then `path: &str` → `&Path` across all three).
+@@ -182,7 +182,7 @@ lines. Each is self-contained.
+ - **`erc20_cache.rs` repeats the hand-rolled optional row.**
+   `src/evm/cache/erc20_cache.rs:114-121,151-158` use `query_map` + `rows.next()`
+   + `match` with an inline `len() == 32` check. Use `query_row(..).optional()`
+-  and `Topic::try_from_slice` / `B256::try_from`, as `get_event_signature` now does.
++  and `Topic::try_from` / `B256::try_from`, as `get_event_signature` now does.
+ 
+ ## Unsmell follow-ups — `src/evm/types.rs` docs and constructors (2026-11-01, second pass)
+ 
+@@ -212,5 +212,21 @@ Found on unchanged lines of `src/evm/types.rs` while reviewing the
+ - **`Erc20Transfer/Mint/Burn` repeat `event, token, amount`** (`:452-474`).
+   Options: one struct with a `kind` enum, or a shared inner struct.
+ - **`log_cache.rs:446` `B256::from_slice` panics on a short stored topic.**
+-  Read it with `Topic::try_from_slice` and decide whether a malformed row is a
++  Read it with `Topic::try_from` and decide whether a malformed row is a
+   miss or a `CacheError`.
++
++## Unsmell follow-ups — `EventSignatureRow` SQL binding (2026-11-01, third pass)
++
++- **`EventSignatureRow` and `ResolvedEvent` are twin structs.**
++  `src/evm/cache/event_signature_cache.rs` `EventSignatureRow` has exactly the
++  fields of `ResolvedEvent` (`src/signatures.rs`); the two `From` impls only
++  copy fields and convert `topic0` between `Topic` and `[u8; 32]`. Merge them
++  once the "`ResolvedEvent.topic0: [u8; 32]`" entry above is decided: the cache
++  then stores and returns `ResolvedEvent` directly.
++- **`Topic::b256` doc carries a caller's reason.** `src/evm/types.rs` "for the
++  alloy boundary" on `Topic::b256`. Drop it.
++- **`EvmEvent` doc carries a caller's reason.** `src/evm/types.rs` `EvmEvent`:
++  "so consumers don't need to round-trip the store for them". Drop it.
++- **`FilterHash::as_bytes` and `as_slice` both return the same bytes.**
++  `src/evm/types.rs`. Keep one and update callers.
++
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index e246a16..4098004 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
+ use rusqlite::Connection;
+ use rusqlite::types::{ToSql, ToSqlOutput};
+ 
+-use crate::evm::types::{ChainId, FilterHash};
++use crate::evm::types::{ChainId, FilterHash, Topic};
+ 
+ mod erc20_cache;
+ mod event_signature_cache;
+@@ -55,6 +55,15 @@ impl ToSql for FilterHash {
+     }
+ }
+ 
++/// `Topic` persists as its 32 raw bytes in a `BLOB` column. It has no
++/// `FromSql`, because each reader decides what a stored topic of the wrong
++/// length means.
++impl ToSql for Topic {
++    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
++        Ok(ToSqlOutput::from(self.as_slice()))
++    }
++}
++
+ // ============================================================
+ // Versioning
+ // ============================================================
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b155eb1..e6e199d 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -8,7 +8,8 @@
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+ use alloy::primitives::{Address, B256};
+-use rusqlite::{OptionalExtension, Row};
++use rusqlite::types::ToSql;
++use rusqlite::{OptionalExtension, Row, params, params_from_iter};
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+@@ -49,12 +50,20 @@ impl From<&ResolvedEvent> for EventSignatureRow {
+ }
+ 
+ impl EventSignatureRow {
+-    /// Reads the cached entry from `row`, one result row of an
+-    /// `event_signatures` query. Returns `None` instead of an error when the
+-    /// stored topic is not a valid [`Topic`] (see [`Topic::try_from_slice`]).
++    /// The `event_signatures` columns that a row fills. [`Self::sql_values`]
++    /// binds them in this order.
++    const COLUMNS: &str = "signature, topic0, abi_json";
++
++    fn sql_values(&self) -> [&dyn ToSql; 3] {
++        [&self.signature, &self.topic0, &self.abi_json]
++    }
++
++    /// Reads the cached entry from one result row of an `event_signatures`
++    /// query. It returns `None` for a malformed row, as
++    /// [`EventSignatureCache::get_event_signature`] describes.
+     fn from_sql(row: &Row<'_>) -> rusqlite::Result<Option<Self>> {
+         let topic: Vec<u8> = row.get("topic0")?;
+-        let Some(topic0) = Topic::try_from_slice(&topic) else {
++        let Ok(topic0) = Topic::try_from(topic.as_slice()) else {
+             return Ok(None);
+         };
+         Ok(Some(Self {
+@@ -87,8 +96,9 @@ impl EventSignatureCache {
+         Ok(super::CacheDb::open_in_memory()?.signatures())
+     }
+ 
+-    /// Returns the row cached for `event_name` on the contract at `address`,
+-    /// or `None` when no well-formed row is cached.
++    /// Returns the row cached for `event_name` on the contract at `address` on
++    /// chain `chain_id`. Returns `None` when no row is cached, or when the
++    /// cached row's topic is not 32 bytes long.
+     pub fn get_event_signature(
+         &self,
+         chain_id: ChainId,
+@@ -96,21 +106,23 @@ impl EventSignatureCache {
+         event_name: &str,
+     ) -> Result<Option<EventSignatureRow>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(
+-            "SELECT signature, topic0, abi_json FROM event_signatures
++        let mut stmt = conn.prepare_cached(&format!(
++            "SELECT {} FROM event_signatures
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+-        )?;
++            EventSignatureRow::COLUMNS,
++        ))?;
+         let found = stmt
+             .query_row(
+-                rusqlite::params![chain_id, address.as_slice(), event_name],
++                params![chain_id, address.as_slice(), event_name],
+                 EventSignatureRow::from_sql,
+             )
+             .optional()?;
+         Ok(found.flatten())
+     }
+ 
+-    /// Stores `row` for `event_name` on the contract at `address`, replacing
+-    /// any row already cached for it.
++    /// Stores `row` for `event_name` on the contract at `address` on chain
++    /// `chain_id`. It replaces any row already cached for the same event name,
++    /// contract and chain.
+     pub fn insert_event_signature(
+         &self,
+         chain_id: ChainId,
+@@ -119,18 +131,16 @@ impl EventSignatureCache {
+         row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
++        let key = params![chain_id, address.as_slice(), event_name];
++        let values: Vec<&dyn ToSql> = key.iter().copied().chain(row.sql_values()).collect();
++        let placeholders = vec!["?"; values.len()].join(", ");
+         conn.execute(
+-            "INSERT OR REPLACE INTO event_signatures
+-             (chain_id, address, event_name, signature, topic0, abi_json)
+-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+-            rusqlite::params![
+-                chain_id,
+-                address.as_slice(),
+-                event_name,
+-                row.signature,
+-                row.topic0.as_slice(),
+-                row.abi_json,
+-            ],
++            &format!(
++                "INSERT OR REPLACE INTO event_signatures
++                 (chain_id, address, event_name, {}) VALUES ({placeholders})",
++                EventSignatureRow::COLUMNS,
++            ),
++            params_from_iter(values),
+         )?;
+         Ok(())
+     }
+@@ -148,13 +158,28 @@ mod tests {
+     const ADDR: Address = Address::repeat_byte(0x42);
+     const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
+ 
+-    /// Asserts that `row` reads back unchanged after it is stored under
+-    /// `event_name`.
+-    fn assert_round_trips(event_name: &str, row: &EventSignatureRow) {
++    /// Returns a row for `signature` with the test topic.
++    fn row(signature: &str, abi_json: Option<&str>) -> EventSignatureRow {
++        EventSignatureRow {
++            signature: signature.to_owned(),
++            topic0: TOPIC0,
++            abi_json: abi_json.map(str::to_owned),
++        }
++    }
++
++    /// Returns a fresh in-memory cache that holds `row` under `event_name`.
++    fn cache_with(event_name: &str, row: &EventSignatureRow) -> EventSignatureCache {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+             .insert_event_signature(CHAIN, &ADDR, event_name, row)
+             .unwrap();
++        cache
++    }
++
++    /// Asserts that `row` reads back unchanged after it is stored under
++    /// `event_name`.
++    fn assert_round_trips(event_name: &str, row: &EventSignatureRow) {
++        let cache = cache_with(event_name, row);
+         let got = cache.get_event_signature(CHAIN, &ADDR, event_name).unwrap();
+         assert_eq!(got.as_ref(), Some(row));
+     }
+@@ -169,11 +194,10 @@ mod tests {
+     fn signature_round_trip_with_abi() {
+         assert_round_trips(
+             "Transfer",
+-            &EventSignatureRow {
+-                signature: "Transfer(address,address,uint256)".to_owned(),
+-                topic0: TOPIC0,
+-                abi_json: Some("{\"type\":\"event\"}".to_owned()),
+-            },
++            &row(
++                "Transfer(address,address,uint256)",
++                Some("{\"type\":\"event\"}"),
++            ),
+         );
+     }
+ 
+@@ -185,28 +209,13 @@ mod tests {
+ 
+     #[test]
+     fn signature_nullable_abi() {
+-        assert_round_trips(
+-            "Approval",
+-            &EventSignatureRow {
+-                signature: "Approval()".to_owned(),
+-                topic0: TOPIC0,
+-                abi_json: None,
+-            },
+-        );
++        assert_round_trips("Approval", &row("Approval()", None));
+     }
+ 
+     #[test]
+     fn signature_malformed_topic_reads_as_miss() {
+         let event_name = "Short";
+-        let cache = EventSignatureCache::open_in_memory().unwrap();
+-        let row = EventSignatureRow {
+-            signature: "Short()".to_owned(),
+-            topic0: TOPIC0,
+-            abi_json: None,
+-        };
+-        cache
+-            .insert_event_signature(CHAIN, &ADDR, event_name, &row)
+-            .unwrap();
++        let cache = cache_with(event_name, &row("Short()", None));
+         cache
+             .conn
+             .lock()
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 1384b2e..7c16fc0 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -3,6 +3,7 @@
+ //! Source-agnostic core lives in [`crate::arch`]; this module is the
+ //! EVM-specific counterpart referenced by the rest of `crate::evm`.
+ 
++use std::array::TryFromSliceError;
+ use std::ops::{Add, Sub};
+ use std::sync::Arc;
+ 
+@@ -73,12 +74,6 @@ impl Topic {
+         self.0
+     }
+ 
+-    /// Returns the topic held in `bytes`, or `None` when `bytes` is not 32
+-    /// bytes long.
+-    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+-        B256::try_from(bytes).ok().map(Self)
+-    }
+-
+     /// Raw bytes, for hashing / `SQLite` binds.
+     pub fn as_slice(&self) -> &[u8] {
+         self.0.as_slice()
+@@ -97,6 +92,15 @@ impl From<B256> for Topic {
+     }
+ }
+ 
++/// Errors when the slice is not 32 bytes long.
++impl TryFrom<&[u8]> for Topic {
++    type Error = TryFromSliceError;
++
++    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
++        B256::try_from(bytes).map(Self)
++    }
++}
++
+ impl From<Address> for Topic {
+     /// An indexed `address` event parameter is the address left-padded with 12
+     /// zero bytes (alloy's [`Address::into_word`]).

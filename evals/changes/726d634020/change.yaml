@@ -1,0 +1,36 @@
+id: 726d634020
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-12
+  at:
+  - schema.sql:17-20
+  reach:
+  - schema.sql:17-20
+  row: misleading name
+  claim: the comment says tx_code is the ISO 20022 domain/family/sub-family, but the first part is bank_transaction_code.description,
+    which in Enable Banking's BankTransactionCode is a free-text description rather than the domain code;
+    if so the comment (and the PMNT/CCRD/OTHR example) is false
+  fix: 'check a stored raw row: if description is free text, either build tx_code from code/sub_code only
+    and keep description in its own column, or correct the comment to state what the parts are'
+  decision: ASK
+  score: 9
+  reason: a possibly false comment; needs one real row to settle, and the fix may change a stored column
+  same: []
+  triage:
+    id: b1-12
+    decision: FIX
+    score: 9
+    reason: 'confirmed false: Enable Banking documents description as ''Arbitrary transaction categorization
+      description''; the comment-only fix keeps the stored column. Building tx_code from code/sub_code
+      only is a stored-schema alternative left to the user'
+    task: t7
+check: ok

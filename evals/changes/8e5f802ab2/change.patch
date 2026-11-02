@@ -1,0 +1,41 @@
+diff --git a/seb.py b/seb.py
+index 9ddddb8..7342f8f 100644
+--- a/seb.py
++++ b/seb.py
+@@ -42,15 +42,15 @@ class Config:
+ @dataclass(frozen=True)
+ class Account:
+     uid: str
+-    iban: str | None
++    # The ledger key. The uid changes with each session, so it cannot be one.
++    iban: str
+ 
+     @classmethod
+     def from_json(cls, acc):
+-        return cls(acc["uid"], acc.get("account_id", {}).get("iban"))
+-
+-    @property
+-    def ledger_key(self):
+-        return self.iban or self.uid
++        """Errors when the bank gives the account no IBAN."""
++        if not (iban := acc.get("account_id", {}).get("iban")):
++            sys.exit(f"account {acc['uid']} has no IBAN to store its transactions under")
++        return cls(acc["uid"], iban)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -187,11 +187,11 @@ def main():
+     bank = EnableBanking(Config.from_env(), psu_headers())
+     ledger = Ledger.open(LEDGER)
+     for acc in bank.session().accounts:
+-        since = start or ledger.last_booking_date(acc.ledger_key)
++        since = start or ledger.last_booking_date(acc.iban)
+         # pending transactions have no entry_reference, which is half of the key
+         txs = [t for t in bank.transactions(acc.uid, since) if t["status"] == "BOOK"]
+-        new = ledger.store(acc.ledger_key, txs)
+-        print(f"{acc.ledger_key}: {len(txs)} booked fetched {f'since {since}' if since else 'for all history'}, {new} new")
++        new = ledger.store(acc.iban, txs)
++        print(f"{acc.iban}: {len(txs)} booked fetched {f'since {since}' if since else 'for all history'}, {new} new")
+ 
+ 
+ if __name__ == "__main__":

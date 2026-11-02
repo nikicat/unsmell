@@ -1,0 +1,32 @@
+id: 2c08ca1582
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b2-32
+judge: null
+labels: []
+findings:
+- id: b2-32
+  at:
+  - evals/changes.py:48
+  - evals/changes.py:159
+  reach:
+  - evals/changes.py:48
+  - evals/changes.py:159
+  row: wrong-layer doc
+  claim: CURRENT's comment names its callers ('which show and label use when given none') and tokens'
+    doc gives the caller's reason ('for comparing changes') in a noun phrase instead of a verb.
+  fix: '"The id of the change in the review repo." and "Returns the words of a change''s changed lines
+    and of its findings'' claims."'
+  decision: SKIP
+  score: 3
+  reason: a true doc fact that adds little
+  same: []
+  triage:
+    id: b2-32
+    decision: SKIP
+    score: 3
+    reason: a true doc fact that adds little
+    task: skip-b2-32
+check: ok

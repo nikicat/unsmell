@@ -1,0 +1,117 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..4f3704b 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -4,7 +4,7 @@
+ 
+ use alloy::primitives::{Address, B256};
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, Topic};
++use chainfold::evm::{ChainId, EventSignatureCache, EventSignatureRow, Topic};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -49,9 +49,11 @@ impl SignatureCache for SqliteSignatureCache {
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+-                &entry.signature,
+-                Topic::from(B256::from(entry.topic0)),
+-                entry.abi_json.as_deref(),
++                &EventSignatureRow {
++                    signature: entry.signature.clone(),
++                    topic0: Topic::from(B256::from(entry.topic0)),
++                    abi_json: entry.abi_json.clone(),
++                },
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b862c0e..364aa0a 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -79,9 +79,7 @@ impl EventSignatureCache {
+         chain_id: ChainId,
+         address: &Address,
+         event_name: &str,
+-        signature: &str,
+-        topic0: Topic,
+-        abi_json: Option<&str>,
++        row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+         conn.execute(
+@@ -92,9 +90,9 @@ impl EventSignatureCache {
+                 chain_id,
+                 address.as_slice(),
+                 event_name,
+-                signature,
+-                topic0,
+-                abi_json,
++                row.signature,
++                row.topic0,
++                row.abi_json,
+             ],
+         )?;
+         Ok(())
+@@ -117,23 +115,18 @@ mod tests {
+     #[test]
+     fn signature_round_trip_with_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
++        let row = EventSignatureRow {
++            signature: "Transfer(address,address,uint256)".to_owned(),
++            topic0: TOPIC0,
++            abi_json: Some("{\"type\":\"event\"}".to_owned()),
++        };
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Transfer",
+-                "Transfer(address,address,uint256)",
+-                TOPIC0,
+-                Some("{\"type\":\"event\"}"),
+-            )
++            .insert_event_signature(ChainId::new(1), &ADDR, "Transfer", &row)
+             .unwrap();
+-        let row = cache
++        let stored = cache
+             .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
+-            .unwrap()
+             .unwrap();
+-        assert_eq!(row.signature, "Transfer(address,address,uint256)");
+-        assert_eq!(row.topic0, TOPIC0);
+-        assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
++        assert_eq!(stored, Some(row));
+     }
+ 
+     #[test]
+@@ -150,20 +143,17 @@ mod tests {
+     #[test]
+     fn signature_nullable_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
++        let row = EventSignatureRow {
++            signature: "Approval()".to_owned(),
++            topic0: TOPIC0,
++            abi_json: None,
++        };
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Approval",
+-                "Approval()",
+-                TOPIC0,
+-                None,
+-            )
++            .insert_event_signature(ChainId::new(1), &ADDR, "Approval", &row)
+             .unwrap();
+-        let row = cache
++        let stored = cache
+             .get_event_signature(ChainId::new(1), &ADDR, "Approval")
+-            .unwrap()
+             .unwrap();
+-        assert!(row.abi_json.is_none());
++        assert_eq!(stored, Some(row));
+     }
+ }

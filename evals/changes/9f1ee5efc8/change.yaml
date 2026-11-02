@@ -1,0 +1,38 @@
+id: 9f1ee5efc8
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t8
+judge: null
+labels:
+- label: bad
+  note: should be implemented by using a full-blown config/env parser with schema validation
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-16
+  at:
+  - seb.py:20
+  reach:
+  - seb.py:20
+  row: speculative generality
+  claim: The EB_APP_ID default "00000000-0000-4000-8000-000000000000" is a placeholder that no API accepts.
+    A missing setting therefore shows up as an API 401 instead of naming the variable.
+  fix: Config.from_env (b1-2) requires EB_APP_ID and exits with "EB_APP_ID is not set" when it is missing.
+  decision: SKIP
+  score: 4
+  reason: The failure is still loud (a 401). It changes the CLI error behaviour for little gain.
+  same:
+  - b1-2
+  triage:
+    id: b1-16
+    decision: SKIP
+    score: 4
+    reason: the failure is already loud
+    task: t8
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

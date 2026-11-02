@@ -1,0 +1,85 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 0eec47d..76ce365 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -69,7 +69,7 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 	return b, nil
+ }
+ 
+-// activate claims org.gnome.keyring.SystemPrompter on the backend bus BEFORE any
++// Claims org.gnome.keyring.SystemPrompter on the backend bus BEFORE any
+ // client triggers an unlock, so gnome-keyring's prompter calls land on us and
+ // the gcr-prompter fallback is never activated, then exports the bridge.
+ // Idempotent, and a no-op after close(). DoNotQueue: if something already owns
+@@ -102,7 +102,7 @@ func (b *prompterBridge) activate() error {
+ 
+ // --- Prompter interface (received from gnome-keyring on the backend bus) ---
+ 
+-// BeginPrompting starts a prompt. The callback object lives on gnome-keyring's
++// Starts a prompt. The callback object lives on gnome-keyring's
+ // backend connection; before forwarding to gnome-shell we export a proxy for it
+ // on the front connection so gnome-shell's PromptReady callbacks reach us.
+ func (b *prompterBridge) BeginPrompting(msg dbus.Message, callback dbus.ObjectPath) *dbus.Error {
+@@ -113,13 +113,13 @@ func (b *prompterBridge) BeginPrompting(msg dbus.Message, callback dbus.ObjectPa
+ 	return b.toShell.forwardVoid(msg)
+ }
+ 
+-// PerformPrompt drives one round of the prompt (shows the dialog, collects the
++// Drives one round of the prompt (shows the dialog, collects the
+ // reply). Pure pass-through; the exchange payload is opaque to us.
+ func (b *prompterBridge) PerformPrompt(msg dbus.Message, callback dbus.ObjectPath, promptType string, properties map[string]dbus.Variant, exchange string) *dbus.Error {
+ 	return b.toShell.forwardVoid(msg)
+ }
+ 
+-// StopPrompting ends the prompt; tear down the callback proxy afterward.
++// Ends the prompt; tear down the callback proxy afterward.
+ func (b *prompterBridge) StopPrompting(msg dbus.Message, callback dbus.ObjectPath) *dbus.Error {
+ 	err := b.toShell.forwardVoid(msg)
+ 	b.unexportCallback(callback)
+@@ -169,7 +169,7 @@ func (b *prompterBridge) close() {
+ 	}
+ }
+ 
+-// prompterCallback is the front-bus proxy for a gnome-keyring callback object.
++// The front-bus proxy for a gnome-keyring callback object.
+ // gnome-shell calls PromptReady here; we forward it to gnome-keyring's real
+ // callback on the backend bus.
+ type prompterCallback struct {
+@@ -177,13 +177,13 @@ type prompterCallback struct {
+ 	logger    *logging.Logger
+ }
+ 
+-// PromptReady relays the prompter's reply (including the exchange payload with
++// Relays the prompter's reply (including the exchange payload with
+ // the encrypted password) back to gnome-keyring, verbatim.
+ func (c *prompterCallback) PromptReady(msg dbus.Message, reply string, properties map[string]dbus.Variant, exchange string) *dbus.Error {
+ 	return c.toKeyring.forwardVoid(msg)
+ }
+ 
+-// PromptDone relays the prompter's final "prompt finished" notification back to
++// Relays the prompter's final "prompt finished" notification back to
+ // gnome-keyring so it can tear the prompt down.
+ func (c *prompterCallback) PromptDone(msg dbus.Message) *dbus.Error {
+ 	return c.toKeyring.forwardVoid(msg)
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index f0d95fc..df1922a 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -11,7 +11,7 @@ import (
+ 	"github.com/stretchr/testify/require"
+ )
+ 
+-// mockShellPrompter stands in for gnome-shell's real prompter on the front bus:
++// A stand-in for gnome-shell's real prompter on the front bus:
+ // it owns org.gnome.keyring.SystemPrompter and records the calls the bridge
+ // forwards to it. It can also drive the reverse Callback.
+ type mockShellPrompter struct {
+@@ -40,7 +40,7 @@ func (m *mockShellPrompter) StopPrompting(msg dbus.Message, callback dbus.Object
+ 	return nil
+ }
+ 
+-// mockKeyringCallback stands in for the backend gnome-keyring's callback object:
++// A stand-in for the backend gnome-keyring's callback object:
+ // it records the PromptReady/PromptDone calls the bridge forwards back.
+ type mockKeyringCallback struct {
+ 	ready chan string

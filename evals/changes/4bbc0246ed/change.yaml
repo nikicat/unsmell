@@ -1,0 +1,33 @@
+id: 4bbc0246ed
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t6
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-4
+  at:
+  - src/evm/cache/log_cache.rs:553
+  reach:
+  - src/evm/cache/log_cache.rs:553
+  row: duplicated knowledge
+  claim: 'The trailing comment "// block_timestamp: None" in the new test logs_preserve_block_timestamp
+    restates what make_test_log sets at log_cache.rs:495.'
+  fix: Delete the trailing comment, or set without_ts.block_timestamp = None explicitly so that the test
+    states its own input.
+  decision: SKIP
+  score: 3
+  reason: A test-local fact copy that is true today and adds little.
+  same: []
+  triage:
+    id: b1-4
+    decision: SKIP
+    score: 3
+    reason: trailing comment in a test repeats make_test_log's default; under the threshold
+    task: t6
+check: ok

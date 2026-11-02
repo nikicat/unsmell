@@ -1,0 +1,681 @@
+diff --git a/evals/changes.py b/evals/changes.py
+index 2e8411b..0f41ba8 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -11,7 +11,6 @@ context for a person to label, and scores runs by those labels. The layout of
+ the stored dataset is in evals/README.md.
+ """
+ import argparse
+-import functools
+ import hashlib
+ import json
+ import os
+@@ -20,9 +19,10 @@ import shutil
+ import subprocess
+ import sys
+ from collections import Counter
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ from datetime import date
+ from enum import StrEnum
++from functools import cached_property
+ from operator import attrgetter
+ from pathlib import Path
+ from typing import NamedTuple
+@@ -149,6 +149,201 @@ class Rounds:
+         return self.dir / f"round-{n}"
+ 
+ 
++class Sighting(NamedTuple):
++    """The run, round and task of a skill run that made a change."""
++
++    run: str
++    round: int
++    task: str
++
++    @property
++    def rounds(self):
++        """The stored rounds of the run."""
++        return Rounds(self.run)
++
++    @property
++    def report(self):
++        """The path of the skill's final message in the round."""
++        return self.rounds.report(self.round)
++
++
++@dataclass(frozen=True)
++class LabelEntry:
++    """A label that a person or a tool gave a change, about one of its findings or the whole change."""
++
++    label: Label
++    by: str  # USER, or a name starting with it, when a person gave the label
++    date: str  # in ISO format
++    finding: str | None = None  # the id of the finding, or None for the whole change
++    note: str = ""
++
++    @classmethod
++    def parse(cls, entry):
++        return cls(Label(entry["label"]), entry["by"], entry["date"], entry.get("finding"), entry.get("note", ""))
++
++    def dump(self):
++        """Returns the entry as change.yaml stores it, without the fields that are empty."""
++        entry = {"label": self.label.value, "finding": self.finding, "note": self.note, "by": self.by,
++                 "date": self.date}
++        return {k: v for k, v in entry.items() if v}
++
++    @property
++    def by_user(self):
++        """Whether a person gave the label."""
++        return self.by.startswith(USER)
++
++
++@dataclass(frozen=True)
++class Proposal:
++    """A label that the judge proposed for a change."""
++
++    label: Label
++    confidence: float  # from 0 to 1, as the model rates itself
++    reason: str
++    model: str
++
++    @classmethod
++    def parse(cls, entry):
++        return cls(Label(entry["label"]), entry["confidence"], entry["reason"], entry["model"])
++
++    def dump(self):
++        """Returns the proposal as change.yaml stores it."""
++        return {"label": self.label.value, "confidence": self.confidence, "reason": self.reason,
++                "model": self.model}
++
++
++@dataclass
++class Change:
++    """A patch that one task of an eval run made, with the runs that made it and the labels it was given.
++
++    The dataset stores it in evals/changes/<id>/ as change.patch and change.yaml.
++    """
++
++    id: str
++    fixture: str
++    seen: list[Sighting]  # the first is the one the patch was made in
++    judge: Proposal | None = None
++    labels: list[LabelEntry] = field(default_factory=list)  # oldest first
++    findings: list[dict] = field(default_factory=list)  # each with its entry of decisions.yaml under "triage"
++    after: list[str] = field(default_factory=list)  # the ids of the changes this one is stacked on
++    check: CheckStatus | None = None  # None until the fixture's check has run on it
++
++    @staticmethod
++    def _yaml_file(cid):
++        return CHANGES / cid / "change.yaml"
++
++    @classmethod
++    def named(cls, cid):
++        """Reads the change cid from the dataset.
++
++        Errors with FileNotFoundError when the dataset has no change cid.
++        """
++        meta = load(cls._yaml_file(cid))
++        return cls(meta["id"], meta["fixture"], [Sighting(**s) for s in meta["seen"]],
++                   Proposal.parse(meta["judge"]) if meta["judge"] else None,
++                   [LabelEntry.parse(l) for l in meta["labels"]], meta.get("findings", []), meta.get("after", []),
++                   CheckStatus(meta["check"]) if "check" in meta else None)
++
++    def save(self):
++        """Writes change.yaml. It leaves out after and check while they are unset."""
++        meta = {"id": self.id, "fixture": self.fixture, "seen": [s._asdict() for s in self.seen],
++                "judge": self.judge and self.judge.dump(), "labels": [l.dump() for l in self.labels],
++                "findings": self.findings}
++        if self.after:
++            meta["after"] = self.after
++        if self.check:
++            meta["check"] = self.check.value
++        self.dir.mkdir(parents=True, exist_ok=True)
++        dump(self.yaml_file, meta)
++
++    @property
++    def yaml_file(self):
++        return self._yaml_file(self.id)
++
++    @property
++    def dir(self):
++        return self.yaml_file.parent
++
++    @property
++    def patch_file(self):
++        return self.dir / "change.patch"
++
++    @property
++    def log_file(self):
++        """The path of the output of a check that failed or did not apply."""
++        return self.dir / "check.log"
++
++    @property
++    def patch(self):
++        return self.patch_file.read_text()
++
++    @property
++    def has_patch(self):
++        """Whether the change's editor made a patch."""
++        return bool(self.patch.strip())
++
++    @property
++    def first(self):
++        """The sighting the patch was made in."""
++        return self.seen[0]
++
++    @property
++    def runs(self):
++        """The names of the runs that made the change."""
++        return {s.run for s in self.seen}
++
++    @property
++    def newest_label(self):
++        """The newest label entry, or None when the change has none."""
++        return self.labels[-1] if self.labels else None
++
++    @property
++    def user_labels(self):
++        """The label entries that a person gave, oldest first."""
++        return [l for l in self.labels if l.by_user]
++
++    @property
++    def newest_user_label(self):
++        """The newest label entry that a person gave, or None when no person labelled the change."""
++        return self.user_labels[-1] if self.user_labels else None
++
++    @property
++    def score_label(self):
++        """What score counts the change as: its newest label, else the judge's as judge:LABEL, else unlabelled."""
++        if self.newest_label:
++            return self.newest_label.label.value
++        return f"judge:{self.judge.label}" if self.judge else "unlabelled"
++
++    @property
++    def decisions(self):
++        """The decisions of the change's findings, sorted and joined by /."""
++        return "/".join(sorted({f["triage"]["decision"] for f in self.findings}))
++
++    @property
++    def summary(self):
++        """The decisions and the start of the first finding's claim, on one line."""
++        return f"{self.decisions}: {self.findings[0].get('claim', '')[:100]}"
++
++    @cached_property
++    def tokens(self):
++        """The words of the changed lines and of the findings' claims, for comparing changes."""
++        text = " ".join([*(c.line.text for c in changed_lines(self.patch)),
++                         *(f.get("claim", "") for f in self.findings)])
++        return frozenset(re.findall(r"\w+", text))
++
++    @property
++    def ancestors(self):
++        """The changes this one is stacked on, directly or not, each before its dependents."""
++        found = {}
++        for parent in map(Change.named, self.after):
++            found |= {c.id: c for c in [*parent.ancestors, parent]}
++        return list(found.values())
++
++    def from_other_runs(self, other):
++        """Tells whether other is a different change that none of this change's runs made."""
++        return other.id != self.id and not self.runs & other.runs
++
++
+ @dataclass(frozen=True)
+ class Task:
+     """One task of a skill run: the findings that one editor fixed in one patch."""
+@@ -195,23 +390,22 @@ def store_rounds(run, report):
+ def record_change(record, task, fixture, sighting):
+     """Adds the change that task made in one skill run directory to the dataset, and returns its id.
+ 
+-    sighting is an entry of the change's seen list. It names the run, round and task the change came from.
++    sighting names the run, round and task the change came from.
+     A change that the dataset already holds gains the sighting when it is new.
+     """
+     patch_file = record / "fixes" / f"{task.name}.patch"
+     patch = patch_file.read_text() if patch_file.exists() else ""
+-    cid = change_id(patch) if patch.strip() else f"{sighting['run']}-{sighting['round']}-{task.name}"
+-    d = CHANGES / cid
+-    d.mkdir(parents=True, exist_ok=True)
+-    meta = load(d / "change.yaml") if (d / "change.yaml").exists() else {
+-        "id": cid, "fixture": fixture, "seen": [], "judge": None, "labels": []}
+-    if sighting not in meta["seen"]:
+-        meta["seen"].append(sighting)
++    cid = change_id(patch) if patch.strip() else f"{sighting.run}-{sighting.round}-{task.name}"
++    try:
++        change = Change.named(cid)
++    except FileNotFoundError:
+         # The findings and decisions of the first sighting, which the patch was made for.
+-        meta.setdefault("findings", task.findings)
+-    if not (d / "change.patch").exists():
+-        (d / "change.patch").write_text(patch)
+-    dump(d / "change.yaml", meta)
++        change = Change(cid, fixture, [], findings=task.findings)
++    if sighting not in change.seen:
++        change.seen.append(sighting)
++    change.save()
++    if not change.patch_file.exists():
++        change.patch_file.write_text(patch)
+     return cid
+ 
+ 
+@@ -223,10 +417,9 @@ def link_stacked(tasks, changes):
+     for task in tasks:
+         parents = [changes[t] for t in task.after if t in changes]
+         if parents:
+-            path = CHANGES / changes[task.name] / "change.yaml"
+-            meta = load(path)
+-            meta["after"] = parents
+-            dump(path, meta)
++            change = Change.named(changes[task.name])
++            change.after = parents
++            change.save()
+ 
+ 
+ def extract(path):
+@@ -238,55 +431,21 @@ def extract(path):
+     for n in (r.round for r in report.rounds):
+         for record in skill_runs(run, n):
+             found = tasks(record)
+-            changes = {t.name: record_change(record, t, report.fixture,
+-                                             {"run": run.name, "round": n, "task": t.name}) for t in found}
++            changes = {t.name: record_change(record, t, report.fixture, Sighting(run.name, n, t.name))
++                       for t in found}
+             link_stacked(found, changes)
+             ids |= set(changes.values())
+     return ids
+ 
+ 
+ def all_changes():
+-    return sorted((load(p) for p in CHANGES.glob("*/change.yaml")), key=lambda m: m["id"])
++    """Returns every change in the dataset, ordered by id."""
++    return [Change.named(d.name) for d in sorted(CHANGES.iterdir()) if d.is_dir()]
+ 
+ 
+ def pending(changes, ids, done):
+     """Returns the changes in ids, or with no ids the changes for which done is false."""
+-    return [m for m in changes if (m["id"] in ids if ids else not done(m))]
+-
+-
+-def by_user(label):
+-    """Tells whether a person gave a label entry of change.yaml."""
+-    return label["by"].startswith(USER)
+-
+-
+-def newest_label(change):
+-    """Returns the change's newest label entry, or None when it has none."""
+-    return change["labels"][-1] if change["labels"] else None
+-
+-
+-def newest_user_label(change):
+-    """Returns the newest label entry that a person gave the change, or None when no person labelled it."""
+-    return next((l for l in reversed(change["labels"]) if by_user(l)), None)
+-
+-
+-def has_patch(change):
+-    """Tells whether the change's editor made a patch."""
+-    return bool((CHANGES / change["id"] / "change.patch").read_text().strip())
+-
+-
+-def decisions(change):
+-    """Returns the decisions of the change's findings, sorted and joined by /."""
+-    return "/".join(sorted({f["triage"]["decision"] for f in change["findings"]}))
+-
+-
+-@functools.cache
+-def tokens(cid):
+-    """The words of a change's changed lines and of its findings' claims, for comparing changes."""
+-    patch = (CHANGES / cid / "change.patch").read_text()
+-    meta = load(CHANGES / cid / "change.yaml")
+-    text = " ".join([*(c.line.text for c in changed_lines(patch)),
+-                     *(f.get("claim", "") for f in meta.get("findings", []))])
+-    return frozenset(re.findall(r"\w+", text))
++    return [c for c in changes if (c.id in ids if ids else not done(c))]
+ 
+ 
+ def similarity(a, b):
+@@ -294,16 +453,10 @@ def similarity(a, b):
+     return len(a & b) / (len(a | b) or 1)
+ 
+ 
+-def from_other_runs(meta, other):
+-    """Tells whether other is a different change than meta that none of meta's runs made."""
+-    runs = {s["run"] for s in meta["seen"]}
+-    return other["id"] != meta["id"] and not runs & {s["run"] for s in other["seen"]}
+-
+-
+ class Match(NamedTuple):
+     """A labelled change that resembles the change being shown."""
+ 
+-    change: dict
++    change: Change
+     share: float  # of the words the two changes have in common
+ 
+ 
+@@ -311,25 +464,22 @@ class Match(NamedTuple):
+ MATCH_SHARE = 0.33
+ 
+ 
+-def prior(meta):
+-    """Returns the change from another run of the same fixture that a user labelled and that is most similar to meta.
++def prior(change):
++    """Returns the change from another run of the same fixture that a user labelled and that is most similar to change.
+ 
+     The match carries the share of words the two changes have in common.
+     Returns None when no labelled change shares a third of its words.
+     """
+-    mine = tokens(meta["id"])
+-    others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and from_other_runs(meta, m)
+-              and any(by_user(l) for l in m["labels"])]
+-    best = max((Match(m, similarity(mine, tokens(m["id"]))) for m in others),
++    others = [c for c in all_changes() if c.fixture == change.fixture and change.from_other_runs(c) and c.user_labels]
++    best = max((Match(c, similarity(change.tokens, c.tokens)) for c in others),
+                key=attrgetter("share"), default=None)
+     return best if best and best.share >= MATCH_SHARE else None
+ 
+ 
+-def neighbours(meta, labelled, k=5):
+-    """Returns the k labelled changes from other runs whose words overlap most with meta's."""
+-    mine = tokens(meta["id"])
+-    return sorted((o for o in labelled if from_other_runs(meta, o)),
+-                  key=lambda o: similarity(mine, tokens(o["id"])), reverse=True)[:k]
++def neighbours(change, labelled, k=5):
++    """Returns the k labelled changes from other runs whose words overlap most with change's."""
++    return sorted((o for o in labelled if change.from_other_runs(o)),
++                  key=lambda o: similarity(change.tokens, o.tokens), reverse=True)[:k]
+ 
+ 
+ @dataclass(frozen=True)
+@@ -338,27 +488,26 @@ class Judge:
+ 
+     model: str
+     skill: str  # the text of SKILL.md
+-    labelled: list[dict]  # the changes whose newest label is not unsure, the pool of examples
++    labelled: list[Change]  # the changes whose newest label is not unsure, the pool of examples
+ 
+-    def prompt(self, meta):
++    def prompt(self, change):
+         """Returns the prompt that asks the model to label one change."""
+-        first = meta["seen"][0]
+         examples = "\n\n".join(
+-            f"### Example {o['id']}: labelled {newest_label(o)['label']}\n"
+-            f"Note: {newest_label(o).get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
+-            for o in neighbours(meta, self.labelled))
++            f"### Example {o.id}: labelled {o.newest_label.label}\n"
++            f"Note: {o.newest_label.note}\n```diff\n{o.patch}```"
++            for o in neighbours(change, self.labelled))
+         verdicts = ", ".join(f"{l} ({l.meaning})" for l in Label.verdicts())
+         return (
+             f"You label one change that a refactoring skill made, as one of {verdicts}. "
+             "Judge the code, not the skill's own report. "
+             "The skill's rules are below for reference; a change can follow them and still be bad.\n\n"
+             f"## Labelled examples, most similar first\n\n{examples or '(none yet)'}\n\n"
+-            f"## The round's own report\n\n{Rounds(first['run']).report(first['round']).read_text()[:6000]}\n\n"
+-            f"## The findings and decisions the change was made for\n\n{yaml.safe_dump(meta['findings'], allow_unicode=True)}\n\n"
+-            f"## The change to label\n\n```diff\n{(CHANGES / meta['id'] / 'change.patch').read_text()}```\n\n"
++            f"## The round's own report\n\n{change.first.report.read_text()[:6000]}\n\n"
++            f"## The findings and decisions the change was made for\n\n{yaml.safe_dump(change.findings, allow_unicode=True)}\n\n"
++            f"## The change to label\n\n```diff\n{change.patch}```\n\n"
+             f"## The skill\n\n{self.skill}")
+ 
+-    def label(self, meta):
++    def label(self, change):
+         """Stores the model's proposed label in the change's change.yaml and returns its cost in USD.
+ 
+         A failed call prints why and costs 0.
+@@ -368,38 +517,27 @@ class Judge:
+             "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+         try:
+             reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", self.model,
+-                           stdin=self.prompt(meta))
++                           stdin=self.prompt(change))
+             verdict = reply.structured or json.loads(reply.result)
+         except (RuntimeError, json.JSONDecodeError) as e:
+-            print(f"{meta['id']}: judge failed: {e}", file=sys.stderr)
++            print(f"{change.id}: judge failed: {e}", file=sys.stderr)
+             return 0.0
+-        meta["judge"] = {**verdict, "model": self.model}
+-        dump(CHANGES / meta["id"] / "change.yaml", meta)
+-        print(f"{meta['id']} {verdict['label']:7} {verdict['confidence']:.2f} {summary(meta)}",
+-              flush=True)
++        change.judge = Proposal.parse({**verdict, "model": self.model})
++        change.save()
++        print(f"{change.id} {change.judge.label:7} {change.judge.confidence:.2f} {change.summary}", flush=True)
+         return reply.cost_usd
+ 
+ 
+ def judge(ids, model, jobs):
+     """Proposes a label for each change in ids, or with no ids for each change that has no label and no proposal."""
+-    metas = all_changes()
+-    labelled = [m for m in metas if (l := newest_label(m)) and l["label"] != Label.UNSURE]
+-    todo = pending(metas, ids, lambda m: m["judge"] or m["labels"])
++    changes = all_changes()
++    labelled = [c for c in changes if c.newest_label and c.newest_label.label != Label.UNSURE]
++    todo = pending(changes, ids, lambda c: c.judge or c.labels)
+     with ThreadPoolExecutor(jobs) as pool:
+         cost = sum(pool.map(Judge(model, SKILL.read_text(), labelled).label, todo))
+     print(f"judged {len(todo)} changes for ${cost:.2f}")
+ 
+ 
+-def summary(meta):
+-    return f"{decisions(meta)}: {meta['findings'][0].get('claim', '')[:100]}"
+-
+-
+-def ancestors(meta):
+-    """Returns the ids of the changes that meta is stacked on, directly or not, each before its dependents."""
+-    return list(dict.fromkeys(cid for parent in meta.get("after", [])
+-                              for cid in [*ancestors(load(CHANGES / parent / "change.yaml")), parent]))
+-
+-
+ def build_rounds(change, build):
+     """Returns a scratch repo at build with the change's fixture and the rounds before the change's own.
+ 
+@@ -407,17 +545,15 @@ def build_rounds(change, build):
+     HEAD is the last round before the change was made. Errors with CalledProcessError when a round
+     does not apply.
+     """
+-    first = change["seen"][0]
+-    rounds = Rounds(first["run"])
+     if build.exists():
+         shutil.rmtree(build)
+-    built = Fixture.named(change["fixture"]).materialize(build / "repo")
++    built = Fixture.named(change.fixture).materialize(build / "repo")
+     git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+     git(built, "tag", "round-0")
+-    for n in range(1, first["round"]):
+-        git(built, "apply", "--binary", str(rounds.patch(n)))
++    for n in range(1, change.first.round):
++        git(built, "apply", "--binary", str(change.first.rounds.patch(n)))
+         git(built, "add", "-A")
+         git(built, "commit", "-q", "-m", f"round {n}")
+     return built
+@@ -445,11 +581,11 @@ def stage(change, repo):
+ 
+     Errors with CalledProcessError when a patch does not apply.
+     """
+-    for parent in ancestors(change):  # staged with the changeset, so that git diff shows only what this change adds
+-        git(repo, "apply", "--index", str(CHANGES / parent / "change.patch"))
+-    if has_patch(change):
++    for parent in change.ancestors:  # staged with the changeset, so that git diff shows only what this change adds
++        git(repo, "apply", "--index", str(parent.patch_file))
++    if change.has_patch:
+         # Intent to add, so that new files show up in git diff too.
+-        git(repo, "apply", "--intent-to-add", str(CHANGES / change["id"] / "change.patch"))
++        git(repo, "apply", "--intent-to-add", str(change.patch_file))
+ 
+ 
+ def review_repo(change, root=REVIEW):
+@@ -477,43 +613,41 @@ def current():
+ def select(change):
+     """Puts the change in the review repo and makes it the current one."""
+     review_repo(change)
+-    CURRENT.write_text(change["id"])
++    CURRENT.write_text(change.id)
+ 
+ 
+ def show(change):
+     """Prints the change, its findings and labels, and how to see it in the review repo."""
+-    first = change["seen"][0]
+-    print(paint(f"change {change['id']}", "1") + f": {change['fixture']} round {first['round']}"
+-          f" (seen {len(change['seen'])}x)")
+-    if change.get("after"):
+-        print(f"  stacked on {', '.join(change['after'])}, staged with the changeset")
+-    for f in change["findings"]:
++    print(paint(f"change {change.id}", "1") + f": {change.fixture} round {change.first.round}"
++          f" (seen {len(change.seen)}x)")
++    if change.after:
++        print(f"  stacked on {', '.join(change.after)}, staged with the changeset")
++    for f in change.findings:
+         t = f["triage"]
+         decision = paint(f"{t['decision']} {t.get('score')}", Decision(t["decision"]).color)
+         print(f"\n  {paint(f['id'], '1')}  {decision}  {f.get('row', '')}  {paint(', '.join(f.get('at', [])), '2')}"
+               f"\n    {paint('claim:', '2')}  {f.get('claim', '').strip()}"
+               f"\n    {paint('fix:', '2')}    {f.get('fix', '').strip()}"
+               f"\n    {paint('triage:', '2')} {t.get('reason', '').strip()}")
+-    if not has_patch(change):
++    if not change.has_patch:
+         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
+     if match := prior(change):
+-        newest = newest_user_label(match.change)
+-        print(f"\n  closest labelled change from an earlier run: {match.change['id']}, {match.share:.0%} of words shared,"
+-              f" labelled {paint(newest['label'], Label(newest['label']).color)}"
+-              f"{': ' + newest['note'] if newest.get('note') else ''}")
+-    if change["judge"]:
+-        j = change["judge"]
+-        print(f"judge: {paint(j['label'], Label(j['label']).color)} ({j['confidence']:.2f}): {j['reason']}")
+-    for l in change["labels"]:
+-        about = f" on {l['finding']}" if l.get("finding") else ""
+-        print(f"label: {paint(l['label'], Label(l['label']).color)}{about} by {l['by']}: {l.get('note', '')}")
++        newest = match.change.newest_user_label
++        print(f"\n  closest labelled change from an earlier run: {match.change.id}, {match.share:.0%} of words shared,"
++              f" labelled {paint(newest.label, newest.label.color)}"
++              f"{': ' + newest.note if newest.note else ''}")
++    if j := change.judge:
++        print(f"judge: {paint(j.label, j.label.color)} ({j.confidence:.2f}): {j.reason}")
++    for l in change.labels:
++        about = f" on {l.finding}" if l.finding else ""
++        print(f"label: {paint(l.label, l.label.color)}{about} by {l.by}: {l.note}")
+     color = "--color=always" if TTY else "--color=never"
+     print("\n" + git(REVIEW_REPO, "diff", color, "--stat").rstrip())
+     print(f"\nStaged, the changeset under review (git diff --cached):\n{git(REVIEW_REPO, 'diff', color, '--cached', '--stat').rstrip()}")
+     print(paint(f"\n  cd {REVIEW_REPO} && git diff        # the change", "2"))
+     print(paint("  git diff --cached            # the changeset under review, which the findings call \"the change\"", "2"))
+-    print(paint(f"  report: {Rounds(first['run']).report(first['round'])}", "2"))
+-    print(paint(f"  labels: {CHANGES / change['id'] / 'change.yaml'}", "2"))
++    print(paint(f"  report: {change.first.report}", "2"))
++    print(paint(f"  labels: {change.yaml_file}", "2"))
+     print(f"  {LABEL_USAGE}")
+ 
+ 
+@@ -526,49 +660,39 @@ def check(ids):
+     root = CACHE / "check"
+     # The changes are checked one at a time, sharing one Rust target directory.
+     env = os.environ | {"CARGO_TARGET_DIR": str(root / "target")}
+-    for meta in pending(all_changes(), ids, lambda m: "check" in m):
++    for change in pending(all_changes(), ids, lambda c: c.check):
+         try:
+-            repo = review_repo(meta, root)
++            repo = review_repo(change, root)
+         except subprocess.CalledProcessError as e:
+-            meta["check"] = CheckStatus.NO_APPLY.value
+-            dump(CHANGES / meta["id"] / "change.yaml", meta)
+-            (CHANGES / meta["id"] / "check.log").write_text(f"{e.cmd}\n{e.stderr}")
+-            print(f"{meta['id']} {meta['check']}", flush=True)
+-            continue
+-        out = Fixture.named(meta["fixture"]).run_check(repo, env)
+-        meta["check"] = (CheckStatus.OK if out.returncode == 0 else CheckStatus.FAIL).value
+-        dump(CHANGES / meta["id"] / "change.yaml", meta)
+-        print(f"{meta['id']} {meta['check']}", flush=True)
+-        log = CHANGES / meta["id"] / "check.log"
+-        if out.returncode:
+-            log.write_text(out.stdout + out.stderr)
++            change.check, output = CheckStatus.NO_APPLY, f"{e.cmd}\n{e.stderr}"
++        else:
++            out = Fixture.named(change.fixture).run_check(repo, env)
++            change.check = CheckStatus.OK if out.returncode == 0 else CheckStatus.FAIL
++            output = out.stdout + out.stderr if out.returncode else None
++        change.save()
++        print(f"{change.id} {change.check}", flush=True)
++        if output is None:
++            change.log_file.unlink(missing_ok=True)
+         else:
+-            log.unlink(missing_ok=True)
++            change.log_file.write_text(output)
+ 
+ 
+ def list_changes():
+     """Prints one line per change, ordered by fixture, round and task."""
+-    for meta in sorted(all_changes(), key=lambda m: (m["fixture"], m["seen"][0]["round"], m["seen"][0]["task"])):
++    for change in sorted(all_changes(), key=lambda c: (c.fixture, c.first.round, c.first.task)):
+         # The newest user label per finding (None: the whole change); differing ones show as good+bad.
+-        newest = {l.get("finding"): l["label"] for l in meta["labels"] if by_user(l)}
++        newest = {l.finding: l.label for l in change.user_labels}
+         label = "+".join(sorted(set(newest.values()))) or "-"
+-        claim = " ".join(meta["findings"][0].get("claim", "").split())
+-        signs = Counter(c.sign for c in changed_lines((CHANGES / meta["id"] / "change.patch").read_text()))
+-        print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions(meta):9}"
+-              f"  {f'+{signs[Sign.ADDED]} -{signs[Sign.REMOVED]}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
+-
+-
+-def score_label(change):
+-    """Returns what score counts the change as: its newest label, else the judge's as judge:LABEL, else unlabelled."""
+-    if label := newest_label(change):
+-        return label["label"]
+-    return f"judge:{change['judge']['label']}" if change["judge"] else "unlabelled"
++        claim = " ".join(change.findings[0].get("claim", "").split())
++        signs = Counter(c.sign for c in changed_lines(change.patch))
++        print(f"{change.id}  {label:7}  {change.fixture} r{change.first.round}  {change.decisions:9}"
++              f"  {f'+{signs[Sign.ADDED]} -{signs[Sign.REMOVED]}':>9}  {change.check or '-':4}  {claim[:80]}")
+ 
+ 
+ def score(run_dirs):
+     for run_dir in run_dirs:
+         run = run_dir.resolve().name
+-        counts = Counter(score_label(m) for m in all_changes() if any(s["run"] == run for s in m["seen"]))
++        counts = Counter(c.score_label for c in all_changes() if run in c.runs)
+         print(run, " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+ 
+ 
+@@ -578,11 +702,11 @@ def next_change():
+     Changes without a patch are left out. Exits when every other change has a user label.
+     """
+     # A change without a patch (an editor that made none) has nothing to review in the repo.
+-    todo = [m for m in all_changes() if not any(by_user(l) for l in m["labels"]) and has_patch(m)]
++    todo = [c for c in all_changes() if not c.user_labels and c.has_patch]
+     if not todo:
+         sys.exit("every change has a user label")
+     # The least certain judgements first: they are where a label teaches the judge most.
+-    change = min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1)
++    change = min(todo, key=lambda c: c.judge.confidence if c.judge else -1)
+     select(change)
+     show(change)
+     print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
+@@ -590,7 +714,7 @@ def next_change():
+ 
+ def open_change(cid):
+     """Opens the change cid in the review repo and prints it. With no cid, prints the current change."""
+-    change = load(CHANGES / (cid or current()) / "change.yaml")
++    change = Change.named(cid or current())
+     if cid:
+         select(change)
+     show(change)
+@@ -614,13 +738,11 @@ def add_label(cid, label, finding, note, by):
+ 
+     Exits when the change has no such finding.
+     """
+-    path = CHANGES / cid / "change.yaml"
+-    meta = load(path)
+-    if finding and finding not in {f["id"] for f in meta["findings"]}:
++    change = Change.named(cid)
++    if finding and finding not in {f["id"] for f in change.findings}:
+         sys.exit(f"{cid} has no finding {finding}")
+-    entry = {"label": label.value, "finding": finding, "note": note, "by": by, "date": date.today().isoformat()}
+-    meta["labels"].append({k: v for k, v in entry.items() if v})
+-    dump(path, meta)
++    change.labels.append(LabelEntry(label, by, date.today().isoformat(), finding, note))
++    change.save()
+     print(f"{cid}: {label}")
+ 
+ 

@@ -1,0 +1,65 @@
+id: 0d1e0e1d83
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-023034
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-6
+  at:
+  - src/evm/cache/event_signature_cache.rs:50-52
+  - src/evm/cache/event_signature_cache.rs:81-83
+  - src/bin/chainfold/signature_cache.rs:29
+  - src/bin/chainfold/signature_cache.rs:49-51
+  reach:
+  - src/evm/cache/event_signature_cache.rs:48-103
+  - src/bin/chainfold/signature_cache.rs:22-57
+  row: data clump
+  claim: 'The cache key (chain_id, address, event_name) travels as three parameters through get_event_signature
+    and insert_event_signature. The adapter builds it the same way twice: ChainId::new(chain_id), &Address::from(address),
+    event_name.'
+  fix: 'An EventSignatureKey { chain_id: ChainId, address: Address, event_name } (borrowing event_name)
+    taken by both cache methods. The adapter builds it once per call through a small constructor from
+    the trait''s raw u64, [u8; 20] and &str.'
+  decision: PLAN
+  score: 5
+  reason: A real three-value clump, but on unchanged lines, and not the root cause of a changed-line smell.
+    Not already in TODO.md.
+  same: []
+  triage:
+    id: b1-6
+    decision: PLAN
+    score: 5
+    reason: Real clump on unchanged lines, not the cause of a changed-line smell.
+    task: t3
+- id: b1-8
+  at:
+  - src/evm/cache/event_signature_cache.rs:1-8
+  reach:
+  - src/evm/cache/event_signature_cache.rs:1-8
+  row: tautological comment
+  claim: The module doc opens with its own name ("[`EventSignatureCache`] — durable cache…" for module
+    event_signature_cache) and joins with an em dash. It restates the row's fields as a tuple shape, "(chain,
+    address, event name) → (signature, topic0, abi)", which is the shape the changeset just replaced with
+    EventSignatureRow. It also carries naming history ("Named EventSignatureCache (not SignatureCache)
+    to avoid colliding…").
+  fix: 'Rewrite as the module''s place in the system, in plain sentences. For example: "Stores the event
+    signatures the resolver has found, one row per chain, contract and event name, so a repeated lookup
+    needs no network request." Drop the tuple shape and the naming note.'
+  decision: PLAN
+  score: 5
+  reason: Opening-name tell met, but the lines are unchanged and not the cause of a changed-line smell.
+    The tuple shape it restates is still true of the mapping.
+  same: []
+  triage:
+    id: b1-8
+    decision: PLAN
+    score: 5
+    reason: Module doc smell on unchanged lines.
+    task: t3
+check: ok

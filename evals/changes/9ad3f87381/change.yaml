@@ -1,0 +1,82 @@
+id: 9ad3f87381
+fixture: cf-post-unsmell
+seen:
+- run: cf-post-unsmell-20261102-005337
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - src/evm/cache/event_signature_cache.rs:59-76
+  - src/evm/cache/event_signature_cache.rs:98
+  reach:
+  - src/evm/cache/event_signature_cache.rs:10
+  - src/evm/cache/event_signature_cache.rs:59-76
+  - src/evm/cache/event_signature_cache.rs:98
+  - src/evm/cache/event_signature_cache.rs:112-115
+  - src/evm/cache.rs:34-55
+  - arch.md:391-394
+  row: misplaced rule
+  claim: 'Topic''s SQLite encoding as a 32-byte BLOB is written inside EventSignatureCache: the write
+    side binds `topic0.as_slice()` (:98), the read side pulls a raw `Vec<u8>` into an unnamed tuple (:62-65),
+    checks `topic.len() == 32` and builds `Topic::from(B256::from_slice(&topic))` outside the row closure
+    (:69-71). The changeset narrowed EventSignatureRow.topic0 to Topic (:21), but its siblings ChainId
+    and FilterHash keep their SQLite mapping as `ToSql` impls in src/evm/cache.rs:34-55, and Topic has
+    none. A wrong-length BLOB also turns into Ok(None), a silent cache miss.
+
+    '
+  fix: '`impl ToSql for Topic` and `impl FromSql for Topic` in src/evm/cache.rs next to FilterHash''s
+    (FromSql: `B256::try_from(blob)` → `FromSqlError::InvalidBlobSize { expected_size: 32, .. }` on a
+    wrong length), each with a doc in the style of the ChainId/FilterHash ones. insert binds `topic0`
+    directly. get''s closure returns `EventSignatureRow { signature: row.get(0)?, topic0: row.get(1)?,
+    abi_json: row.get(2)? }` and the body is `rows.next().transpose().map_err(Into::into)`; the tuple,
+    the guard and the match go. `B256` moves into the tests'' imports. arch.md:392/394 lists Topic beside
+    ChainId/FilterHash as having its SQLite mapping in the cache layer.
+
+    '
+  decision: FIX
+  score: 7
+  reason: 'Full tell of a misplaced rule with named siblings (ChainId, FilterHash ToSql) and on changed
+    lines (:69-71, :85). Behaviour: a corrupt topic0 BLOB becomes an error instead of a silent None; the
+    report names it under Behaviour. Crate-internal (impls on a crate type).
+
+    '
+  same:
+  - b1-13
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 7
+    reason: confirmed at event_signature_cache.rs:117-134 and cache.rs:34-55; siblings ChainId/FilterHash
+      own their ToSql in the cache layer, Topic has none
+    task: t1
+- id: b1-5
+  at:
+  - src/evm/cache/event_signature_cache.rs:115
+  - src/evm/cache/event_signature_cache.rs:126
+  - src/evm/cache/event_signature_cache.rs:135
+  - src/evm/cache/event_signature_cache.rs:159
+  reach:
+  - src/evm/cache/event_signature_cache.rs:112-168
+  row: repeated derivation
+  claim: 'The test const TOPIC0 is a B256 (:115), and the changeset wraps it in `Topic::from(TOPIC0)`
+    at every use (:126, :135, :159), while every API that takes or returns it now speaks Topic.
+
+    '
+  fix: '`const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));` and pass `TOPIC0` at the three sites'
+  decision: FIX
+  score: 5
+  reason: changed lines, three copies of one derivation, three-line fix
+  same: []
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 5
+    reason: confirmed; its reach (the test imports at :172-173) overlaps b1-1's, so it shares b1-1's task
+    task: t1
+check: ok

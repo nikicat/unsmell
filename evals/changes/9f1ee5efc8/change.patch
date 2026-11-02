@@ -1,0 +1,18 @@
+diff --git a/seb.py b/seb.py
+index ab9a4a1..2a7d49c 100644
+--- a/seb.py
++++ b/seb.py
+@@ -32,8 +32,12 @@ class Config:
+ 
+     @classmethod
+     def from_env(cls) -> Config:
++        """Exits when EB_APP_ID is not set."""
++        app_id = os.environ.get("EB_APP_ID")
++        if not app_id:
++            sys.exit("EB_APP_ID is not set")
+         return cls(
+-            app_id=os.environ.get("EB_APP_ID", "00000000-0000-4000-8000-000000000000"),
++            app_id=app_id,
+             key=Path(os.environ.get("EB_KEY", "private.pem")).read_bytes(),
+             redirect=os.environ.get("EB_REDIRECT", "https://localhost/"),
+             aspsp=os.environ.get("EB_ASPSP", "SEB"),

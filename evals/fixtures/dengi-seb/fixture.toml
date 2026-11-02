@@ -1,0 +1,4 @@
+# A new personal CLI, as it stood before its first unsmell run. Every file is
+# new, so the base is empty. Rounds 3 and 4 of a hand-guided session reversed
+# each other on this code.
+check = "python -I -m py_compile seb.py"

@@ -1,0 +1,307 @@
+diff --git a/arch.md b/arch.md
+index 26a8ff5..d54e312 100644
+--- a/arch.md
++++ b/arch.md
+@@ -388,7 +388,7 @@ Both `merge_hist_stores` tip aggregators and `BaseMatcher::changes()` aggregate
+ The EVM layer favors semantic types over blind primitives, so a 20-byte address can't be passed where a 32-byte hash is expected, a chain id can't be swapped with a block number, and a topic can't be confused with a hash:
+ 
+ - **`Address`** (alloy) for 20-byte addresses; **`B256`** for 32-byte hashes, with alloy's **`TxHash`/`BlockHash`** aliases on the fields that carry those (documentation, zero friction — they *are* `B256`).
+-- **`Topic`** — a real newtype over `B256` for EVM log topics, since topics flow through chainfold's own filter API (`EvmEvent.topics`, the `[Option<Topic>; 4]` filter slots, `TRANSFER_TOPIC`, `compute_filter_hash`). It owns the address↔topic relationship (`From<Address>` left-pads; `Topic::address()` extracts). Unwrap to `B256` at the alloy `Filter`/`Log` boundary via `Topic::b256()`. Its SQLite mapping (`ToSql` and `FromSql`) also lives in the cache layer.
++- **`Topic`** — a real newtype over `B256` for EVM log topics, since topics flow through chainfold's own filter API (`EvmEvent.topics`, the `[Option<Topic>; 4]` filter slots, `TRANSFER_TOPIC`, `compute_filter_hash`). It owns the address↔topic relationship (`From<Address>` left-pads; `Topic::address()` extracts). Unwrap to `B256` at the alloy `Filter`/`Log` boundary via `Topic::b256()`.
+ - **`ChainId`** — newtype over `u64`; its SQLite mapping (`ToSql`) lives in the cache layer, not on the domain type, so `ChainId` stays persistence-free.
+ - **`ChainProvider<P>`** — an alloy `Provider` paired with its `ChainId` (it delegates the trait's one required method, `root()`), so the EVM layer reads the chain for free instead of re-fetching `eth_chainId` at every history construction. The CLI's chain-id cross-check is config-gated (`[evm] chain_id_check = "verify" | "trust"`).
+ - **`FilterHash([u8; 32])`** — the BLAKE3 cache partition key (address + topics). Not an EVM hash, so a newtype rather than a `B256`/alias; like `ChainId`, its `ToSql` lives in the cache layer so the domain type stays persistence-free.
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..66f613d 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -2,9 +2,9 @@
+ //! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+ //! file for event-signature caching.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, Topic};
++use chainfold::evm::{ChainId, EventSignatureCache};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -27,13 +27,6 @@ impl SignatureCache for SqliteSignatureCache {
+     ) -> Result<Option<ResolvedEvent>, SignatureError> {
+         self.cache
+             .get_event_signature(ChainId::new(chain_id), &Address::from(address), event_name)
+-            .map(|opt| {
+-                opt.map(|row| ResolvedEvent {
+-                    signature: row.signature,
+-                    topic0: row.topic0.b256().into(),
+-                    abi_json: row.abi_json,
+-                })
+-            })
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+ 
+@@ -49,9 +42,7 @@ impl SignatureCache for SqliteSignatureCache {
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+-                &entry.signature,
+-                Topic::from(B256::from(entry.topic0)),
+-                entry.abi_json.as_deref(),
++                entry,
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+diff --git a/src/evm.rs b/src/evm.rs
+index c1ac979..5a42c28 100644
+--- a/src/evm.rs
++++ b/src/evm.rs
+@@ -30,7 +30,7 @@ pub use types::{
+ 
+ pub use cache::{
+     BlockHeader, CACHE_VERSION, CacheDb, CacheError, CachedErc20Metadata, Erc20Cache,
+-    EventSignatureCache, EventSignatureRow, LogCache, compute_filter_hash, compute_gaps,
++    EventSignatureCache, LogCache, compute_filter_hash, compute_gaps,
+     versioned_path,
+ };
+ pub use chain_provider::ChainProvider;
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 6aae001..55cffa5 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -19,18 +19,17 @@
+ 
+ use std::sync::{Arc, Mutex};
+ 
+-use alloy::primitives::B256;
+ use rusqlite::Connection;
+-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
++use rusqlite::types::{ToSql, ToSqlOutput};
+ 
+-use crate::evm::types::{ChainId, FilterHash, Topic};
++use crate::evm::types::{ChainId, FilterHash};
+ 
+ mod erc20_cache;
+ mod event_signature_cache;
+ mod log_cache;
+ 
+ pub use erc20_cache::{CachedErc20Metadata, Erc20Cache};
+-pub use event_signature_cache::{EventSignatureCache, EventSignatureRow};
++pub use event_signature_cache::EventSignatureCache;
+ pub use log_cache::{BlockHeader, LogCache, compute_filter_hash, compute_gaps};
+ 
+ /// `ChainId` persists as its underlying `u64` in an `INTEGER` column. Defining
+@@ -56,32 +55,6 @@ impl ToSql for FilterHash {
+     }
+ }
+ 
+-/// `Topic` persists as its 32 raw bytes in a `BLOB` column. Like
+-/// [`FilterHash`]'s, this `ToSql` lives in the persistence layer so the domain
+-/// type stays `SQLite`-free.
+-impl ToSql for Topic {
+-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+-        Ok(ToSqlOutput::from(self.as_slice()))
+-    }
+-}
+-
+-/// Reads a `Topic` back from its 32-byte `BLOB`, as the event-signature cache
+-/// does for `topic0`.
+-///
+-/// Errors when the value is not a `BLOB`, or is a `BLOB` of any length other
+-/// than 32 (`FromSqlError::InvalidBlobSize`).
+-impl FromSql for Topic {
+-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+-        let blob = value.as_blob()?;
+-        B256::try_from(blob)
+-            .map(Topic::new)
+-            .map_err(|_| FromSqlError::InvalidBlobSize {
+-                expected_size: 32,
+-                blob_size: blob.len(),
+-            })
+-    }
+-}
+-
+ // ============================================================
+ // Versioning
+ // ============================================================
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index ad0a1de..058a05c 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -10,20 +10,8 @@
+ use alloy::primitives::Address;
+ 
+ use super::{CacheError, SharedConn};
+-use crate::evm::types::{ChainId, Topic};
+-
+-/// A single resolved row from `event_signatures`.
+-#[derive(Debug, Clone, PartialEq, Eq)]
+-pub struct EventSignatureRow {
+-    /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+-    pub signature: String,
+-    /// The keccak256 hash of `signature`. Logs of this event carry it as
+-    /// topic 0.
+-    pub topic0: Topic,
+-    /// The JSON of this event's entry in the contract's ABI. It is None on
+-    /// rows cached before the `abi_json` column was added.
+-    pub abi_json: Option<String>,
+-}
++use crate::evm::types::ChainId;
++use crate::signatures::ResolvedEvent;
+ 
+ /// Durable SQLite-backed event-signature cache.
+ pub struct EventSignatureCache {
+@@ -47,12 +35,19 @@ impl EventSignatureCache {
+         Ok(super::CacheDb::open_in_memory()?.signatures())
+     }
+ 
++    /// Looks up the cached resolution of `event_name` on the contract at
++    /// `address` on `chain_id`.
++    ///
++    /// Returns None when nothing is cached for that key.
++    ///
++    /// Errors when the query fails, or when the stored `topic0` is not a
++    /// 32-byte `BLOB`.
+     pub fn get_event_signature(
+         &self,
+         chain_id: ChainId,
+         address: &Address,
+         event_name: &str,
+-    ) -> Result<Option<EventSignatureRow>, CacheError> {
++    ) -> Result<Option<ResolvedEvent>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+         let mut stmt = conn.prepare_cached(
+             "SELECT signature, topic0, abi_json FROM event_signatures
+@@ -61,7 +56,7 @@ impl EventSignatureCache {
+         let mut rows = stmt.query_map(
+             rusqlite::params![chain_id, address.as_slice(), event_name],
+             |row| {
+-                Ok(EventSignatureRow {
++                Ok(ResolvedEvent {
+                     signature: row.get(0)?,
+                     topic0: row.get(1)?,
+                     abi_json: row.get(2)?,
+@@ -71,14 +66,16 @@ impl EventSignatureCache {
+         rows.next().transpose().map_err(Into::into)
+     }
+ 
++    /// Stores `event` as the resolution of `event_name` on the contract at
++    /// `address` on `chain_id`, replacing any earlier one.
++    ///
++    /// Errors when the write fails.
+     pub fn insert_event_signature(
+         &self,
+         chain_id: ChainId,
+         address: &Address,
+         event_name: &str,
+-        signature: &str,
+-        topic0: Topic,
+-        abi_json: Option<&str>,
++        event: &ResolvedEvent,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+         conn.execute(
+@@ -89,9 +86,9 @@ impl EventSignatureCache {
+                 chain_id,
+                 address.as_slice(),
+                 event_name,
+-                signature,
+-                topic0,
+-                abi_json,
++                event.signature,
++                event.topic0,
++                event.abi_json,
+             ],
+         )?;
+         Ok(())
+@@ -104,33 +101,29 @@ impl EventSignatureCache {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use alloy::primitives::B256;
+-
+     use super::*;
+ 
+     const ADDR: Address = Address::repeat_byte(0x42);
+-    const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
++
++    fn transfer(abi_json: Option<&str>) -> ResolvedEvent {
++        ResolvedEvent {
++            signature: "Transfer(address,address,uint256)".to_owned(),
++            topic0: [0xDD; 32],
++            abi_json: abi_json.map(str::to_owned),
++        }
++    }
+ 
+     #[test]
+     fn signature_round_trip_with_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
++        let event = transfer(Some("{\"type\":\"event\"}"));
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Transfer",
+-                "Transfer(address,address,uint256)",
+-                TOPIC0,
+-                Some("{\"type\":\"event\"}"),
+-            )
++            .insert_event_signature(ChainId::new(1), &ADDR, "Transfer", &event)
+             .unwrap();
+-        let row = cache
++        let fetched = cache
+             .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
+-            .unwrap()
+             .unwrap();
+-        assert_eq!(row.signature, "Transfer(address,address,uint256)");
+-        assert_eq!(row.topic0, TOPIC0);
+-        assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
++        assert_eq!(fetched, Some(event));
+     }
+ 
+     #[test]
+@@ -147,21 +140,14 @@ mod tests {
+     #[test]
+     fn signature_nullable_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
++        let event = transfer(None);
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Approval",
+-                "Approval()",
+-                TOPIC0,
+-                None,
+-            )
++            .insert_event_signature(ChainId::new(1), &ADDR, "Transfer", &event)
+             .unwrap();
+-        let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Approval")
+-            .unwrap()
++        let fetched = cache
++            .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
+             .unwrap();
+-        assert!(row.abi_json.is_none());
++        assert_eq!(fetched, Some(event));
+     }
+ 
+     #[test]
+diff --git a/src/signatures.rs b/src/signatures.rs
+index 746e686..716a7cc 100644
+--- a/src/signatures.rs
++++ b/src/signatures.rs
+@@ -44,9 +44,12 @@ pub enum SignatureError {
+ /// available) the JSON of the matched ABI event item. The ABI JSON is what
+ /// callers need to decode logs — it carries per-input names, types, and the
+ /// indexed flag.
+-#[derive(Debug, Clone)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct ResolvedEvent {
++    /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+     pub signature: String,
++    /// The keccak256 hash of `signature`. Logs of this event carry it as
++    /// topic 0.
+     pub topic0: [u8; 32],
+     /// JSON of the matched event item. Missing for entries cached before
+     /// the column was added; present for every entry written by

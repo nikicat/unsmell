@@ -1,0 +1,109 @@
+read:
+  - inventory/b1.md
+  - inventory/b2.md
+unread: []
+findings:
+  - id: cross-1
+    at:
+      - "src/evm/cache.rs:241-246"
+      - "src/evm/history.rs:402-403"
+      - "src/evm/history.rs:520-521"
+      - "src/evm/history.rs:601-602"
+      - "src/evm/history.rs:777-780"
+    reach:
+      - "src/evm/cache.rs:241-246"
+      - "src/evm/history.rs:402-403"
+      - "src/evm/history.rs:520-521"
+      - "src/evm/history.rs:601-602"
+      - "src/evm/history.rs:777-780"
+    row: duplicated knowledge
+    claim: >-
+      The timestamp-resolution rule (use the log's own block_timestamp, else the
+      block header's timestamp) is stated in comments of both batches, all added by
+      the changeset. The block_timestamp migration comment in cache.rs (:241-246)
+      states it with "the reader falls back to the cached block header", and the
+      history.rs comments at :402-403, :520-521, :601-602 and the test doc :777-780
+      state it again. The cache.rs copy is also inaccurate, because
+      ensure_block_header_via (history.rs:540-555) fetches the header from the
+      provider on a cache miss, so the fallback is not to the cached header only.
+    fix: >-
+      One owner, the doc of the log_timestamp helper that b2-1 introduces in
+      history.rs. The cache.rs migration comment says only what the column holds
+      (the block's timestamp in seconds as the provider sent it with eth_getLogs,
+      NULL when the provider omitted it or the row predates the migration). The
+      history.rs comments shrink or go as in b2-4 and b2-5.
+    decision: FIX
+    score: 6
+    reason: >-
+      One fact stated in five comments across two batches, one copy slightly wrong.
+      Removes comment lines. The two batch findings each fix their own half, so they
+      must share one task to reach one owner.
+    same:
+      - b1-1
+      - b2-4
+      - b2-5
+  - id: cross-2
+    at:
+      - "src/evm/cache/log_cache.rs:133-134"
+      - "src/evm/cache/log_cache.rs:143"
+      - "src/evm/history.rs:405"
+      - "src/evm/history.rs:519"
+      - "src/evm/history.rs:522"
+      - "src/evm/history.rs:524"
+    reach:
+      - "src/evm/cache/log_cache.rs:114-145"
+      - "src/evm/history.rs:395-416"
+      - "src/evm/history.rs:512-529"
+      - "src/evm/history.rs:599-609"
+    row: unparsed input
+    claim: >-
+      Both batches default alloy Log's optional fields to 0 at each use instead of
+      parsing a mined log once. insert_logs writes block_number, log_index and
+      transaction_index as unwrap_or(0) (log_cache.rs:133-134, :143). history.rs
+      writes block_number.unwrap_or(0) in iter (:405) and log_to_evm_event (:519),
+      log_index.unwrap_or(0) at :524, and the changeset added
+      block_timestamp.unwrap_or(0) at :522. history.rs relies on the b1 rule that
+      insert_logs drops logs without block_hash for these logs to be mined, but no
+      type carries that guarantee across the two files, and the prefetch at
+      history.rs:606 skips a log with no block number instead, a third policy.
+    fix: >-
+      A mined-log type (block hash, block number, log index, transaction hash and
+      index required; block_timestamp Option) parsed where provider logs enter, and
+      used by insert_logs, row_to_log, iter and log_to_evm_event. The changed-line
+      copies at history.rs:405 and :522 go away under b2-1 regardless.
+    decision: PLAN
+    score: 5
+    reason: >-
+      The conversion is written in both batches (full tell, 7), but the root fix
+      spans log_index and subscriber outside the changeset and mostly unchanged
+      lines, minus 2 for churn.
+    same:
+      - b1-5
+      - b2-6
+      - b2-1
+  - id: cross-3
+    at:
+      - "src/evm/cache/log_cache.rs:381-387"
+      - "src/evm/history.rs:559-569"
+    reach:
+      - "src/evm/cache/log_cache.rs:380-395"
+      - "src/evm/history.rs:555-570"
+      - "src/evm/history.rs:664-689"
+      - "src/evm/history.rs:782-796"
+    row: data clump
+    claim: >-
+      LogCache::insert_block_header (log_cache.rs:381-387) takes BlockHeader's four
+      fields loose (height, hash, parent_hash, timestamp). Its caller
+      ensure_block_header_via (history.rs:559-569) builds those four values, passes
+      them loose at :562, and then builds a BlockHeader from the same four at
+      :565-569. The test fixtures in history.rs (:669-678, :787-790) repeat the loose
+      four-argument call. No single batch sees both ends.
+    fix: >-
+      insert_block_header(&self, header: &BlockHeader). ensure_block_header_via
+      builds the BlockHeader once, stores it and returns it.
+    decision: PLAN
+    score: 5
+    reason: >-
+      Data clump with the type already existing (full tell, 7), but on unchanged
+      lines with test call sites in both files, minus 2 for churn.
+    same: []

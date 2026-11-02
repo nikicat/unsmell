@@ -1,0 +1,28 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..f81b7e3 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -1,9 +1,8 @@
+ //! [`EventSignatureCache`] — durable cache for the event-signature resolver.
+ //!
+ //! A cheap handle over the shared connection vended by
+-//! [`CacheDb`](super::CacheDb). Stores resolved
+-//! `(chain, address, event name) → (signature, topic0, abi)` rows so repeated
+-//! lookups stay zero-network. Named `EventSignatureCache` (not
++//! [`CacheDb`](super::CacheDb). Stores one [`EventSignatureRow`] for each
++//! chain, contract address and event name. Named `EventSignatureCache` (not
+ //! `SignatureCache`) to avoid colliding with the
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+@@ -12,7 +11,10 @@ use alloy::primitives::{Address, B256};
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+ 
+-/// A single resolved row from `event_signatures`.
++/// The cached signature of one contract event, as
++/// [`EventSignatureCache::get_event_signature`] returns it. The CLI's
++/// signature-cache adapter turns it into the resolver's
++/// [`ResolvedEvent`](crate::signatures::ResolvedEvent).
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.

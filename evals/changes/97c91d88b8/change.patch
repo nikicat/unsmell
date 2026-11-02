@@ -1,0 +1,70 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index 14f806c..9c3f973 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -109,29 +109,32 @@ mod tests {
+ 
+     const ADDR: Address = Address::repeat_byte(0x42);
+     const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
++    const CHAIN: ChainId = ChainId::new(1);
++    const SIG: &str = "Transfer(address,address,uint256)";
++    const ABI: &str = "{\"type\":\"event\"}";
+ 
+     #[test]
+     fn signature_round_trip_with_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+             .insert_event_signature(
+-                ChainId::new(1),
++                CHAIN,
+                 &ADDR,
+                 "Transfer",
+                 &EventSignatureRow {
+-                    signature: "Transfer(address,address,uint256)".to_owned(),
++                    signature: SIG.to_owned(),
+                     topic0: TOPIC0,
+-                    abi_json: Some("{\"type\":\"event\"}".to_owned()),
++                    abi_json: Some(ABI.to_owned()),
+                 },
+             )
+             .unwrap();
+         let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
++            .get_event_signature(CHAIN, &ADDR, "Transfer")
+             .unwrap()
+             .unwrap();
+-        assert_eq!(row.signature, "Transfer(address,address,uint256)");
++        assert_eq!(row.signature, SIG);
+         assert_eq!(row.topic0, TOPIC0);
+-        assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
++        assert_eq!(row.abi_json.as_deref(), Some(ABI));
+     }
+ 
+     #[test]
+@@ -139,7 +142,7 @@ mod tests {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         assert!(
+             cache
+-                .get_event_signature(ChainId::new(1), &ADDR, "Nope")
++                .get_event_signature(CHAIN, &ADDR, "Nope")
+                 .unwrap()
+                 .is_none()
+         );
+@@ -150,7 +153,7 @@ mod tests {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+             .insert_event_signature(
+-                ChainId::new(1),
++                CHAIN,
+                 &ADDR,
+                 "Approval",
+                 &EventSignatureRow {
+@@ -161,7 +164,7 @@ mod tests {
+             )
+             .unwrap();
+         let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Approval")
++            .get_event_signature(CHAIN, &ADDR, "Approval")
+             .unwrap()
+             .unwrap();
+         assert!(row.abi_json.is_none());

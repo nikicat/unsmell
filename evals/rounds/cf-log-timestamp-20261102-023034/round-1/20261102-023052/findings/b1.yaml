@@ -1,0 +1,338 @@
+read:
+  - src/evm/cache.rs
+  - src/evm/cache/log_cache.rs
+unread: []
+findings:
+  - id: b1-1
+    at:
+      - src/evm/cache.rs:241-246
+    reach:
+      - src/evm/cache.rs:241-246
+    row: wrong-layer doc
+    claim: >-
+      The comment that the changeset added on the block_timestamp migration describes
+      the query path in history.rs (EvmEvent.timestamp, skipping the eth_getBlockByNumber
+      fetch, "the reader falls back to the cached block header") rather than the column.
+      The fallback fact is stated again at history.rs:401-402, 520-521 and 601-602, and it is
+      inaccurate, because ensure_block_header_via (history.rs:540-555) fetches the header on a
+      cache miss. It is also compressed ("Nullable: most providers omit it, …" joins a second idea
+      with a colon, and "— in both cases" is a dash clause), it has six lines, and "the reader"
+      has no referent in the schema.
+    fix: >-
+      A comment of two or three plain sentences about the column only. For example, "The
+      timestamp of the log's block, in seconds, as the provider sent it with eth_getLogs.
+      Not every provider sends it. It is NULL when the provider left it out, and on rows
+      written before this migration." The fallback stays documented in history.rs alone.
+    decision: FIX
+    score: 6
+    reason: >-
+      The comment states the caller's rule twice and gets it slightly wrong ("cached" header).
+      Cause (b) of a long comment, because it describes the caller instead of the column.
+    same: []
+  - id: b1-2
+    at:
+      - src/evm/cache/log_cache.rs:444
+      - src/evm/cache/log_cache.rs:165
+      - src/evm/cache/log_cache.rs:192
+    reach:
+      - src/evm/cache/log_cache.rs:432-468
+    row: unparsed input
+    claim: >-
+      row_to_log decodes a cached_logs row by position (row.get(0) to row.get(11)), so
+      the column order of the two SELECT lists at log_cache.rs:164-165 and 191-192 is a schema
+      that it relies on without saying so. The changeset extended that coupling. It appended
+      block_timestamp to both lists and read it back as row.get(11).
+    fix: >-
+      row_to_log reads each column by name (row.get("block_timestamp")?, row.get("block_number")?,
+      and so on), which rusqlite supports. Both SELECT statements stay written out in full.
+      No shared column-list constant and no generated SQL.
+    decision: FIX
+    score: 6
+    reason: >-
+      The positional access tell (row[0]) is met in full on a line the changeset added.
+      The root cause is the other positional reads in the same function, about 12 lines.
+    same: []
+  - id: b1-3
+    at:
+      - src/evm/cache.rs:36-38
+    reach:
+      - src/evm/cache.rs:36-38
+      - src/evm/cache.rs:268-270
+    row: misleading name
+    claim: >-
+      The CACHE_VERSION doc says "Bump this when cache schema or semantics change". But the
+      migration that the changeset added at cache.rs:239-249 changes the cached_logs schema and
+      leaves the version at 3, and so did the abi_json migration at cache.rs:231-238. Either
+      the doc is false now that schema changes go through rusqlite_migration, or the changeset
+      missed a bump.
+    fix: >-
+      Option A, which keeps existing caches and relies on the NULL fallback. The doc says to bump
+      only for a change that a migration cannot apply in place, for example a change in what
+      existing rows mean. Option B. Bump to 4, which abandons every existing cache file, and update
+      the versioned_path test.
+    decision: ASK
+    score: 6
+    reason: >-
+      The doc states a rule that the code does not follow. Bumping would change the on-disk
+      file name, which users can see, so the choice belongs to the user. The line is unchanged
+      but it is the root cause of the question that the changed migration raises.
+    same: []
+  - id: b1-4
+    at:
+      - src/evm/cache/log_cache.rs:553
+    reach:
+      - src/evm/cache/log_cache.rs:553
+    row: duplicated knowledge
+    claim: >-
+      The trailing comment "// block_timestamp: None" in the new test logs_preserve_block_timestamp
+      restates what make_test_log sets at log_cache.rs:495.
+    fix: >-
+      Delete the trailing comment, or set without_ts.block_timestamp = None explicitly so that
+      the test states its own input.
+    decision: SKIP
+    score: 3
+    reason: A test-local fact copy that is true today and adds little.
+    same: []
+  - id: b1-5
+    at:
+      - src/evm/cache/log_cache.rs:114-115
+      - src/evm/cache/log_cache.rs:133-143
+    reach:
+      - src/evm/cache/log_cache.rs:114-145
+    row: unparsed input
+    claim: >-
+      insert_logs stores a missing block_number, log_index or transaction_index as 0. It also
+      binds a missing transaction_hash as NULL into a NOT NULL column (cache.rs:144), and
+      INSERT OR IGNORE then drops that row silently. The doc names only the skip for logs
+      without a block_hash. These are pre-existing lines inside the function that the changeset
+      edited.
+    fix: >-
+      Parse each provider Log into a mined-log record at the start of insert_logs, with the
+      block hash, number, log index, transaction hash and index all required. Logs that cannot
+      be parsed are skipped explicitly, or logged. The doc then says "Skips logs that are not
+      mined (no block hash, block number, log index or transaction hash)."
+    decision: PLAN
+    score: 6
+    reason: >-
+      The lines are unchanged. The doc omits a silent exit, and the 0 defaults are a validation
+      that happens later than the edge.
+    same: []
+  - id: b1-6
+    at:
+      - src/evm/cache/log_cache.rs:116
+      - src/evm/cache/log_cache.rs:156-161
+      - src/evm/cache/log_cache.rs:182-187
+      - src/evm/cache/log_cache.rs:213-219
+      - src/evm/cache/log_cache.rs:236-239
+      - src/evm/cache/log_cache.rs:261-265
+      - src/evm/cache/log_cache.rs:353
+    reach:
+      - src/evm/cache/log_cache.rs:90-374
+    row: missing receiver
+    claim: >-
+      Seven LogCache methods take filter_hash as a parameter. Every caller passes its own
+      self.filter_hash (log_index.rs:122, gap_fill.rs:129, range_tree.rs:252, nav.rs:175). So
+      the partition is context that is threaded through each call, not input to it.
+    fix: >-
+      A per-filter view, such as FilterLogs { conn, filter_hash }, returned by
+      LogCache::for_filter(filter_hash). The seven methods become its methods, and each LogIndex
+      holds one view.
+    decision: PLAN
+    score: 5
+    reason: >-
+      The tell is met in full, but the signatures are unchanged and the fix spans the log_index
+      module. The score is 7 minus 2 for churn.
+    same: []
+  - id: b1-7
+    at:
+      - src/evm/cache/log_cache.rs:25
+      - src/evm/cache/log_cache.rs:158-159
+      - src/evm/cache/log_cache.rs:215-218
+      - src/evm/cache/log_cache.rs:381-387
+    reach:
+      - src/evm/cache/log_cache.rs:25-36
+      - src/evm/cache/log_cache.rs:156-232
+      - src/evm/cache/log_cache.rs:381-395
+    row: primitive obsession
+    claim: >-
+      Filter hashes and block hashes are both raw [u8; 32], and they sit adjacent in
+      get_log_by_ref(filter_hash, block_hash, …) and record_scanned_range(filter_hash, …,
+      end_block_hash), where they are easy to transpose. insert_block_header takes BlockHeader's
+      four fields loose, instead of a BlockHeader.
+    fix: >-
+      A FilterHash newtype returned by compute_filter_hash and taken everywhere. Block hashes
+      use alloy's B256. insert_block_header takes a &BlockHeader.
+    decision: PLAN
+    score: 5
+    reason: Unchanged lines. The type narrowing spans callers in log_index and history.
+    same: []
+  - id: b1-8
+    at:
+      - src/evm/cache/log_cache.rs:41
+      - src/evm/cache/log_cache.rs:239
+      - src/evm/cache/log_cache.rs:269-310
+      - src/evm/cache/log_cache.rs:335
+    reach:
+      - src/evm/cache/log_cache.rs:38-63
+      - src/evm/cache/log_cache.rs:234-327
+      - src/evm/cache/log_cache.rs:335-348
+    row: unnamed tuple
+    claim: >-
+      Inclusive block ranges travel as (u64, u64) through compute_gaps and get_scanned_ranges.
+      compact_ranges works on a positional (i64, u64, u64, Vec<u8>) and a (u64, u64, Vec<u8>),
+      with last.1 and last.2, and it merges the intervals inline beside its DB writes. It also
+      writes the scanned_ranges INSERT a second time (log_cache.rs:318-319 and 222-223).
+      mark_reorged takes &[([u8; 32], u64)].
+    fix: >-
+      A BlockRange { start, end } type that owns gap computation and merging. A ScannedRange
+      { range, end_block_hash } is merged by a pure function before compact_ranges writes.
+      compact_ranges reuses one insert helper shared with record_scanned_range. A ReorgedBlock
+      { hash, number } replaces the tuple.
+    decision: PLAN
+    score: 5
+    reason: Unchanged lines that the changeset does not touch.
+    same: []
+  - id: b1-9
+    at:
+      - src/evm/cache/log_cache.rs:195
+      - src/evm/cache/log_cache.rs:245
+      - src/evm/cache/log_cache.rs:273
+      - src/evm/cache/log_cache.rs:358
+    reach:
+      - src/evm/cache/log_cache.rs:182-362
+      - src/evm/cache.rs:119-251
+    row: repeated derivation
+    claim: >-
+      The rule that a row counts only when its block is not reorged is written in four
+      statements as a "NOT IN or IN (SELECT block_hash FROM reorged_blocks)" subquery. One of
+      them is the get_logs_in_range SELECT that the changeset edited.
+    fix: >-
+      Option A. A SQL view, for example canonical_cached_logs, added by a migration, which the
+      log queries read from. This is a schema change. Option B. Leave the statements in full,
+      in line with the rule that a query written out in full is not a smell.
+    decision: PLAN
+    score: 5
+    reason: >-
+      The repeated subquery sits on unchanged lines. The view would be a schema change, which
+      is an ASK or a PLAN and never an incremental FIX.
+    same: []
+  - id: b1-10
+    at:
+      - src/evm/cache.rs:17-18
+      - src/evm/cache/log_cache.rs:8-9
+      - src/evm/cache/log_cache.rs:88-89
+      - src/evm/cache.rs:130-131
+      - src/evm/cache.rs:156
+      - src/evm/cache/log_cache.rs:85-86
+    reach:
+      - src/evm/cache.rs:17-18
+      - src/evm/cache/log_cache.rs:7-9
+      - src/evm/cache/log_cache.rs:82-89
+    row: duplicated knowledge
+    claim: >-
+      "Navigation queries (first/last log) live in LogIndex" is stated three times. "Reorged
+      logs stay in the table and are filtered out at query time" is stated three times, twice
+      in schema comments and once on LogCache.
+    fix: >-
+      The LogIndex fact stays only in the cache.rs module doc. The reorg-tombstone rule stays
+      only in the schema comment on cached_logs, and the LogCache doc drops both facts.
+    decision: PLAN
+    score: 5
+    reason: Unchanged doc lines.
+    same: []
+  - id: b1-11
+    at:
+      - src/evm/cache.rs:1-18
+      - src/evm/cache.rs:69-72
+      - src/evm/cache/log_cache.rs:1-9
+      - src/evm/cache/log_cache.rs:82-89
+    reach:
+      - src/evm/cache.rs:1-18
+      - src/evm/cache.rs:69-72
+      - src/evm/cache/log_cache.rs:1-9
+      - src/evm/cache/log_cache.rs:82-89
+    row: interface read back
+    claim: >-
+      The entity docs list their members. The cache.rs module doc and CacheDb list the views.
+      The log_cache.rs module doc lists its tables and its methods ("bulk read/write,
+      scanned-range bookkeeping, reorg invalidation, and header lookup"). The LogCache doc reads
+      "log + range + reorg + header cache" and explains the tombstone mechanism.
+    fix: >-
+      Each doc states the entity's place in the system in two lines. For example, LogCache is
+      "The only durable store of fetched logs and the block ranges they cover. It keeps logs
+      from reorged blocks out of every read."
+    decision: PLAN
+    score: 5
+    reason: Unchanged doc lines.
+    same: []
+  - id: b1-12
+    at:
+      - src/evm/cache.rs:80-97
+    reach:
+      - src/evm/cache.rs:77-97
+    row: duplication
+    claim: >-
+      CacheDb::open and CacheDb::open_in_memory repeat the same configure, migrate and wrap
+      body. Only the Connection constructor differs.
+    fix: >-
+      A private CacheDb::from_connection(conn) that configures, migrates and wraps the
+      connection. Both openers call it.
+    decision: PLAN
+    score: 5
+    reason: Unchanged lines.
+    same: []
+  - id: b1-13
+    at:
+      - src/evm/cache/log_cache.rs:152-155
+    reach:
+      - src/evm/cache/log_cache.rs:152-155
+    row: wrong-layer doc
+    claim: >-
+      The doc of get_log_by_ref, a function that the changeset edited, describes its caller
+      ("the caller (typically LogIndex) is expected to never request a reference into a
+      reorged block") instead of its own contract.
+    fix: >-
+      Returns the cached log with the given block hash and log index under filter_hash, or None.
+      Unlike get_logs_in_range, it also returns logs from reorged blocks.
+    decision: PLAN
+    score: 5
+    reason: The doc line is unchanged. The function's SQL changed, but not this contract.
+    same: []
+  - id: b1-14
+    at:
+      - src/evm/cache/log_cache.rs:174-177
+      - src/evm/cache/log_cache.rs:421-424
+    reach:
+      - src/evm/cache/log_cache.rs:163-177
+      - src/evm/cache/log_cache.rs:400-424
+    row: repeated derivation
+    claim: >-
+      get_log_by_ref and get_block_header both run query_map and then match rows.next() by hand
+      to get an Option. rusqlite's OptionalExtension::optional on query_row does this, and the
+      repo already uses it at src/matcher/anchor_store_sqlite.rs:52-55.
+    fix: Use stmt.query_row(params, row_to_log).optional() and the same in get_block_header.
+    decision: PLAN
+    score: 5
+    reason: >-
+      Unchanged lines in a function that the changeset edited. The finding is not the root
+      cause of a changed-line smell.
+    same: []
+  - id: b1-15
+    at:
+      - src/evm/cache/log_cache.rs:126-129
+    reach:
+      - src/evm/cache/log_cache.rs:126-146
+    row: computing loop with effects
+    claim: >-
+      The insert loop in insert_logs decides which logs to keep (a let-else skip of logs
+      without a block_hash) in the same body that executes the INSERT.
+    fix: >-
+      Iterate over logs.iter().filter_map(|log| Some((log, log.block_hash?))), or over the
+      parsed records of b1-5, then execute.
+    decision: SKIP
+    score: 4
+    reason: >-
+      A one-line skip. Its real fix is the edge parse that b1-5 plans, so it stands as a
+      separate SKIP.
+    same:
+      - b1-5

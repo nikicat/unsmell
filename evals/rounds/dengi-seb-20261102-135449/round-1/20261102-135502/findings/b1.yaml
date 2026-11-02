@@ -1,0 +1,193 @@
+read: [seb.py, schema.sql, pyproject.toml, .gitignore]
+unread: []
+findings:
+  - id: b1-1
+    at: [.gitignore:1-3]
+    reach: [.gitignore:1-3]
+    row: bug (secrets not ignored)
+    claim: "seb.py writes or reads private.pem (seb.py:21), session.json (seb.py:23, 67) and dengi.db (seb.py:94) in the working directory, which is the repo when run with uv run seb; .gitignore ignores none of them, so the RS256 private key, the bank session and the ledger are one git add away from a commit"
+    fix: .gitignore also lists private.pem, session.json and dengi.db (or *.pem, session.json, *.db)
+    decision: FIX
+    score: 8
+    reason: credentials and bank data are unprotected; three lines, no behaviour change
+    same: []
+  - id: b1-2
+    at: [seb.py:19-24, seb.py:27-49, seb.py:92-93]
+    reach: [seb.py:19-96]
+    row: missing receiver
+    claim: "headers() and call() share the API client context (API, APP_ID, KEY, PSU) through module globals; authorize() and transactions() reach it through call(); PSU is a mutable global filled by main() via `global PSU` (the comment '# set in main()' at seb.py:24 is the temporal-coupling tell)"
+    fix: "one EnableBanking client (frozen dataclass: app_id, key, psu headers) built once in main; call() becomes its method and builds the JWT headers itself; authorize(), session() and transactions() become its methods; no module globals besides constants; the '# set in main()' comment goes"
+    decision: FIX
+    score: 7
+    reason: catalog tell met in full (shared context threaded to every call, captured once); one file, no external callers besides the seb:main entry point
+    same: []
+  - id: b1-3
+    at: [seb.py:20-22, seb.py:57]
+    reach: [seb.py:19-24, seb.py:57, seb.py:91-95, pyproject.toml:5-8]
+    row: unparsed input
+    claim: "settings arrive as raw env strings at import time: EB_APP_ID defaults to an all-zero placeholder UUID that the API can only reject, EB_KEY is read from disk on import (importing seb fails without private.pem), EB_REDIRECT is an unchecked str, and EB_ASPSP is read deep inside authorize() rather than at the edge; with the argv date and the hardcoded paths that is about six settings at one edge"
+    fix: "a pydantic-settings Settings(BaseSettings, env_prefix='EB_') with app_id: UUID (required), key: FilePath, redirect: HttpUrl, aspsp: str = 'SEB', read once in main and handed to the EnableBanking client (b1-2)"
+    decision: ASK
+    score: 6
+    reason: a settings parser with validation is a library's job (§5); adds a dependency and makes EB_APP_ID required, which a user can notice
+    same: [b1-2, b1-17]
+  - id: b1-4
+    at: [seb.py:99-100, seb.py:79-80]
+    reach: [seb.py:1-6, seb.py:79-82, seb.py:91-109]
+    row: unparsed input
+    claim: "date_from is raw text: sys.argv[1] is never validated and is re-read inside the per-account loop, the DB value is a str from fetchone()[0], and transactions() forwards whatever str it gets to the API; the usage line in the module docstring is a hand-written CLI help"
+    fix: "main parses argv once with argparse (positional date_from, nargs='?', type=date.fromisoformat), which also renders the usage; the stored resume day comes back as a date (Ledger.last_booking_date, b1-9); transactions() takes date | None and sends date_from.isoformat()"
+    decision: FIX
+    score: 7
+    reason: raw argv passed past the first function and validated nowhere; CLI shape unchanged (same positional, now rejected when malformed)
+    same: [b1-13]
+  - id: b1-5
+    at: [seb.py:61, seb.py:66, seb.py:73-74, seb.py:83-88, seb.py:96-97, seb.py:101, seb.py:108]
+    reach: [seb.py:52-109]
+    row: unparsed input
+    claim: "every Enable Banking body is a dict accessed by key at its use site: ['url'], session ['access']['valid_until'] and ['accounts'], acc.get('account_id', {}).get('iban') or acc['uid'], page['transactions'] and .get('continuation_key'), t['status'] and t['entry_reference']; the schema the script depends on is written nowhere"
+    fix: "pydantic models parsed in the client methods: Session(valid_until: AwareDatetime, accounts: list[Account]) with an expired property, Account(uid, iban: str | None via account_id), Page(transactions: list[Transaction], continuation_key: str | None), Transaction(status, entry_reference: str | None) keeping the raw dict for storage"
+    decision: ASK
+    score: 7
+    reason: a schema for an input body is a library's job (pydantic); a hand-written set of dataclasses is not a FIX (§5); adds a dependency
+    same: [b1-6, b1-10]
+  - id: b1-6
+    at: [seb.py:67, seb.py:71-76]
+    reach: [seb.py:52-76, seb.py:96]
+    row: misplaced rule
+    claim: "the session file protocol is split: authorize() writes session.json and load_session() reads it and checks its expiry on the raw dict; load_session's name says less than the body, which may run an interactive Smart-ID login and write a file"
+    fix: "authorize() only returns a new session; one session() method (on the client of b1-2) returns a session valid now, loading session.json or authorizing and saving it; the expiry test lives on the session value (Session.expired once b1-5 lands, a small helper until then)"
+    decision: FIX
+    score: 6
+    reason: misplaced rule and misleading name with tells met; local to seb.py
+    same: [b1-5]
+  - id: b1-7
+    at: [seb.py:52-68]
+    reach: [seb.py:52-68]
+    row: mixed altitude
+    claim: "authorize() interleaves building the /auth body, a terminal prompt, parsing and checking the pasted redirect, the code exchange and the file write; q['code'][0] raises KeyError (a traceback) when the bank redirects back with error=... and the right state, e.g. when the user cancels"
+    fix: "authorize() reads as steps: url = start_auth(state), code = read_redirect(state), return exchange(code); read_redirect parses the pasted URL and exits with the redirect's error/error_description when there is no code or the state does not match; saving moves to session() (b1-6)"
+    decision: FIX
+    score: 6
+    reason: two inline roles plus an unhandled edge case at the input edge; error exit instead of a traceback is a small behaviour change
+    same: [b1-6]
+  - id: b1-8
+    at: [seb.py:79-88]
+    reach: [seb.py:79-88, seb.py:101]
+    row: inline generic machinery
+    claim: "transactions() hand-builds continuation-key pagination (params dict mutated, out accumulator, tuple-assigned on one line with params) and mixes it with a stderr progress counter"
+    fix: "transactions() is a generator yielding each transaction across pages (while True: page = call(...); yield from page['transactions']; stop when no continuation_key); progress is printed by the caller or dropped; main filters BOOK over the generator"
+    decision: FIX
+    score: 5
+    reason: mechanism plus progress effect in one loop; small local change
+    same: []
+  - id: b1-9
+    at: [seb.py:94-95, seb.py:99-108]
+    reach: [seb.py:91-109]
+    row: concept mixing
+    claim: "main mixes orchestration with three inline SQL statements on (db, iban): the resume day, a count lambda and the upsert; db.execute(..., (iban,)).fetchone()[0] is written twice; schema setup and file name are inline too"
+    fix: "a Ledger class over the sqlite connection, created by Ledger.open(path) which runs schema.sql, with last_booking_date(iban) -> date | None, count(iban) -> int and upsert(iban, txs) -> None; main reads as steps: open ledger, get session, for each account fetch, filter booked, upsert, report"
+    decision: FIX
+    score: 7
+    reason: missing receiver for db across three queries plus a repeated derivation; queries stay written out in full (no query builder)
+    same: [b1-4, b1-14]
+  - id: b1-10
+    at: [seb.py:97, schema.sql:2]
+    reach: [seb.py:97, schema.sql:2, schema.sql:22, schema.sql:25]
+    row: misleading name
+    claim: "the value named iban (and the txn.iban key column) holds the account uid when the account has no IBAN; Enable Banking account uids are issued per session, so such an account would be re-keyed, and its history duplicated, after every re-authorization"
+    fix: "either skip (or exit on) accounts without an IBAN and keep the column, or rename the column to account_key and key on a stable identifier; the derivation lives on Account (b1-5)"
+    decision: ASK
+    score: 6
+    reason: two defensible designs; changes a stored schema; the uid-per-session claim should be confirmed against the Enable Banking docs
+    same: [b1-5]
+  - id: b1-11
+    at: [schema.sql:10, schema.sql:12-15]
+    reach: [schema.sql:8-15]
+    row: repeated derivation
+    claim: "the debit rule raw ->> '$.credit_debit_indicator' = 'DBIT' is written three times, in amount_cents, counterparty and counterparty_iban"
+    fix: "one generated column debit INTEGER AS (raw ->> '$.credit_debit_indicator' = 'DBIT') declared before the others, which use IIF(debit, ...)"
+    decision: ASK
+    score: 6
+    reason: changes a stored schema, and CREATE TABLE IF NOT EXISTS will not upgrade an existing dengi.db
+    same: []
+  - id: b1-12
+    at: [schema.sql:17-20]
+    reach: [schema.sql:17-20]
+    row: misleading name
+    claim: "the comment says tx_code is the ISO 20022 domain/family/sub-family, but the first part is bank_transaction_code.description, which in Enable Banking's BankTransactionCode is a free-text description rather than the domain code; if so the comment (and the PMNT/CCRD/OTHR example) is false"
+    fix: "check a stored raw row: if description is free text, either build tx_code from code/sub_code only and keep description in its own column, or correct the comment to state what the parts are"
+    decision: ASK
+    score: 9
+    reason: a possibly false comment; needs one real row to settle, and the fix may change a stored column
+    same: []
+  - id: b1-13
+    at: [seb.py:2-6]
+    reach: [seb.py:2-6]
+    row: compressed doc
+    claim: "the module docstring joins two ideas with a semicolon, hand-writes the CLI usage, and leaves out what the user meets when there is no valid session: an interactive Smart-ID login whose result is saved in session.json"
+    fix: "'Imports SEB Lithuania account history from Enable Banking into dengi.db.' then 'Without a date, the import resumes from the last stored booking day. When no valid session is saved in session.json, it asks you to log in with Smart-ID first.'; usage comes from argparse (b1-4)"
+    decision: FIX
+    score: 5
+    reason: states a missing effect the user meets
+    same: [b1-4, b1-14]
+  - id: b1-14
+    at: [seb.py:98, seb.py:5]
+    reach: [seb.py:98]
+    row: duplicated knowledge
+    claim: "the resume rule is stated in the module docstring (seb.py:5) and again in the comment at seb.py:98"
+    fix: "the rule's owner is Ledger.last_booking_date / the module doc; the seb.py:98 comment goes, and 'overlap is deduped by the upsert' moves to Ledger.upsert's doc"
+    decision: FIX
+    score: 5
+    reason: one fact, two copies
+    same: [b1-9, b1-13]
+  - id: b1-15
+    at: [seb.py:37-38]
+    reach: [seb.py:36-42]
+    row: compressed doc
+    claim: "psu_headers' doc opens with 'Mark the request' although the function marks nothing and returns headers; the empty result for a non-terminal run is stated only after a colon joining a second idea"
+    fix: "'Returns the PSU headers that mark a request as user-present. The bank then lifts its limit of about four unattended accesses a day. Returns no headers when stdin is not a terminal, because an unattended run must not claim that the user is there.'"
+    decision: FIX
+    score: 5
+    reason: states the missing outcome; plain sentences
+    same: [b1-2]
+  - id: b1-16
+    at: [seb.py:45-49]
+    reach: [seb.py:45-49]
+    row: narrating doc comment
+    claim: "call() exits the whole process on any non-2xx response; nothing documents it, and every caller (authorize, load_session, transactions) inherits the exit"
+    fix: "a one-line doc on call: 'Returns the decoded JSON body. Exits the program with the status and body when the API answers with an error.'"
+    decision: SKIP
+    score: 4
+    reason: true but adds little in a single-file script; no missing-docs lint
+    same: [b1-2]
+  - id: b1-17
+    at: [pyproject.toml:10-18, seb.py:95]
+    reach: [pyproject.toml:10-18, seb.py:95]
+    row: split protocol
+    claim: "schema.sql is spelled in the wheel config (pyproject.toml:18) and in the loader (seb.py:95); only-include installs seb.py and schema.sql at the root of site-packages, a generic file name outside any package"
+    fix: "a dengi package (dengi/__init__.py or dengi/seb.py plus dengi/schema.sql), the script pointing at dengi.seb:main, the schema read with importlib.resources.files('dengi') / 'schema.sql'"
+    decision: ASK
+    score: 5
+    reason: new layout and file moves; the entry point string changes
+    same: []
+  - id: b1-18
+    at: [seb.py:23, seb.py:21, seb.py:94, seb.py:95]
+    reach: [seb.py:19-24, seb.py:94-95]
+    row: unparsed input
+    claim: "private.pem, session.json and dengi.db resolve against the current directory while schema.sql resolves against the module; run from another directory, the script creates a new empty ledger and asks for a new login"
+    fix: "the paths become settings (b1-3) with one documented default base, e.g. a platformdirs/XDG data directory, or the project directory"
+    decision: ASK
+    score: 6
+    reason: changes where user data lives, which the user notices; several defensible bases
+    same: [b1-3]
+  - id: b1-19
+    at: [seb.py:19, seb.py:30, seb.py:28, seb.py:54, seb.py:74]
+    reach: [seb.py:19-30, seb.py:54, seb.py:74]
+    row: duplication
+    claim: "the API host is spelled in API and again as the JWT aud; datetime.now(timezone.utc) is written three times where datetime.UTC exists"
+    fix: "aud derived from urlparse(API).netloc, or one HOST constant; datetime.now(UTC)"
+    decision: SKIP
+    score: 3
+    reason: the aud is fixed by Enable Banking's JWT spec, so the coincidence is weak; the UTC spelling is cosmetic
+    same: []

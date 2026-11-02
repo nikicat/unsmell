@@ -1,0 +1,43 @@
+id: cdafcf964f
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: bad
+  note: commend became longer with no added information
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-10
+  at:
+  - src/evm/history.rs:531
+  reach:
+  - src/evm/history.rs:531
+  row: narrating doc comment
+  claim: 'The doc of ensure_block_header_via, which the changed lines 406 and 607 call, is a noun phrase
+    that names the mechanism ("Cache-first … Falls back to RPC and persists"). It states no error contract.
+
+    '
+  fix: '"/// Returns the header of the given block, from the cache when it is there, and otherwise fetched
+    and cached. /// Errors when the block does not exist or the cache or RPC call fails." (Folds into
+    b2-6 when that lands.)
+
+    '
+  decision: PLAN
+  score: 5
+  reason: 'The doc is missing its error contract, which scores 5. It sits on unchanged lines, and the
+    changeset only adds callers.
+
+    '
+  same:
+  - b2-6
+  triage:
+    id: b2-10
+    decision: PLAN
+    score: 5
+    task: t9
+    reason: doc on unchanged lines
+check: ok

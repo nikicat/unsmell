@@ -1,0 +1,40 @@
+id: 3cfe2a4f5c
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t7
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - internal/proxy/prompter_test.go:68-97
+  - internal/proxy/prompter_test.go:152-185
+  - internal/proxy/prompter_test.go:132-136
+  - internal/proxy/prompter_test.go:197-217
+  reach:
+  - internal/proxy/prompter_test.go:60-217
+  row: repeated derivation
+  claim: 'Both tests build the same fixture inline: two test buses with kill/wait cleanup, the mock shell
+    with three channels plus Export, RequestName and the primary-owner check, the proxy conns plus New,
+    ConnectWith and Cleanup, and the keyring conn with its prompter object. The receive-with-timeout select
+    is written three times (recvCall, recvReply, and inline at :132-136).'
+  fix: 'Add test helpers: startBridgeBuses(t) (frontAddr, backendAddr), startMockShell(t, frontAddr) *mockShellPrompter,
+    connectProxy(t, frontAddr, backendAddr) *Proxy, and one generic recvWithin[T any](t, ch <-chan T,
+    what string) T used for all three waits.'
+  decision: PLAN
+  score: 5
+  reason: The duplication predates the changeset (HEAD had the same two setups). The lines are mostly
+    unchanged.
+  same: []
+  triage:
+    id: b1-7
+    decision: PLAN
+    score: 5
+    reason: test fixture duplication predates the changeset
+    task: t7
+check: ok

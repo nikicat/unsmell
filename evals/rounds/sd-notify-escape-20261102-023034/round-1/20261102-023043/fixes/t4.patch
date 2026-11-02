@@ -1,0 +1,126 @@
+diff --git a/internal/notification/desktop_test.go b/internal/notification/desktop_test.go
+index 3ee7525..9dbc65f 100644
+--- a/internal/notification/desktop_test.go
++++ b/internal/notification/desktop_test.go
+@@ -171,10 +171,10 @@ func TestHandler_OnEvent_RequestCreated(t *testing.T) {
+ 	if call.summary != "Secret requested" {
+ 		t.Errorf("unexpected summary: %s", call.summary)
+ 	}
+-	if !contains(call.body, "<b>ssh-agent.service</b>@user@remote[1234]") {
++	if !strings.Contains(call.body, "<b>ssh-agent.service</b>@user@remote[1234]") {
+ 		t.Errorf("body should contain proc@client[pid] header: %s", call.body)
+ 	}
+-	if !contains(call.body, "<i>GitHub Token</i>") {
++	if !strings.Contains(call.body, "<i>GitHub Token</i>") {
+ 		t.Errorf("body should contain italic secret label: %s", call.body)
+ 	}
+ }
+@@ -296,7 +296,7 @@ func TestHandler_FormatBody_Search(t *testing.T) {
+ 	if call.summary != "Secrets searched" {
+ 		t.Errorf("expected summary 'Secrets searched', got %q", call.summary)
+ 	}
+-	if !contains(call.body, "<i>service=github</i>") {
++	if !strings.Contains(call.body, "<i>service=github</i>") {
+ 		t.Errorf("body should contain italic search attributes: %s", call.body)
+ 	}
+ }
+@@ -318,7 +318,7 @@ func TestHandler_FormatBody_MultipleItems(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<i>3 items</i>") {
++	if !strings.Contains(call.body, "<i>3 items</i>") {
+ 		t.Errorf("body should show italic item count: %s", call.body)
+ 	}
+ }
+@@ -340,7 +340,7 @@ func TestHandler_FormatBody_PIDOnly(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>user@host</b>[5678]") {
++	if !strings.Contains(call.body, "<b>user@host</b>[5678]") {
+ 		t.Errorf("body should show client[pid]: %s", call.body)
+ 	}
+ }
+@@ -378,13 +378,13 @@ func TestHandler_OnEvent_GPGSignRequest(t *testing.T) {
+ 	if call.icon != "emblem-important" {
+ 		t.Errorf("expected icon 'emblem-important', got %q", call.icon)
+ 	}
+-	if !contains(call.body, "<b>my-project</b>: ") {
++	if !strings.Contains(call.body, "<b>my-project</b>: ") {
+ 		t.Errorf("body should contain bold repo: %s", call.body)
+ 	}
+-	if !contains(call.body, "<i>Add feature</i>") {
++	if !strings.Contains(call.body, "<i>Add feature</i>") {
+ 		t.Errorf("body should contain italic commit subject: %s", call.body)
+ 	}
+-	if contains(call.body, "Some body text") {
++	if strings.Contains(call.body, "Some body text") {
+ 		t.Errorf("body should NOT contain commit body text: %s", call.body)
+ 	}
+ }
+@@ -408,10 +408,10 @@ func TestHandler_FormatBody_GPGSign_PIDOnly(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>my-project</b>: ") {
++	if !strings.Contains(call.body, "<b>my-project</b>: ") {
+ 		t.Errorf("body should contain bold repo without process name: %s", call.body)
+ 	}
+-	if !contains(call.body, "<i>Fix bug</i>") {
++	if !strings.Contains(call.body, "<i>Fix bug</i>") {
+ 		t.Errorf("body should contain italic commit subject: %s", call.body)
+ 	}
+ }
+@@ -485,7 +485,7 @@ func TestHandler_OnEvent_DeleteRequest(t *testing.T) {
+ 	if call.icon != "dialog-warning" {
+ 		t.Errorf("expected icon 'dialog-warning', got %q", call.icon)
+ 	}
+-	if !contains(call.body, "GitHub Token") {
++	if !strings.Contains(call.body, "GitHub Token") {
+ 		t.Errorf("body should contain item label: %s", call.body)
+ 	}
+ }
+@@ -511,10 +511,10 @@ func TestHandler_FormatBody_DeleteWithProcessChain(t *testing.T) {
+ 	h.OnEvent(approval.Event{Type: approval.EventRequestCreated, Request: req})
+ 
+ 	call := mock.lastNotify()
+-	if !contains(call.body, "<b>My Secret</b>") {
++	if !strings.Contains(call.body, "<b>My Secret</b>") {
+ 		t.Errorf("body should contain bold item label: %s", call.body)
+ 	}
+-	if !contains(call.body, "secret-tool") {
++	if !strings.Contains(call.body, "secret-tool") {
+ 		t.Errorf("body should contain process chain: %s", call.body)
+ 	}
+ }
+@@ -541,7 +541,7 @@ func TestHandler_OnEvent_WriteRequest(t *testing.T) {
+ 	if call.icon != "dialog-warning" {
+ 		t.Errorf("expected icon 'dialog-warning', got %q", call.icon)
+ 	}
+-	if !contains(call.body, "New Secret") {
++	if !strings.Contains(call.body, "New Secret") {
+ 		t.Errorf("body should contain item label: %s", call.body)
+ 	}
+ }
+@@ -787,20 +787,6 @@ func TestHandler_ReverseMapCleanup(t *testing.T) {
+ 	}
+ }
+ 
+-func contains(s, substr string) bool {
+-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+-		(len(s) > 0 && len(substr) > 0 && stringContains(s, substr)))
+-}
+-
+-func stringContains(s, substr string) bool {
+-	for i := 0; i <= len(s)-len(substr); i++ {
+-		if s[i:i+len(substr)] == substr {
+-			return true
+-		}
+-	}
+-	return false
+-}
+-
+ func newTestHandlerWithDelay(delay time.Duration) (*Handler, *mockNotifier, *mockApprover) {
+ 	mock := &mockNotifier{}
+ 	approver := &mockApprover{}

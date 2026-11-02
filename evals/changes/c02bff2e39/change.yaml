@@ -1,0 +1,33 @@
+id: c02bff2e39
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-135449
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-12
+  at:
+  - internal/proxy/prompter.go:177
+  - internal/proxy/prompter.go:185
+  reach:
+  - internal/proxy/prompter.go:170-194
+  row: duplication
+  claim: Unexporting a callback proxy, `b.frontConn.Export(nil, path, prompterCallbackInterface)` plus
+    `delete(b.callbacks, path)`, is written in both unexportCallback and close.
+  fix: Add a lock-held helper unexportLocked(path) and call it from both.
+  decision: SKIP
+  score: 3
+  reason: Two copies of a two-line idiom on unchanged lines. Below the threshold.
+  same: []
+  triage:
+    id: b1-12
+    decision: SKIP
+    score: 3
+    reason: two-line idiom twice on unchanged lines
+    task: t9
+check: ok

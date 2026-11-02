@@ -1,0 +1,58 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..13bd257 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -33,18 +33,6 @@ impl EventSignatureCache {
+         Self { conn }
+     }
+ 
+-    /// Open a standalone signature cache at the given path. Creates the DB and
+-    /// runs migrations if needed. Equivalent to
+-    /// `CacheDb::open(path)?.signatures()`.
+-    pub fn open(path: &str) -> Result<Self, CacheError> {
+-        Ok(super::CacheDb::open(path)?.signatures())
+-    }
+-
+-    /// Open a standalone in-memory signature cache. Useful for tests.
+-    pub fn open_in_memory() -> Result<Self, CacheError> {
+-        Ok(super::CacheDb::open_in_memory()?.signatures())
+-    }
+-
+     pub fn get_event_signature(
+         &self,
+         chain_id: ChainId,
+@@ -114,9 +102,15 @@ mod tests {
+     const ADDR: Address = Address::repeat_byte(0x42);
+     const TOPIC0: B256 = B256::repeat_byte(0xDD);
+ 
++    fn in_memory_cache() -> EventSignatureCache {
++        super::super::CacheDb::open_in_memory()
++            .unwrap()
++            .signatures()
++    }
++
+     #[test]
+     fn signature_round_trip_with_abi() {
+-        let cache = EventSignatureCache::open_in_memory().unwrap();
++        let cache = in_memory_cache();
+         cache
+             .insert_event_signature(
+                 ChainId::new(1),
+@@ -138,7 +132,7 @@ mod tests {
+ 
+     #[test]
+     fn signature_missing_returns_none() {
+-        let cache = EventSignatureCache::open_in_memory().unwrap();
++        let cache = in_memory_cache();
+         assert!(
+             cache
+                 .get_event_signature(ChainId::new(1), &ADDR, "Nope")
+@@ -149,7 +143,7 @@ mod tests {
+ 
+     #[test]
+     fn signature_nullable_abi() {
+-        let cache = EventSignatureCache::open_in_memory().unwrap();
++        let cache = in_memory_cache();
+         cache
+             .insert_event_signature(
+                 ChainId::new(1),

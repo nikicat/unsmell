@@ -1,0 +1,1652 @@
+diff --git a/evals/README.md b/evals/README.md
+index e8764a0..19c291c 100644
+--- a/evals/README.md
++++ b/evals/README.md
+@@ -13,9 +13,10 @@ evals/run.py ~/src/unsmell-holdout/*   # the held-out set, to verify only
+ ```
+ 
+ Each fixture runs in a throwaway git repo under `~/.cache/unsmell-eval/runs/`.
+-Every round invokes `/unsmell:unsmell fix everything` headless, with the skill
+-loaded from this checkout. The round trees are kept as `refs/rounds/N` in that
+-repo, so `git diff refs/rounds/1 refs/rounds/2` shows what round 2 changed.
++Each round invokes `/unsmell:unsmell` headless with the text of `--args`, which
++is `fix everything` by default, and loads the skill from this checkout. The
++round trees are kept as `refs/rounds/N` in that repo, so
++`git diff refs/rounds/1 refs/rounds/2` shows what round 2 changed.
+ 
+ The runs use their own Claude config in `~/.cache/unsmell-eval/config`. It has
+ no CLAUDE.md, hooks or plugins, so that only the skill steers the result. Link
+@@ -31,7 +32,7 @@ echo '{}' > ~/.cache/unsmell-eval/config/settings.json
+ 
+ | Measure | Passes when |
+ | -- | -- |
+-| Convergence | a round changes nothing, within the round limit |
++| Convergence | a round changes nothing, within the round limit, and no claude call fails |
+ | Reversals | no round brings back a line that an earlier round removed |
+ | Check | the fixture's `check` command passes after every round |
+ | Stability | the above holds over repeated runs, since runs vary |
+@@ -63,13 +64,16 @@ fixture, so that the ruling stays settled.
+ Convergence alone does not say whether a change was worth making, so every
+ change that a run makes goes into a labelled dataset:
+ 
+-- `changes/<id>/change.patch` is one hunk of one round, and `change.yaml` beside
+-  it says where it was seen, what the judge proposed, and the labels: `good`,
+-  `bad` or `neutral`, with a category and a note. The id hashes the changed
+-  lines, so a later run that makes the same change lands in the same directory
+-  and keeps its label.
+-- `rounds/<run>/` holds each round's full patch and report, so that the tree a
+-  change was made on can be rebuilt from its fixture.
++- `changes/<id>/change.patch` is the patch of one task of one round, a task as
++  in §3.0 of `skills/unsmell/SKILL.md`. `change.yaml` beside it says where it
++  was seen, the findings and decisions the patch was made for, what the judge
++  proposed, and the labels. A label is `good`, `bad`, `neutral` or `unsure`
++  (looked at, but cannot judge), optionally with the finding it is about and a
++  note. A later run that makes the same change gets the same id, so it lands in
++  the same directory and keeps its labels.
++- `rounds/<run>/` holds each round's full patch and report and the skill's run
++  files, so that the tree a change was made on can be rebuilt from its fixture
++  without the run directory.
+ 
+ The loop:
+ 
+@@ -82,9 +86,11 @@ evals/changes.py label ID bad -f b1-4 -n "says how, not what"
+ evals/changes.py score ~/.cache/unsmell-eval/runs/<run>...     # 5. count by label
+ ```
+ 
+-`next` and `show` rebuild the fixture with the earlier rounds as commits and
+-leave the change unstaged, so `git diff` in the printed directory shows exactly
+-the change in its context. A label from a person always wins over the judge's. A
++`next` and `show ID` rebuild the review repo for the change and print its
++directory. HEAD there is the fixture's base. The index holds the changeset under
++review, the earlier rounds and the changes this one is stacked on. The working
++tree adds the change, so `git diff` shows exactly the change in its context.
++Uncommitted edits in the review repo are discarded. A label from a person always wins over the judge's. A
+ run that brings back a change labelled `bad` is a regression, whatever its
+ convergence; a `good` change on the original code that a run no longer makes is
+ a loss of recall.
+diff --git a/evals/changes.py b/evals/changes.py
+index 949fbd5..2e8411b 100755
+--- a/evals/changes.py
++++ b/evals/changes.py
+@@ -5,26 +5,13 @@
+ # ///
+ """The dataset of changes that unsmell made in eval runs, and their labels.
+ 
+-Usage:
+-  evals/changes.py extract RUN_DIR...   split each round of a run into changes
+-  evals/changes.py judge [ID...]        propose a label for changes with none
+-  evals/changes.py check [ID...]        run the fixture's check on each change (a failure leaves check.log)
+-  evals/changes.py list                 list every change with its label, unlabelled ones marked
+-  evals/changes.py next                 open the next change no human has labelled
+-  evals/changes.py show [ID]            open a change in the review repo; no ID: print the current one
+-  evals/changes.py label [ID] LABEL [-f FINDING] [-n NOTE]   no ID: the current change
+-  evals/changes.py score RUN_DIR...     count a run's changes by label
+-
+-A change is one task of one skill run (§3.0 of SKILL.md): its findings, the
+-decision on them and the patch an editor made for it, stored as
+-evals/changes/<id>/change.patch beside change.yaml, which holds where it came
+-from, the findings with their decisions, the judge's proposal and the labels. The
+-id hashes the patch's changed lines, so a later run that makes the same change
+-lands in the same directory. evals/rounds/<run>/ keeps the
+-full patch and the report of every round, so that a review worktree can be rebuilt
+-from the fixture without the run directory.
++The tool tells whether the changes a run made were worth making. It splits
++runs into changes, has a model propose a label for each, opens each one in
++context for a person to label, and scores runs by those labels. The layout of
++the stored dataset is in evals/README.md.
+ """
+ import argparse
++import functools
+ import hashlib
+ import json
+ import os
+@@ -32,25 +19,30 @@ import re
+ import shutil
+ import subprocess
+ import sys
+-import tomllib
++from collections import Counter
++from dataclasses import dataclass
+ from datetime import date
++from enum import StrEnum
++from operator import attrgetter
+ from pathlib import Path
++from typing import NamedTuple
+ 
+ import yaml
+ from concurrent.futures import ThreadPoolExecutor
+ 
+-from run import CACHE, CONFIG, git, materialize
++from run import CACHE, SKILL, Fixture, Report, RunDir, Sign, changed_lines, claude, git, parse_diff, round_ref
+ 
+ EVALS = Path(__file__).resolve().parent
+ CHANGES = EVALS / "changes"
+ ROUNDS = EVALS / "rounds"
+ REVIEW = CACHE / "review"
++# The repo that review_repo builds under REVIEW, where a person reviews the current change.
++REVIEW_REPO = REVIEW / "repo"
+ # The id of the change in the review repo, which show and label use when given none.
+ CURRENT = REVIEW / "current"
+-LABELS = ("good", "bad", "neutral", "unsure")  # unsure: looked at, but cannot judge it
+-# ANSI SGR codes for show's output; NO_COLOR or a pipe turns them off.
+-COLORS = {"FIX": "32", "ASK": "33", "PLAN": "36", "KEEP": "35", "SKIP": "90", "DISCARD": "90",
+-          "good": "32", "bad": "31", "neutral": "33", "unsure": "90"}
++# The by of a label that a person gave, and the default of label --by.
++USER = "user"
++# Whether show paints its output with ANSI SGR codes, which NO_COLOR or a pipe turns off.
+ TTY = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+ 
+ 
+@@ -58,6 +50,62 @@ def paint(text, code):
+     return f"\x1b[{code}m{text}\x1b[0m" if TTY and code else str(text)
+ 
+ 
++class Label(StrEnum):
++    """A verdict on whether a change was worth making, given by a person or proposed by the judge."""
++
++    GOOD = "good"
++    BAD = "bad"
++    NEUTRAL = "neutral"
++    UNSURE = "unsure"
++
++    @property
++    def meaning(self):
++        """What the label says about a change, in the words of the judge's prompt."""
++        return {Label.GOOD: "worth making", Label.BAD: "should not have been made, or made worse code",
++                Label.NEUTRAL: "neither better nor worse", Label.UNSURE: "looked at, but cannot judge it"}[self]
++
++    @property
++    def color(self):
++        """The ANSI SGR code that show paints the label in."""
++        return {Label.GOOD: "32", Label.BAD: "31", Label.NEUTRAL: "33", Label.UNSURE: "90"}[self]
++
++    @classmethod
++    def verdicts(cls):
++        """Returns the labels the judge may give.
++
++        The judge may not give unsure, which means that a person looked at the change and cannot judge it.
++        """
++        return [l for l in cls if l is not cls.UNSURE]
++
++
++class Decision(StrEnum):
++    """A triage bucket that the skill puts a finding in (SKILL.md §5)."""
++
++    FIX = "FIX"
++    ASK = "ASK"
++    PLAN = "PLAN"
++    KEEP = "KEEP"
++    SKIP = "SKIP"
++    DISCARD = "DISCARD"
++
++    @property
++    def color(self):
++        """The ANSI SGR code that show paints the decision in."""
++        return {Decision.FIX: "32", Decision.ASK: "33", Decision.PLAN: "36", Decision.KEEP: "35",
++                Decision.SKIP: "90", Decision.DISCARD: "90"}[self]
++
++
++class CheckStatus(StrEnum):
++    """The outcome of a fixture's check on a change, stored as check in change.yaml."""
++
++    OK = "ok"
++    FAIL = "fail"
++    NO_APPLY = "no-apply"
++
++
++LABEL_USAGE = f"evals/changes.py label [ID] {'|'.join(Label)} [-f FINDING] [-n NOTE]"
++
++
+ def load(path):
+     return yaml.safe_load(path.read_text())
+ 
+@@ -68,86 +116,132 @@ def dump(path, data):
+ 
+ def change_id(patch):
+     """Returns the id of a patch: a hash of its files and changed lines, whitespace aside."""
+-    lines = [l if l.startswith(("+++", "---")) else l[0] + " ".join(l[1:].split())
+-             for l in patch.splitlines() if l[:1] in "+-"]
++    lines = [l for part in parse_diff(patch)
++             for l in [*part.headers, *(c.sign + " ".join(c.line.text.split()) for c in part.changes)]]
+     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
+ 
+ 
+-def claude(prompt, schema, model):
+-    """Returns the structured reply of a tool-less headless call, and its cost."""
+-    cmd = ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema),
+-           "--no-session-persistence", "--tools", "", "--model", model]
+-    out = subprocess.run(cmd, input=prompt, text=True, capture_output=True,
+-                         env=os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)})
+-    try:
+-        reply = json.loads(out.stdout)
+-        return reply.get("structured_output") or json.loads(reply["result"]), reply.get("total_cost_usd", 0.0)
+-    except (json.JSONDecodeError, KeyError, TypeError):
+-        raise RuntimeError(out.stderr.strip()[:200] or out.stdout[:200]) from None
++@dataclass(frozen=True)
++class Rounds:
++    """The stored rounds of one run in evals/rounds/<run>/, which rebuild a review repo without the run directory."""
++
++    run: str
++
++    @property
++    def dir(self):
++        return ROUNDS / self.run
++
++    def save_meta(self, fixture, skill, count):
++        """Writes meta.yaml: the run's fixture, the hash of the SKILL.md it ran and its number of rounds."""
++        self.dir.mkdir(parents=True, exist_ok=True)
++        dump(self.dir / "meta.yaml", {"fixture": fixture, "skill": skill, "rounds": count})
++
++    def patch(self, n):
++        """Returns the path of the full patch of round n."""
++        return self.dir / f"round-{n}.patch"
++
++    def report(self, n):
++        """Returns the path of the skill's final message in round n."""
++        return self.dir / f"round-{n}.md"
++
++    def record(self, n):
++        """Returns the directory that keeps the skill's records of round n."""
++        return self.dir / f"round-{n}"
++
++
++@dataclass(frozen=True)
++class Task:
++    """One task of a skill run: the findings that one editor fixed in one patch."""
++
++    name: str
++    findings: list[dict]  # each with its entry of decisions.yaml under "triage"
++    after: list[str]  # the tasks whose changes this one is stacked on
++
++    @classmethod
++    def of(cls, name, findings):
++        """Returns the task called name. Its first finding with an `after` names the tasks it is stacked on."""
++        after = next((f["triage"]["after"] for f in findings if f["triage"].get("after")), [])
++        return cls(name, findings, re.findall(r"\w+", after) if isinstance(after, str) else after)
+ 
+ 
+ def tasks(record):
+-    """Yields (task, findings, decisions) for each task of one skill run directory (§3.0 of SKILL.md),
+-    each finding joined with its decision entry."""
++    """Returns the tasks of one skill run directory (SKILL.md §3.0). Each finding carries its decision entry under triage."""
+     findings = {f["id"]: f for p in sorted((record / "findings").glob("*.yaml"))
+                 for f in (load(p) or {}).get("findings") or []}
+     by_task = {}
+     for d in load(record / "decisions.yaml") or []:
+         if d.get("task"):
+             by_task.setdefault(d["task"], []).append({**findings.get(d["id"], {"id": d["id"]}), "triage": d})
+-    yield from by_task.items()
+-
+-
+-def extract(run_dir):
+-    """Stores the rounds of one run and returns the ids of the changes in them."""
+-    run_dir = run_dir.resolve()
+-    repo, run = run_dir / "repo", run_dir.name
+-    report = json.loads((run_dir / "report.json").read_text())
+-    out = ROUNDS / run
+-    out.mkdir(parents=True, exist_ok=True)
+-    skill = run_dir / "skill.sha256"
+-    dump(out / "meta.yaml", {
+-        "fixture": report["fixture"],
+-        "skill": skill.read_text().strip() if skill.exists() else "unknown",
+-        "rounds": len(report["rounds"]),
+-    })
+-    ids = []
+-    for r in report["rounds"]:
+-        n = r["round"]
+-        (out / f"round-{n}.patch").write_text(
+-            git(repo, "diff", "--binary", f"refs/rounds/{n - 1}", f"refs/rounds/{n}"))
+-        result = json.loads((run_dir / f"round-{n}.json").read_text() or "{}").get("result", "")
+-        (out / f"round-{n}.md").write_text(result)
+-        for record in sorted((run_dir / f"round-{n}").glob("*/decisions.yaml")):
+-            record = record.parent
+-            shutil.copytree(record, out / f"round-{n}" / record.name, dirs_exist_ok=True,
++    return [Task.of(name, members) for name, members in by_task.items()]
++
++
++def skill_runs(run, n):
++    """Returns the skill run directories of round n that hold decisions."""
++    return sorted(p.parent for p in run.round_record(n).glob("*/decisions.yaml"))
++
++
++def store_rounds(run, report):
++    """Stores the patch, the final message and the skill's records of each round of run in evals/rounds/."""
++    rounds = Rounds(run.name)
++    rounds.save_meta(report.fixture, run.skill(), len(report.rounds))
++    for n in (r.round for r in report.rounds):
++        rounds.patch(n).write_text(git(run.repo, "diff", "--binary", round_ref(n - 1), round_ref(n)))
++        rounds.report(n).write_text(run.round_result(n))
++        for record in skill_runs(run, n):
++            shutil.copytree(record, rounds.record(n) / record.name, dirs_exist_ok=True,
+                             ignore=shutil.ignore_patterns("index", "worktrees", "target"))
+-            by_task = {}
+-            for task, members in tasks(record):
+-                patch_file = record / "fixes" / f"{task}.patch"
+-                patch = patch_file.read_text() if patch_file.exists() else ""
+-                cid = change_id(patch) if patch.strip() else f"{run}-{n}-{task}"
+-                d = CHANGES / cid
+-                d.mkdir(parents=True, exist_ok=True)
+-                meta = load(d / "change.yaml") if (d / "change.yaml").exists() else {
+-                    "id": cid, "fixture": report["fixture"], "seen": [], "judge": None, "labels": []}
+-                seen = {"run": run, "round": n, "task": task}
+-                if seen not in meta["seen"]:
+-                    meta["seen"].append(seen)
+-                    # The findings and decisions of the first sighting, which the patch was made for.
+-                    meta.setdefault("findings", members)
+-                if not (d / "change.patch").exists():
+-                    (d / "change.patch").write_text(patch)
+-                dump(d / "change.yaml", meta)
+-                ids.append(cid)
+-                by_task[task] = (cid, next((f["triage"]["after"] for f in members if f["triage"].get("after")), None))
+-            # A stacked change (SKILL.md §3.0, step 4) is reviewed on top of the change it starts from.
+-            for cid, after in by_task.values():
+-                parents = [by_task[t][0] for t in (re.findall(r"\w+", after) if isinstance(after, str) else after or []) if t in by_task]
+-                if parents:
+-                    meta = load(CHANGES / cid / "change.yaml")
+-                    meta["after"] = parents
+-                    dump(CHANGES / cid / "change.yaml", meta)
++
++
++def record_change(record, task, fixture, sighting):
++    """Adds the change that task made in one skill run directory to the dataset, and returns its id.
++
++    sighting is an entry of the change's seen list. It names the run, round and task the change came from.
++    A change that the dataset already holds gains the sighting when it is new.
++    """
++    patch_file = record / "fixes" / f"{task.name}.patch"
++    patch = patch_file.read_text() if patch_file.exists() else ""
++    cid = change_id(patch) if patch.strip() else f"{sighting['run']}-{sighting['round']}-{task.name}"
++    d = CHANGES / cid
++    d.mkdir(parents=True, exist_ok=True)
++    meta = load(d / "change.yaml") if (d / "change.yaml").exists() else {
++        "id": cid, "fixture": fixture, "seen": [], "judge": None, "labels": []}
++    if sighting not in meta["seen"]:
++        meta["seen"].append(sighting)
++        # The findings and decisions of the first sighting, which the patch was made for.
++        meta.setdefault("findings", task.findings)
++    if not (d / "change.patch").exists():
++        (d / "change.patch").write_text(patch)
++    dump(d / "change.yaml", meta)
++    return cid
++
++
++def link_stacked(tasks, changes):
++    """Stacks each task's change on the changes of the tasks it starts from (SKILL.md §3.0, step 4).
++
++    changes maps a task's name to the id of its change. A stacked change is reviewed on top of its parents.
++    """
++    for task in tasks:
++        parents = [changes[t] for t in task.after if t in changes]
++        if parents:
++            path = CHANGES / changes[task.name] / "change.yaml"
++            meta = load(path)
++            meta["after"] = parents
++            dump(path, meta)
++
++
++def extract(path):
++    """Adds the changes of one run to the dataset and stores its rounds. Returns the ids of the changes it saw."""
++    run = RunDir(path.resolve())
++    report = Report.load(run.report)
++    store_rounds(run, report)
++    ids = set()
++    for n in (r.round for r in report.rounds):
++        for record in skill_runs(run, n):
++            found = tasks(record)
++            changes = {t.name: record_change(record, t, report.fixture,
++                                             {"run": run.name, "round": n, "task": t.name}) for t in found}
++            link_stacked(found, changes)
++            ids |= set(changes.values())
+     return ids
+ 
+ 
+@@ -155,115 +249,185 @@ def all_changes():
+     return sorted((load(p) for p in CHANGES.glob("*/change.yaml")), key=lambda m: m["id"])
+ 
+ 
++def pending(changes, ids, done):
++    """Returns the changes in ids, or with no ids the changes for which done is false."""
++    return [m for m in changes if (m["id"] in ids if ids else not done(m))]
++
++
++def by_user(label):
++    """Tells whether a person gave a label entry of change.yaml."""
++    return label["by"].startswith(USER)
++
++
++def newest_label(change):
++    """Returns the change's newest label entry, or None when it has none."""
++    return change["labels"][-1] if change["labels"] else None
++
++
++def newest_user_label(change):
++    """Returns the newest label entry that a person gave the change, or None when no person labelled it."""
++    return next((l for l in reversed(change["labels"]) if by_user(l)), None)
++
++
++def has_patch(change):
++    """Tells whether the change's editor made a patch."""
++    return bool((CHANGES / change["id"] / "change.patch").read_text().strip())
++
++
++def decisions(change):
++    """Returns the decisions of the change's findings, sorted and joined by /."""
++    return "/".join(sorted({f["triage"]["decision"] for f in change["findings"]}))
++
++
++@functools.cache
+ def tokens(cid):
+     """The words of a change's changed lines and of its findings' claims, for comparing changes."""
+     patch = (CHANGES / cid / "change.patch").read_text()
+     meta = load(CHANGES / cid / "change.yaml")
+-    text = "".join(l for l in patch.splitlines() if l[:1] in "+-")
+-    text += " ".join(f.get("claim", "") for f in meta.get("findings", []))
+-    return set(re.findall(r"\w+", text))
++    text = " ".join([*(c.line.text for c in changed_lines(patch)),
++                     *(f.get("claim", "") for f in meta.get("findings", []))])
++    return frozenset(re.findall(r"\w+", text))
+ 
+ 
+-def prior(meta):
+-    """Returns the most similar change of the same fixture from another run that a user labelled,
+-    and the share of words they have in common; None when nothing shares a third of its words."""
++def similarity(a, b):
++    """Returns the share of words that two token sets have in common, from 0 to 1."""
++    return len(a & b) / (len(a | b) or 1)
++
++
++def from_other_runs(meta, other):
++    """Tells whether other is a different change than meta that none of meta's runs made."""
+     runs = {s["run"] for s in meta["seen"]}
+-    others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and m["id"] != meta["id"]
+-              and not runs & {s["run"] for s in m["seen"]}
+-              and any(l["by"].startswith("user") for l in m["labels"])]
++    return other["id"] != meta["id"] and not runs & {s["run"] for s in other["seen"]}
++
++
++class Match(NamedTuple):
++    """A labelled change that resembles the change being shown."""
++
++    change: dict
++    share: float  # of the words the two changes have in common
++
++
++# The least share of words that prior needs to call a labelled change a match.
++MATCH_SHARE = 0.33
++
++
++def prior(meta):
++    """Returns the change from another run of the same fixture that a user labelled and that is most similar to meta.
++
++    The match carries the share of words the two changes have in common.
++    Returns None when no labelled change shares a third of its words.
++    """
+     mine = tokens(meta["id"])
+-    best = max(((len(mine & tokens(m["id"])) / (len(mine | tokens(m["id"])) or 1), m) for m in others),
+-               key=lambda p: p[0], default=(0, None))
+-    return best[::-1] if best[0] >= 0.33 else None
++    others = [m for m in all_changes() if m["fixture"] == meta["fixture"] and from_other_runs(meta, m)
++              and any(by_user(l) for l in m["labels"])]
++    best = max((Match(m, similarity(mine, tokens(m["id"]))) for m in others),
++               key=attrgetter("share"), default=None)
++    return best if best and best.share >= MATCH_SHARE else None
+ 
+ 
+ def neighbours(meta, labelled, k=5):
+-    """Returns the k labelled changes whose changed tokens overlap most with meta's."""
++    """Returns the k labelled changes from other runs whose words overlap most with meta's."""
+     mine = tokens(meta["id"])
+-    def overlap(other):
+-        theirs = tokens(other["id"])
+-        return len(mine & theirs) / (len(mine | theirs) or 1)
+-    return sorted(labelled, key=overlap, reverse=True)[:k]
++    return sorted((o for o in labelled if from_other_runs(meta, o)),
++                  key=lambda o: similarity(mine, tokens(o["id"])), reverse=True)[:k]
+ 
+ 
+-def judge(ids, model, jobs):
+-    skill = (EVALS.parent / "skills" / "unsmell" / "SKILL.md").read_text()
+-    metas = all_changes()
+-    labelled = [m for m in metas if m["labels"] and m["labels"][-1]["label"] != "unsure"]
+-    todo = [m for m in metas if (m["id"] in ids if ids else not m["judge"] and not m["labels"])]
+-    schema = {"type": "object", "required": ["label", "confidence", "reason"], "properties": {
+-        "label": {"enum": list(LABELS)},
+-        "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+-    def one(meta):
++@dataclass(frozen=True)
++class Judge:
++    """A model that proposes a label for a change, shown the skill and the most similar labelled changes."""
++
++    model: str
++    skill: str  # the text of SKILL.md
++    labelled: list[dict]  # the changes whose newest label is not unsure, the pool of examples
++
++    def prompt(self, meta):
++        """Returns the prompt that asks the model to label one change."""
+         first = meta["seen"][0]
+         examples = "\n\n".join(
+-            f"### Example {o['id']}: labelled {o['labels'][-1]['label']}\n"
+-            f"Note: {o['labels'][-1].get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
+-            for o in neighbours(meta, labelled))
+-        prompt = (
+-            "You label one change that a refactoring skill made, as good (worth making), bad (should not "
+-            "have been made, or made worse code) or neutral. Judge the code, not the skill's own report. "
++            f"### Example {o['id']}: labelled {newest_label(o)['label']}\n"
++            f"Note: {newest_label(o).get('note', '')}\n```diff\n{(CHANGES / o['id'] / 'change.patch').read_text()}```"
++            for o in neighbours(meta, self.labelled))
++        verdicts = ", ".join(f"{l} ({l.meaning})" for l in Label.verdicts())
++        return (
++            f"You label one change that a refactoring skill made, as one of {verdicts}. "
++            "Judge the code, not the skill's own report. "
+             "The skill's rules are below for reference; a change can follow them and still be bad.\n\n"
+             f"## Labelled examples, most similar first\n\n{examples or '(none yet)'}\n\n"
+-            f"## The round's own report\n\n{(ROUNDS / first['run'] / f'round-{first['round']}.md').read_text()[:6000]}\n\n"
++            f"## The round's own report\n\n{Rounds(first['run']).report(first['round']).read_text()[:6000]}\n\n"
+             f"## The findings and decisions the change was made for\n\n{yaml.safe_dump(meta['findings'], allow_unicode=True)}\n\n"
+             f"## The change to label\n\n```diff\n{(CHANGES / meta['id'] / 'change.patch').read_text()}```\n\n"
+-            f"## The skill\n\n{skill}")
++            f"## The skill\n\n{self.skill}")
++
++    def label(self, meta):
++        """Stores the model's proposed label in the change's change.yaml and returns its cost in USD.
++
++        A failed call prints why and costs 0.
++        """
++        schema = {"type": "object", "required": ["label", "confidence", "reason"], "properties": {
++            "label": {"enum": [l.value for l in Label.verdicts()]},
++            "confidence": {"type": "number"}, "reason": {"type": "string"}}}
+         try:
+-            verdict, cost = claude(prompt, schema, model)
+-        except RuntimeError as e:
++            reply = claude("--json-schema", json.dumps(schema), "--tools", "", "--model", self.model,
++                           stdin=self.prompt(meta))
++            verdict = reply.structured or json.loads(reply.result)
++        except (RuntimeError, json.JSONDecodeError) as e:
+             print(f"{meta['id']}: judge failed: {e}", file=sys.stderr)
+             return 0.0
+-        meta["judge"] = {**verdict, "model": model}
++        meta["judge"] = {**verdict, "model": self.model}
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {verdict['label']:7} {verdict['confidence']:.2f} {summary(meta)}",
+               flush=True)
+-        return cost
++        return reply.cost_usd
+ 
++
++def judge(ids, model, jobs):
++    """Proposes a label for each change in ids, or with no ids for each change that has no label and no proposal."""
++    metas = all_changes()
++    labelled = [m for m in metas if (l := newest_label(m)) and l["label"] != Label.UNSURE]
++    todo = pending(metas, ids, lambda m: m["judge"] or m["labels"])
+     with ThreadPoolExecutor(jobs) as pool:
+-        cost = sum(pool.map(one, todo))
++        cost = sum(pool.map(Judge(model, SKILL.read_text(), labelled).label, todo))
+     print(f"judged {len(todo)} changes for ${cost:.2f}")
+ 
+ 
+ def summary(meta):
+-    decisions = sorted({f["triage"]["decision"] for f in meta["findings"]})
+-    return f"{'/'.join(decisions)}: {meta['findings'][0].get('claim', '')[:100]}"
++    return f"{decisions(meta)}: {meta['findings'][0].get('claim', '')[:100]}"
+ 
+ 
+ def ancestors(meta):
+     """Returns the ids of the changes that meta is stacked on, directly or not, each before its dependents."""
+-    order = []
+-    for parent in meta.get("after", []):
+-        for cid in [*ancestors(load(CHANGES / parent / "change.yaml")), parent]:
+-            if cid not in order:
+-                order.append(cid)
+-    return order
++    return list(dict.fromkeys(cid for parent in meta.get("after", [])
++                              for cid in [*ancestors(load(CHANGES / parent / "change.yaml")), parent]))
+ 
+ 
+-def worktree(meta, root=None):
+-    """Returns the review repo as the skill saw it, with the change on top: HEAD is the fixture's base,
+-    the index holds the changeset under review (and any earlier rounds), and the working tree adds the change.
++def build_rounds(change, build):
++    """Returns a scratch repo at build with the change's fixture and the rounds before the change's own.
+ 
+-    It is always the same directory, so an editor can keep it open across changes. Each change is
+-    built in a scratch repo and fetched into it, so the review repo is reset, never recreated.
++    The tag base marks the fixture's base. The tag round-0 marks the fixture as the skill first saw it.
++    HEAD is the last round before the change was made. Errors with CalledProcessError when a round
++    does not apply.
+     """
+-    first = meta["seen"][0]
+-    rounds = ROUNDS / first["run"]
+-    fixture = EVALS / "fixtures" / load(rounds / "meta.yaml")["fixture"]
+-    root = root or REVIEW
+-    build = root / "build"
++    first = change["seen"][0]
++    rounds = Rounds(first["run"])
+     if build.exists():
+         shutil.rmtree(build)
+-    built = materialize(fixture, tomllib.loads((fixture / "fixture.toml").read_text()), build)
++    built = Fixture.named(change["fixture"]).materialize(build / "repo")
+     git(built, "tag", "base")  # HEAD is the fixture's base: round-0 minus the changeset under review
+     git(built, "add", "-A")
+     git(built, "commit", "-q", "-m", "fixture head (round 0)")
+     git(built, "tag", "round-0")
+     for n in range(1, first["round"]):
+-        git(built, "apply", "--binary", str(rounds / f"round-{n}.patch"))
++        git(built, "apply", "--binary", str(rounds.patch(n)))
+         git(built, "add", "-A")
+         git(built, "commit", "-q", "-m", f"round {n}")
+-    repo = root / "repo"
++    return built
++
++
++def sync(repo, built):
++    """Makes repo hold built's tree staged on top of the fixture's base, creating repo when missing.
++
++    Uncommitted edits in repo are discarded. Build output there is kept.
++    """
+     if not (repo / ".git").exists():
+         repo.mkdir(parents=True, exist_ok=True)
+         git(repo, "init", "-q")
+@@ -274,12 +438,33 @@ def worktree(meta, root=None):
+     git(repo, "clean", "-q", "-fdx", "-e", "target/", "-e", "node_modules/", "-e", ".venv/")
+     git(repo, "checkout", "-q", "-f", "--detach", "FETCH_HEAD")
+     git(repo, "reset", "-q", "--soft", "base")
+-    shutil.rmtree(build)
+-    for parent in ancestors(meta):  # staged with the changeset, so that git diff shows only what this change adds
++
++
++def stage(change, repo):
++    """Stages the changes this one is stacked on, then applies this change to the working tree.
++
++    Errors with CalledProcessError when a patch does not apply.
++    """
++    for parent in ancestors(change):  # staged with the changeset, so that git diff shows only what this change adds
+         git(repo, "apply", "--index", str(CHANGES / parent / "change.patch"))
+-    patch = CHANGES / meta["id"] / "change.patch"
+-    if patch.read_text().strip():
+-        git(repo, "apply", "--intent-to-add", str(patch))  # new files show up in git diff too
++    if has_patch(change):
++        # Intent to add, so that new files show up in git diff too.
++        git(repo, "apply", "--intent-to-add", str(CHANGES / change["id"] / "change.patch"))
++
++
++def review_repo(change, root=REVIEW):
++    """Returns a repo under root that shows the change as the skill saw it.
++
++    HEAD is the fixture's base. The index holds the changeset under review, the earlier rounds and
++    the changes this one is stacked on. The working tree adds the change. Uncommitted edits in that
++    repo are discarded. Errors with CalledProcessError when a patch does not apply.
++    """
++    build = root / "build"
++    built = build_rounds(change, build)
++    repo = root / "repo"
++    sync(repo, built)
++    shutil.rmtree(build)
++    stage(change, repo)
+     return repo
+ 
+ 
+@@ -289,71 +474,69 @@ def current():
+     return CURRENT.read_text().strip()
+ 
+ 
+-def show(meta, rebuild=True):
+-    """Prints the change, after putting it in the review repo unless it is already there."""
+-    if rebuild:
+-        worktree(meta)
+-        CURRENT.write_text(meta["id"])
+-    repo = REVIEW / "repo"
+-    first = meta["seen"][0]
+-    print(paint(f"change {meta['id']}", "1") + f": {meta['fixture']} round {first['round']}"
+-          f" (seen {len(meta['seen'])}x)")
+-    if meta.get("after"):
+-        print(f"  stacked on {', '.join(meta['after'])}, staged with the changeset")
+-    for f in meta["findings"]:
++def select(change):
++    """Puts the change in the review repo and makes it the current one."""
++    review_repo(change)
++    CURRENT.write_text(change["id"])
++
++
++def show(change):
++    """Prints the change, its findings and labels, and how to see it in the review repo."""
++    first = change["seen"][0]
++    print(paint(f"change {change['id']}", "1") + f": {change['fixture']} round {first['round']}"
++          f" (seen {len(change['seen'])}x)")
++    if change.get("after"):
++        print(f"  stacked on {', '.join(change['after'])}, staged with the changeset")
++    for f in change["findings"]:
+         t = f["triage"]
+-        decision = paint(f"{t['decision']} {t.get('score')}", COLORS.get(t["decision"]))
++        decision = paint(f"{t['decision']} {t.get('score')}", Decision(t["decision"]).color)
+         print(f"\n  {paint(f['id'], '1')}  {decision}  {f.get('row', '')}  {paint(', '.join(f.get('at', [])), '2')}"
+               f"\n    {paint('claim:', '2')}  {f.get('claim', '').strip()}"
+               f"\n    {paint('fix:', '2')}    {f.get('fix', '').strip()}"
+               f"\n    {paint('triage:', '2')} {t.get('reason', '').strip()}")
+-    if not (CHANGES / meta["id"] / "change.patch").read_text().strip():
++    if not has_patch(change):
+         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
+-    if match := prior(meta):
+-        other, share = match
+-        newest = [l for l in other["labels"] if l["by"].startswith("user")][-1]
+-        print(f"\n  closest labelled change from an earlier run: {other['id']}, {share:.0%} of words shared,"
+-              f" labelled {paint(newest['label'], COLORS[newest['label']])}"
++    if match := prior(change):
++        newest = newest_user_label(match.change)
++        print(f"\n  closest labelled change from an earlier run: {match.change['id']}, {match.share:.0%} of words shared,"
++              f" labelled {paint(newest['label'], Label(newest['label']).color)}"
+               f"{': ' + newest['note'] if newest.get('note') else ''}")
+-    if meta["judge"]:
+-        j = meta["judge"]
+-        print(f"judge: {paint(j['label'], COLORS.get(j['label']))} ({j['confidence']:.2f}): {j['reason']}")
+-    for l in meta["labels"]:
++    if change["judge"]:
++        j = change["judge"]
++        print(f"judge: {paint(j['label'], Label(j['label']).color)} ({j['confidence']:.2f}): {j['reason']}")
++    for l in change["labels"]:
+         about = f" on {l['finding']}" if l.get("finding") else ""
+-        print(f"label: {paint(l['label'], COLORS[l['label']])}{about} by {l['by']}: {l.get('note', '')}")
++        print(f"label: {paint(l['label'], Label(l['label']).color)}{about} by {l['by']}: {l.get('note', '')}")
+     color = "--color=always" if TTY else "--color=never"
+-    print("\n" + git(repo, "diff", color, "--stat").rstrip())
+-    print(f"\nStaged, the changeset under review (git diff --cached):\n{git(repo, 'diff', color, '--cached', '--stat').rstrip()}")
+-    print(paint(f"\n  cd {repo} && git diff        # the change", "2"))
++    print("\n" + git(REVIEW_REPO, "diff", color, "--stat").rstrip())
++    print(f"\nStaged, the changeset under review (git diff --cached):\n{git(REVIEW_REPO, 'diff', color, '--cached', '--stat').rstrip()}")
++    print(paint(f"\n  cd {REVIEW_REPO} && git diff        # the change", "2"))
+     print(paint("  git diff --cached            # the changeset under review, which the findings call \"the change\"", "2"))
+-    print(paint(f"  report: {ROUNDS / first['run'] / f'round-{first['round']}.md'}", "2"))
+-    print(paint(f"  labels: {CHANGES / meta['id'] / 'change.yaml'}", "2"))
+-    print("  evals/changes.py label good|bad|neutral|unsure [-f FINDING] -n NOTE")
++    print(paint(f"  report: {Rounds(first['run']).report(first['round'])}", "2"))
++    print(paint(f"  labels: {CHANGES / change['id'] / 'change.yaml'}", "2"))
++    print(f"  {LABEL_USAGE}")
+ 
+ 
+ def check(ids):
+-    """Runs the fixture's check on each change in turn, outside the review repo, and stores the result.
++    """Runs each fixture's check on the changes in ids, or on every change not yet checked.
+ 
+-    In `patches only` runs the skill merges nothing, so this is the full check each patch would get
+-    on merge (SKILL.md §3.0, step 6). One at a time, sharing one Rust target directory.
++    Records ok, fail or no-apply as check in change.yaml. A change that fails or does not apply
++    leaves its output in check.log.
+     """
+     root = CACHE / "check"
++    # The changes are checked one at a time, sharing one Rust target directory.
+     env = os.environ | {"CARGO_TARGET_DIR": str(root / "target")}
+-    for meta in all_changes():
+-        if ids and meta["id"] not in ids or not ids and "check" in meta:
+-            continue
++    for meta in pending(all_changes(), ids, lambda m: "check" in m):
+         try:
+-            repo = worktree(meta, root)
++            repo = review_repo(meta, root)
+         except subprocess.CalledProcessError as e:
+-            meta["check"] = "no-apply"
++            meta["check"] = CheckStatus.NO_APPLY.value
+             dump(CHANGES / meta["id"] / "change.yaml", meta)
+             (CHANGES / meta["id"] / "check.log").write_text(f"{e.cmd}\n{e.stderr}")
+-            print(f"{meta['id']} no-apply", flush=True)
++            print(f"{meta['id']} {meta['check']}", flush=True)
+             continue
+-        fixture = EVALS / "fixtures" / meta["fixture"]
+-        cmd = tomllib.loads((fixture / "fixture.toml").read_text())["check"]
+-        out = subprocess.run(cmd, shell=True, cwd=repo, env=env, capture_output=True, text=True)
+-        meta["check"] = "ok" if out.returncode == 0 else "fail"
++        out = Fixture.named(meta["fixture"]).run_check(repo, env)
++        meta["check"] = (CheckStatus.OK if out.returncode == 0 else CheckStatus.FAIL).value
+         dump(CHANGES / meta["id"] / "change.yaml", meta)
+         print(f"{meta['id']} {meta['check']}", flush=True)
+         log = CHANGES / meta["id"] / "check.log"
+@@ -364,87 +547,120 @@ def check(ids):
+ 
+ 
+ def list_changes():
+-    """Prints one line per change: id, the newest user label, where it was made, its decisions, its size, and its first claim."""
++    """Prints one line per change, ordered by fixture, round and task."""
+     for meta in sorted(all_changes(), key=lambda m: (m["fixture"], m["seen"][0]["round"], m["seen"][0]["task"])):
+         # The newest user label per finding (None: the whole change); differing ones show as good+bad.
+-        newest = {l.get("finding"): l["label"] for l in meta["labels"] if l["by"].startswith("user")}
++        newest = {l.get("finding"): l["label"] for l in meta["labels"] if by_user(l)}
+         label = "+".join(sorted(set(newest.values()))) or "-"
+-        decisions = "/".join(sorted({f["triage"]["decision"] for f in meta["findings"]}))
+         claim = " ".join(meta["findings"][0].get("claim", "").split())
+-        lines = (CHANGES / meta["id"] / "change.patch").read_text().splitlines()
+-        added = sum(l.startswith("+") and not l.startswith("+++") for l in lines)
+-        removed = sum(l.startswith("-") and not l.startswith("---") for l in lines)
+-        print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions:9}"
+-              f"  {f'+{added} -{removed}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
++        signs = Counter(c.sign for c in changed_lines((CHANGES / meta["id"] / "change.patch").read_text()))
++        print(f"{meta['id']}  {label:7}  {meta['fixture']} r{meta['seen'][0]['round']}  {decisions(meta):9}"
++              f"  {f'+{signs[Sign.ADDED]} -{signs[Sign.REMOVED]}':>9}  {meta.get('check', '-'):4}  {claim[:80]}")
++
++
++def score_label(change):
++    """Returns what score counts the change as: its newest label, else the judge's as judge:LABEL, else unlabelled."""
++    if label := newest_label(change):
++        return label["label"]
++    return f"judge:{change['judge']['label']}" if change["judge"] else "unlabelled"
+ 
+ 
+ def score(run_dirs):
+     for run_dir in run_dirs:
+         run = run_dir.resolve().name
+-        counts = {}
+-        for meta in all_changes():
+-            if any(s["run"] == run for s in meta["seen"]):
+-                label = meta["labels"][-1]["label"] if meta["labels"] else (
+-                    f"judge:{meta['judge']['label']}" if meta["judge"] else "unlabelled")
+-                counts[label] = counts.get(label, 0) + 1
++        counts = Counter(score_label(m) for m in all_changes() if any(s["run"] == run for s in m["seen"]))
+         print(run, " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+ 
+ 
++def next_change():
++    """Opens the change without a user label whose judgement is least certain, and prints it.
++
++    Changes without a patch are left out. Exits when every other change has a user label.
++    """
++    # A change without a patch (an editor that made none) has nothing to review in the repo.
++    todo = [m for m in all_changes() if not any(by_user(l) for l in m["labels"]) and has_patch(m)]
++    if not todo:
++        sys.exit("every change has a user label")
++    # The least certain judgements first: they are where a label teaches the judge most.
++    change = min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1)
++    select(change)
++    show(change)
++    print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
++
++
++def open_change(cid):
++    """Opens the change cid in the review repo and prints it. With no cid, prints the current change."""
++    change = load(CHANGES / (cid or current()) / "change.yaml")
++    if cid:
++        select(change)
++    show(change)
++
++
++def parse_label_args(args):
++    """Returns the change id and the label that label's [ID] LABEL arguments name.
++
++    The id defaults to the current change. Exits with the usage when args are not [ID] LABEL.
++    """
++    match args:
++        case [label] if label in Label:
++            return current(), Label(label)
++        case [cid, label] if label in Label:
++            return cid, Label(label)
++    sys.exit(f"usage: {LABEL_USAGE}")
++
++
++def add_label(cid, label, finding, note, by):
++    """Appends a label to the change cid, about one finding or, with no finding, the whole change.
++
++    Exits when the change has no such finding.
++    """
++    path = CHANGES / cid / "change.yaml"
++    meta = load(path)
++    if finding and finding not in {f["id"] for f in meta["findings"]}:
++        sys.exit(f"{cid} has no finding {finding}")
++    entry = {"label": label.value, "finding": finding, "note": note, "by": by, "date": date.today().isoformat()}
++    meta["labels"].append({k: v for k, v in entry.items() if v})
++    dump(path, meta)
++    print(f"{cid}: {label}")
++
++
++def extract_runs(paths):
++    """Adds the changes of each run to the dataset and prints how many each run had."""
++    for path in paths:
++        print(f"{path.name}: {len(extract(path))} changes")
++
++
+ def main():
+     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+-    sub = p.add_subparsers(dest="cmd", required=True)
+-    sub.add_parser("extract").add_argument("runs", nargs="+", type=Path)
+-    j = sub.add_parser("judge")
++    sub = p.add_subparsers(required=True)
++    x = sub.add_parser("extract", help="split each round of a run into changes")
++    x.add_argument("runs", nargs="+", type=Path)
++    x.set_defaults(func=lambda a: extract_runs(a.runs))
++    j = sub.add_parser("judge", help="propose a label for changes with none")
+     j.add_argument("ids", nargs="*")
+     j.add_argument("--model", default="opus")
+     j.add_argument("--jobs", type=int, default=6)
+-    sub.add_parser("check").add_argument("ids", nargs="*", help="default: every change not checked yet")
+-    sub.add_parser("list")
+-    sub.add_parser("next")
+-    sub.add_parser("show").add_argument("id", nargs="?", help="default: the change in the review repo")
+-    lab = sub.add_parser("label", usage=f"changes.py label [ID] {{{','.join(LABELS)}}} [-f FINDING] [-n NOTE]")
+-    lab.add_argument("args", nargs="+", metavar="[ID] LABEL", help=f"ID defaults to the change in the review repo; LABEL is one of {', '.join(LABELS)}")
++    j.set_defaults(func=lambda a: judge(a.ids, a.model, a.jobs))
++    c = sub.add_parser("check", help="run the fixture's check on each change")
++    c.add_argument("ids", nargs="*", help="default: every change not checked yet")
++    c.set_defaults(func=lambda a: check(a.ids))
++    sub.add_parser("list", help="list every change with its label").set_defaults(func=lambda a: list_changes())
++    sub.add_parser("next", help="open the next change no person has labelled").set_defaults(
++        func=lambda a: next_change())
++    s = sub.add_parser("show", help="open a change in the review repo")
++    s.add_argument("id", nargs="?", help="default: print the change in the review repo")
++    s.set_defaults(func=lambda a: open_change(a.id))
++    lab = sub.add_parser("label", help="label a change", usage=LABEL_USAGE)
++    lab.add_argument("args", nargs="+", metavar="[ID] LABEL", help="ID defaults to the change in the review repo")
+     lab.add_argument("-f", "--finding", help="the finding of the change that the label is about; the whole change when left out")
+     lab.add_argument("-n", "--note", default="", help="why: what is good or wrong about it")
+-    lab.add_argument("--by", default="user")
+-    sub.add_parser("score").add_argument("runs", nargs="+", type=Path)
++    lab.add_argument("--by", default=USER)
++    lab.set_defaults(func=lambda a: add_label(*parse_label_args(a.args), a.finding, a.note, a.by))
++    sc = sub.add_parser("score", help="count a run's changes by label")
++    sc.add_argument("runs", nargs="+", type=Path)
++    sc.set_defaults(func=lambda a: score(a.runs))
+     a = p.parse_args()
+-
+-    if a.cmd == "extract":
+-        for run in a.runs:
+-            print(f"{run.name}: {len(set(extract(run)))} changes")
+-    elif a.cmd == "judge":
+-        judge(a.ids, a.model, a.jobs)
+-    elif a.cmd == "check":
+-        check(a.ids)
+-    elif a.cmd == "list":
+-        list_changes()
+-    elif a.cmd == "next":
+-        # A change without a patch (an editor that made none) has nothing to review in the repo.
+-        todo = [m for m in all_changes() if not any(l["by"].startswith("user") for l in m["labels"])
+-                and (CHANGES / m["id"] / "change.patch").read_text().strip()]
+-        if not todo:
+-            sys.exit("every change has a user label")
+-        # The least certain judgements first: they are where a label teaches the judge most.
+-        show(min(todo, key=lambda m: m["judge"]["confidence"] if m["judge"] else -1))
+-        print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
+-    elif a.cmd == "show":
+-        show(load(CHANGES / (a.id or current()) / "change.yaml"), rebuild=bool(a.id))
+-    elif a.cmd == "label":
+-        if len(a.args) > 2 or a.args[-1] not in LABELS:
+-            sys.exit(f"usage: changes.py label [ID] LABEL, with LABEL one of {', '.join(LABELS)}")
+-        a.id, a.label = (a.args[0] if len(a.args) == 2 else current()), a.args[-1]
+-        path = CHANGES / a.id / "change.yaml"
+-        meta = load(path)
+-        if a.finding and a.finding not in {f["id"] for f in meta["findings"]}:
+-            sys.exit(f"{a.id} has no finding {a.finding}")
+-        entry = {"label": a.label, "finding": a.finding, "note": a.note,
+-                 "by": a.by, "date": date.today().isoformat()}
+-        meta["labels"].append({k: v for k, v in entry.items() if v})
+-        dump(path, meta)
+-        print(f"{a.id}: {a.label}")
+-    elif a.cmd == "score":
+-        score(a.runs)
++    a.func(a)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..1e1c4e6 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -1,14 +1,7 @@
+ #!/usr/bin/env python3
+-"""Runs unsmell on fixtures in a loop and reports whether it reaches a fixed point.
++"""Runs the unsmell skill on fixtures, round after round, and reports whether it reaches a fixed point.
+ 
+-Usage: evals/run.py [--rounds N] [--jobs N] FIXTURE_DIR...
+-
+-A fixture names a commit in another repo (`source` and `commit` in fixture.toml),
+-or holds head/ (the working tree under review) and an optional base/ (the tree it
+-changes). Its fixture.toml always holds `check`, a shell command that must pass
+-after every round. Each run happens in a throwaway git repo
+-under ~/.cache/unsmell-eval, with a Claude config that has no CLAUDE.md, hooks
+-or plugins, so that only the skill under test steers the result.
++evals/README.md explains fixtures, what passes and how to read a run.
+ """
+ import argparse
+ import hashlib
+@@ -19,11 +12,15 @@ import subprocess
+ import sys
+ import tomllib
+ from concurrent.futures import ThreadPoolExecutor
+-from dataclasses import dataclass, field
++from dataclasses import asdict, dataclass, field
+ from datetime import datetime
++from enum import StrEnum
+ from pathlib import Path
++from typing import NamedTuple
+ 
+ SKILL_REPO = Path(__file__).resolve().parent.parent
++SKILL = SKILL_REPO / "skills" / "unsmell" / "SKILL.md"
++FIXTURES = SKILL_REPO / "evals" / "fixtures"
+ CACHE = Path.home() / ".cache" / "unsmell-eval"
+ CONFIG = CACHE / "config"
+ ALLOWED = [
+@@ -47,42 +44,142 @@ def snapshot(repo):
+     return git(repo, "write-tree", env=env).strip()
+ 
+ 
++class Sign(StrEnum):
++    """The mark that a unified diff puts before a changed line."""
++
++    ADDED = "+"
++    REMOVED = "-"
++
++    @property
++    def header(self):
++        """The start of the header line that names the file on this side."""
++        return self * 3 + " "
++
++    @property
++    def prefix(self):
++        """The prefix that git diff puts before the path on this side."""
++        return "b/" if self is Sign.ADDED else "a/"
++
++
++class Line(NamedTuple):
++    """One line of a file and the path of that file."""
++
++    path: str
++    text: str
++
++    @property
++    def significant(self):
++        """Whether the line carries a change of its own.
++
++        A line of three characters or fewer, such as a brace, `end` or a blank line,
++        is set by the lines around it. Counting it would make unrelated changes look alike.
++        """
++        return len(self.text.strip()) > 3
++
++
++class ChangedLine(NamedTuple):
++    """One line that a diff adds or removes. A removed line has the old path, an added line the new one."""
++
++    sign: Sign
++    line: Line
++
++
++@dataclass
++class FileDiff:
++    """The part of a unified diff that changes one file."""
++
++    headers: list[str] = field(default_factory=list)
++    """The `---` and `+++` lines as written."""
++    changes: list[ChangedLine] = field(default_factory=list)
++    paths: dict[Sign, str] = field(default_factory=dict)
++    """The path on each side, without git's prefix. A side that is /dev/null has none."""
++
++    def read_header(self, line):
++        """Takes the path from a `---` or `+++` line."""
++        self.headers.append(line)
++        sign = Sign(line[0])
++        path = line.removeprefix(sign.header).removesuffix("\t")
++        if path != "/dev/null":
++            self.paths[sign] = path.removeprefix(sign.prefix)
++
++
++def parse_diff(diff):
++    """Splits a unified diff into the parts that change one file each.
++
++    A part's header runs from its `diff --git` line to its first `@@` line. Lines
++    before the first `diff --git` form a part of their own.
++    """
++    parts, in_header = [], True
++    for line in diff.splitlines():
++        if line.startswith("diff --git ") or not parts:
++            parts.append(FileDiff())
++            in_header = True
++        part = parts[-1]
++        if line.startswith("@@"):
++            in_header = False
++        elif in_header:
++            if line.startswith(tuple(sign.header for sign in Sign)):
++                part.read_header(line)
++        elif line[:1] in Sign:
++            sign = Sign(line[0])
++            part.changes.append(ChangedLine(sign, Line(part.paths[sign], line[1:])))
++    return parts
++
++
++def changed_lines(diff):
++    """Yields every line that a unified diff adds or removes, in the diff's order."""
++    for part in parse_diff(diff):
++        yield from part.changes
++
++
+ @dataclass
+ class Delta:
+-    """The lines one round added and removed, per file."""
++    """The significant lines that one round added and removed, per file.
++
++    A line's text has its surrounding whitespace stripped. A line that a round moves counts
++    as removed from its old place and added at its new one.
++    """
+ 
+-    added: set = field(default_factory=set)
+-    removed: set = field(default_factory=set)
++    added: set[Line] = field(default_factory=set)
++    removed: set[Line] = field(default_factory=set)
+ 
+     @classmethod
+     def between(cls, repo, old, new):
+-        delta, path = cls(), None
+-        for line in git(repo, "diff", "-U0", old, new).splitlines():
+-            if line.startswith("+++ "):
+-                path = line[6:]
+-            elif line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
+-                text = line[1:].strip()
+-                # ponytail: line-level heuristic; a moved line that changes nothing else counts too
+-                if len(text) > 3:
+-                    (delta.added if line[0] == "+" else delta.removed).add((path, text))
++        """Returns the lines that differ between two trees of repo."""
++        delta = cls()
++        diff = git(repo, "diff", "-U0", f"--src-prefix={Sign.REMOVED.prefix}",
++                   f"--dst-prefix={Sign.ADDED.prefix}", old, new)
++        for changed in changed_lines(diff):
++            line = changed.line._replace(text=changed.line.text.strip())
++            if line.significant:
++                (delta.added if changed.sign is Sign.ADDED else delta.removed).add(line)
+         return delta
+ 
++    @classmethod
++    def _union(cls, deltas):
++        """Returns one delta that holds every line the given deltas added or removed."""
++        return cls(set().union(*(d.added for d in deltas)), set().union(*(d.removed for d in deltas)))
++
+     def empty(self):
+         return not (self.added or self.removed)
+ 
+     def reversals(self, earlier):
+         """Counts lines this round brings back after an earlier round removed them."""
+-        return len(self.added & set().union(*(d.removed for d in earlier)))
++        return len(self.added & self._union(earlier).removed)
+ 
+     def rework(self, earlier):
+         """Counts lines this round removes after an earlier round added them."""
+-        return len(self.removed & set().union(*(d.added for d in earlier)))
++        return len(self.removed & self._union(earlier).added)
+ 
+ 
+ def clear(repo):
+     for item in repo.iterdir():
+-        if item.name != ".git":
+-            shutil.rmtree(item) if item.is_dir() else item.unlink()
++        if item.name == ".git":
++            continue
++        if item.is_dir() and not item.is_symlink():
++            shutil.rmtree(item)
++        else:
++            item.unlink()
+ 
+ 
+ def copy_tree(source, rev, repo):
+@@ -91,85 +188,297 @@ def copy_tree(source, rev, repo):
+     subprocess.run(["tar", "-x", "-C", str(repo)], input=archive, check=True)
+ 
+ 
+-def materialize(fixture, spec, workdir):
+-    """Returns a new repo whose HEAD is the fixture's base and whose working tree is its head.
++@dataclass(frozen=True)
++class Commit:
++    """Code under review that is a commit in another repo, with the commit's parent as its base."""
++
++    source: Path
++    rev: str
++
++    def write_base(self, repo):
++        copy_tree(self.source, f"{self.rev}^", repo)
++
++    def write_head(self, repo):
++        copy_tree(self.source, self.rev, repo)
++
++
++@dataclass(frozen=True)
++class Trees:
++    """Code under review that the fixture directory holds as trees."""
++
++    head: Path
++    base: Path | None
++
++    def write_base(self, repo):
++        if self.base:
++            shutil.copytree(self.base, repo, dirs_exist_ok=True)
+ 
+-    A fixture names a commit in another repo (`source` and `commit` in fixture.toml), or it
+-    holds the trees itself in base/ and head/.
++    def write_head(self, repo):
++        shutil.copytree(self.head, repo, dirs_exist_ok=True)
++
++
++@dataclass(frozen=True)
++class Fixture:
++    """A case the skill runs on, read from a directory that holds a fixture.toml.
++
++    fixture.toml always holds `check`, a shell command that must pass after every round.
++    The code under review comes from one of two places. When fixture.toml names a `commit`,
++    that commit is the code under review, and `source` names the local repo that holds it.
++    Otherwise the directory holds head/, the working tree under review. It may also hold
++    base/, the tree that head/ changes. Without base/, every file is new.
+     """
+-    repo = workdir / "repo"
+-    repo.mkdir(parents=True)
+-    git(repo, "init", "-q", "-b", "main")
+-    git(repo, "config", "user.email", "eval@unsmell")
+-    git(repo, "config", "user.name", "unsmell eval")
+-    # The round commits are scratch state, so they must not trigger the user's signing setup.
+-    git(repo, "config", "commit.gpgsign", "false")
+-    source = Path(spec.get("source", "")).expanduser()
+-    if "commit" in spec:
+-        copy_tree(source, f"{spec['commit']}^", repo)
+-    elif (fixture / "base").is_dir():
+-        shutil.copytree(fixture / "base", repo, dirs_exist_ok=True)
+-    git(repo, "add", "-A")
+-    git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+-    clear(repo)
+-    if "commit" in spec:
+-        copy_tree(source, spec["commit"], repo)
+-    else:
+-        shutil.copytree(fixture / "head", repo, dirs_exist_ok=True)
+-    return repo
+-
+-
+-def run_skill(repo, log, args):
+-    cmd = ["claude", "-p", f"/unsmell:unsmell {args}".strip(), "--plugin-dir", str(SKILL_REPO),
+-           "--permission-mode", "auto", "--permission-prompts", "none",
+-           "--output-format", "json", "--no-session-persistence",
+-           # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
+-           "--allowedTools", *ALLOWED]
+-    env = os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)}
+-    out = subprocess.run(cmd, cwd=repo, env=env, text=True, capture_output=True, stdin=subprocess.DEVNULL)
+-    log.write_text(out.stdout + out.stderr)
+-    # The skill's own record of the round (§3.0 of SKILL.md): batches, findings, decisions.
+-    record = repo / ".git" / "unsmell"
+-    if record.exists():
+-        shutil.move(record, log.with_suffix(""))
+-        git(repo, "worktree", "prune")  # editors' worktrees the skill left behind
++
++    dir: Path
++    check: str
++    origin: Commit | Trees
++
++    @classmethod
++    def load(cls, dir):
++        """Reads the fixture in dir.
++
++        Errors when fixture.toml has no `check`, or names a `commit` without its `source`.
++        """
++        spec = tomllib.loads((dir / "fixture.toml").read_text())
++        if "check" not in spec:
++            raise ValueError(f"{dir}/fixture.toml has no check")
++        if "commit" not in spec:
++            base = dir / "base"
++            return cls(dir, spec["check"], Trees(dir / "head", base if base.is_dir() else None))
++        if "source" not in spec:
++            raise ValueError(f"{dir}/fixture.toml names a commit without its source")
++        return cls(dir, spec["check"], Commit(Path(spec["source"]).expanduser(), spec["commit"]))
++
++    @classmethod
++    def named(cls, name):
++        """Reads the fixture called name in evals/fixtures."""
++        return cls.load(FIXTURES / name)
++
++    @property
++    def name(self):
++        return self.dir.name
++
++    def materialize(self, repo):
++        """Makes repo a new repo whose HEAD is the fixture's base and whose working tree is its head, and returns it."""
++        repo.mkdir(parents=True)
++        git(repo, "init", "-q", "-b", "main")
++        git(repo, "config", "user.email", "eval@unsmell")
++        git(repo, "config", "user.name", "unsmell eval")
++        # The round commits are scratch state, so they must not trigger the user's signing setup.
++        git(repo, "config", "commit.gpgsign", "false")
++        self.origin.write_base(repo)
++        git(repo, "add", "-A")
++        git(repo, "commit", "-q", "--allow-empty", "-m", "base")
++        clear(repo)
++        self.origin.write_head(repo)
++        return repo
++
++    def run_check(self, repo, env=None):
++        """Runs the check in repo and returns the finished process, with its output captured as text."""
++        return subprocess.run(self.check, shell=True, cwd=repo, env=env, capture_output=True,
++                               text=True, errors="replace")
++
++
++@dataclass
++class Reply:
++    """The answer of one headless claude call."""
++
++    result: str
++    structured: dict | None  # the answer to --json-schema, when the call passed one
++    cost_usd: float
++
++
++def claude(*args, stdin="", cwd=None, log=None):
++    """Runs `claude -p` with args under the eval config and returns its reply.
++
++    args are the prompt, if any, and flags. stdin is piped in, as the prompt or
++    beside it. log, when given, receives claude's stdout and stderr.
++    Errors when claude exits non-zero, prints no JSON, or reports an error.
++    """
++    cmd = ["claude", "-p", "--output-format", "json", "--no-session-persistence", *args]
++    out = subprocess.run(cmd, input=stdin, cwd=cwd, text=True, capture_output=True,
++                         env=os.environ | {"CLAUDE_CONFIG_DIR": str(CONFIG)})
++    if log:
++        log.write_text(out.stdout + out.stderr)
++    failure = RuntimeError(out.stderr.strip()[:200] or out.stdout[:200])
++    if out.returncode:
++        raise failure
+     try:
+-        return json.loads(out.stdout).get("total_cost_usd", 0.0)
++        reply = json.loads(out.stdout)
+     except json.JSONDecodeError:
+-        return 0.0
+-
+-
+-def evaluate(fixture, rounds, args):
+-    spec = tomllib.loads((fixture / "fixture.toml").read_text())
+-    check = spec["check"]
+-    workdir = CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}"
+-    repo = materialize(fixture, spec, workdir)
+-    # Which skill text the rounds ran, so that their changes can be traced to it.
+-    (workdir / "skill.sha256").write_text(hashlib.sha256((SKILL_REPO / "skills" / "unsmell" / "SKILL.md").read_bytes()).hexdigest())
+-    trees, deltas, report = [snapshot(repo)], [], {"fixture": fixture.name, "workdir": str(workdir), "rounds": []}
+-    git(repo, "update-ref", "refs/rounds/0", git(repo, "commit-tree", trees[0], "-m", "round 0").strip())
+-    for n in range(1, rounds + 1):
+-        cost = run_skill(repo, workdir / f"round-{n}.json", args)
+-        trees.append(snapshot(repo))
+-        delta = Delta.between(repo, trees[-2], trees[-1])
+-        ok = subprocess.run(check, shell=True, cwd=repo, capture_output=True).returncode == 0
+-        report["rounds"].append({
+-            "round": n, "cost_usd": cost, "added": len(delta.added), "removed": len(delta.removed),
+-            "reversals": delta.reversals(deltas), "rework": delta.rework(deltas), "check": ok, "tree": trees[-1],
+-        })
+-        git(repo, "update-ref", f"refs/rounds/{n}",
+-            git(repo, "commit-tree", trees[-1], "-m", f"round {n}").strip())
+-        print(f"{fixture.name} round {n}: +{len(delta.added)} -{len(delta.removed)} "
+-              f"reversals={report['rounds'][-1]['reversals']} rework={report['rounds'][-1]['rework']} check={'ok' if ok else 'FAIL'} ${cost:.2f}",
+-              flush=True)
+-        if delta.empty():
+-            break
+-        deltas.append(delta)
+-    last = report["rounds"][-1]
+-    report["converged"] = last["added"] == last["removed"] == 0
+-    report["oscillated"] = any(r["reversals"] for r in report["rounds"])
+-    (workdir / "report.json").write_text(json.dumps(report, indent=2))
+-    return report
++        raise failure from None
++    if reply.get("is_error"):
++        raise failure
++    return Reply(reply.get("result", ""), reply.get("structured_output"), reply.get("total_cost_usd", 0.0))
++
++
++def round_ref(n):
++    """Returns the ref of the tree after round n. Round 0 is the fixture's head."""
++    return f"refs/rounds/{n}"
++
++
++def record_round(repo, n, tree):
++    """Points round n's ref in repo at a commit of tree."""
++    git(repo, "update-ref", round_ref(n), git(repo, "commit-tree", tree, "-m", f"round {n}").strip())
++
++
++@dataclass(frozen=True)
++class RunDir:
++    """The directory of one run of the rounds on one fixture, which changes.py extracts."""
++
++    path: Path
++
++    @classmethod
++    def new(cls, fixture):
++        """Returns the run directory for a run of fixture that starts now."""
++        return cls(CACHE / "runs" / f"{fixture.name}-{datetime.now():%Y%m%d-%H%M%S}")
++
++    @property
++    def name(self):
++        return self.path.name
++
++    @property
++    def repo(self):
++        """The fixture's repo that the rounds run in."""
++        return self.path / "repo"
++
++    @property
++    def report(self):
++        return self.path / "report.json"
++
++    @property
++    def skill_hash(self):
++        return self.path / "skill.sha256"
++
++    def round_log(self, n):
++        """Returns the path of claude's output in round n."""
++        return self.path / f"round-{n}.json"
++
++    def round_record(self, n):
++        """Returns the directory of the skill's own records of round n (SKILL.md §3.0)."""
++        return self.path / f"round-{n}"
++
++    def record_skill(self):
++        """Records the hash of the SKILL.md that the rounds run, so that their changes can be traced to it."""
++        self.skill_hash.write_text(hashlib.sha256(SKILL.read_bytes()).hexdigest())
++
++    def skill(self):
++        """Returns the hash of the SKILL.md that the rounds ran, or "unknown" for a run that did not record it."""
++        return self.skill_hash.read_text().strip() if self.skill_hash.exists() else "unknown"
++
++    def round_result(self, n):
++        """Returns the skill's final message in round n, or "" when claude printed none."""
++        return json.loads(self.round_log(n).read_text() or "{}").get("result", "")
++
++
++@dataclass(frozen=True)
++class Round:
++    """What one round changed and cost. The fields are the keys of a round in report.json."""
++
++    round: int
++    cost_usd: float
++    added: int
++    removed: int
++    reversals: int
++    rework: int
++    check: bool
++    tree: str
++
++    @property
++    def changed(self):
++        return bool(self.added or self.removed)
++
++    def __str__(self):
++        return (f"round {self.round}: +{self.added} -{self.removed} reversals={self.reversals} "
++                f"rework={self.rework} check={'ok' if self.check else 'FAIL'} ${self.cost_usd:.2f}")
++
++
++@dataclass
++class Report:
++    """The outcome of one run, stored as its report.json."""
++
++    fixture: str
++    workdir: Path
++    rounds: list[Round] = field(default_factory=list)
++    error: str | None = None  # the round whose claude call failed, and why
++
++    @property
++    def converged(self):
++        """Whether the last round changed nothing."""
++        return bool(self.rounds) and not self.rounds[-1].changed
++
++    @property
++    def oscillated(self):
++        """Whether a round brought back lines that an earlier round removed."""
++        return any(r.reversals for r in self.rounds)
++
++    def save(self, path):
++        report = {"fixture": self.fixture, "workdir": str(self.workdir), "rounds": [asdict(r) for r in self.rounds]}
++        if self.error:
++            report["error"] = self.error
++        report |= {"converged": self.converged, "oscillated": self.oscillated}
++        path.write_text(json.dumps(report, indent=2))
++
++    @classmethod
++    def load(cls, path):
++        report = json.loads(path.read_text())
++        return cls(report["fixture"], Path(report["workdir"]), [Round(**r) for r in report["rounds"]],
++                   report.get("error"))
++
++    def __str__(self):
++        return (f"{self.fixture}: {'converged' if self.converged else 'did not converge'} in "
++                f"{len(self.rounds)} rounds, {'oscillated' if self.oscillated else 'no reversals'}. {self.workdir}")
++
++
++@dataclass(frozen=True)
++class Eval:
++    """The settings that every fixture of one invocation runs with."""
++
++    rounds: int  # the most rounds per fixture
++    skill_args: str  # the arguments each round passes to the skill
++
++    def run_skill(self, run, n):
++        """Runs round n of the skill in the run's repo and returns its cost in USD.
++
++        Errors when the claude call fails. The log and the skill's record are kept either way.
++        """
++        try:
++            return claude(f"/unsmell:unsmell {self.skill_args}".strip(), "--plugin-dir", str(SKILL_REPO),
++                          "--permission-mode", "auto", "--permission-prompts", "none",
++                          # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
++                          "--allowedTools", *ALLOWED, cwd=run.repo, log=run.round_log(n)).cost_usd
++        finally:
++            record = run.repo / ".git" / "unsmell"
++            if record.exists():
++                shutil.move(record, run.round_record(n))
++                git(run.repo, "worktree", "prune")  # editors' worktrees the skill left behind
++
++    def evaluate(self, fixture):
++        """Runs the skill on fixture until a round changes nothing, and returns the report it saves in the run directory."""
++        run = RunDir.new(fixture)
++        repo = fixture.materialize(run.repo)
++        run.record_skill()
++        report = Report(fixture.name, run.path)
++        trees, deltas = [snapshot(repo)], []
++        record_round(repo, 0, trees[0])
++        for n in range(1, self.rounds + 1):
++            try:
++                cost = self.run_skill(run, n)
++            except RuntimeError as e:
++                report.error = f"round {n}: {e}"
++                print(f"{fixture.name} round {n}: claude failed: {e}", flush=True)
++                break
++            trees.append(snapshot(repo))
++            delta = Delta.between(repo, trees[-2], trees[-1])
++            done = Round(n, cost, len(delta.added), len(delta.removed), delta.reversals(deltas),
++                         delta.rework(deltas), check=fixture.run_check(repo).returncode == 0, tree=trees[-1])
++            report.rounds.append(done)
++            record_round(repo, n, done.tree)
++            print(f"{fixture.name} {done}", flush=True)
++            if not done.changed:
++                break
++            deltas.append(delta)
++        report.save(run.report)
++        return report
+ 
+ 
+ def main():
+@@ -181,11 +490,11 @@ def main():
+     args = parser.parse_args()
+     if not (CONFIG / ".credentials.json").exists():
+         sys.exit(f"{CONFIG} has no .credentials.json. Link it to your Claude login first, see evals/README.md.")
++    fixtures = [Fixture.load(f.resolve()) for f in args.fixtures]
+     with ThreadPoolExecutor(args.jobs) as pool:
+-        reports = pool.map(lambda f: evaluate(f.resolve(), args.rounds, args.args), args.fixtures)
+-    for r in reports:
+-        print(f"{r['fixture']}: {'converged' if r['converged'] else 'did not converge'} in "
+-              f"{len(r['rounds'])} rounds, {'oscillated' if r['oscillated'] else 'no reversals'}. {r['workdir']}")
++        reports = pool.map(Eval(args.rounds, args.args).evaluate, fixtures)
++    for report in reports:
++        print(report)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/evals/test_run.py b/evals/test_run.py
+index f3c1cd5..bf7e818 100755
+--- a/evals/test_run.py
++++ b/evals/test_run.py
+@@ -1,15 +1,21 @@
+ #!/usr/bin/env python3
+-"""Checks the round diffing of run.py on a scratch repo. Run: python3 evals/test_run.py"""
++"""Checks the round diffing and the report of run.py in a scratch directory. Run: python3 evals/test_run.py"""
++import json
+ import tempfile
+ from pathlib import Path
+ 
+-from run import CACHE, Delta, git, snapshot
++from run import CACHE, Delta, Line, Report, Round, git, snapshot
+ 
+ 
+-def test_reversal(root):
+-    repo = root / "repo"
++def scratch_repo(root, name):
++    repo = root / name
+     repo.mkdir()
+     git(repo, "init", "-q")
++    return repo
++
++
++def test_reversal(root):
++    repo = scratch_repo(root, "reversal")
+     f = repo / "a.py"
+     f.write_text("x = compute_once()\n")
+     t0 = snapshot(repo)
+@@ -25,8 +31,52 @@ def test_reversal(root):
+     assert git(repo, "status", "--porcelain") == "?? a.py\n", "snapshot must not stage"
+ 
+ 
++def test_report_round_trip(root):
++    rounds = [Round(1, 0.5, 3, 2, 0, 0, True, "t1"), Round(2, 0.25, 0, 0, 0, 0, False, "t2")]
++    report = Report("demo", root / "run", rounds, error=None)
++    path = root / "report.json"
++    report.save(path)
++    assert Report.load(path) == report
++    saved = json.loads(path.read_text())
++    assert list(saved) == ["fixture", "workdir", "rounds", "converged", "oscillated"], saved
++    assert list(saved["rounds"][0]) == ["round", "cost_usd", "added", "removed", "reversals", "rework", "check", "tree"]
++    assert saved["converged"] and not saved["oscillated"], saved
++    report.error = "round 3: claude failed"
++    report.save(path)
++    assert Report.load(path).error == report.error
++    assert list(json.loads(path.read_text()))[3] == "error"
++
++
++def test_restored_file(root):
++    repo = scratch_repo(root, "restored")
++    # A user's setting that would drop the a/ and b/ prefixes from the diff's paths.
++    git(repo, "config", "diff.noprefix", "true")
++    f = repo / "a.py"
++    f.write_text("x = compute_once()\n")
++    t0 = snapshot(repo)
++    f.unlink()
++    t1 = snapshot(repo)
++    f.write_text("x = compute_once()\n")
++    t2 = snapshot(repo)
++    first, second = Delta.between(repo, t0, t1), Delta.between(repo, t1, t2)
++    assert first.removed == {Line("a.py", "x = compute_once()")}, first
++    assert second.reversals([first]) == 1, second
++
++
++def test_lines_like_headers(root):
++    repo = scratch_repo(root, "headers")
++    f = repo / "q.sql"
++    f.write_text("-- select everything\n")
++    t0 = snapshot(repo)
++    f.write_text("++counter_in_c;\n")
++    delta = Delta.between(repo, t0, snapshot(repo))
++    assert delta.removed == {Line("q.sql", "-- select everything")}, delta
++    assert delta.added == {Line("q.sql", "++counter_in_c;")}, delta
++
++
+ if __name__ == "__main__":
+     CACHE.mkdir(parents=True, exist_ok=True)
+     with tempfile.TemporaryDirectory(dir=CACHE) as root:
+-        test_reversal(Path(root))
++        for test in (test_reversal, test_restored_file, test_lines_like_headers, test_report_round_trip):
++            test(Path(root))
+     print("ok")

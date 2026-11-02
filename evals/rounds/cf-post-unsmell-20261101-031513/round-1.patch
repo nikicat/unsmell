@@ -1,0 +1,360 @@
+diff --git a/TODO.md b/TODO.md
+index 4a7a00f..90b42ba 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -80,10 +80,8 @@ are scaffolding; delete them (and the re-exports) rather than dressing them up.
+   Stringly-typed and load-bearing (drives RPC selection). Replace with
+   `#[serde(rename_all = "lowercase")] enum { None, Limited, Yes, Unspecified }`.
+   Low–med friction.
+-- **`EventSignatureRow` → named struct.** `src/evm/cache/event_signature_cache.rs:17`
+-  is `pub type EventSignatureRow = (String, B256, Option<String>)` — the naked
+-  3-tuple smell. `struct EventSignatureRow { signature: String, topic0: Topic,
+-  abi_json: Option<String> }`. Low friction.
++- ~~**`EventSignatureRow` → named struct.**~~ Done: it is a struct with a
++  `topic0: Topic` field, and `insert_event_signature` takes it whole.
+ - **CLI flag bools → `clap::ValueEnum`s.** `src/bin/chainfold/cli.rs`:
+   `reverse: bool` (`:14`), `follow: bool` (`:18`), `decode: bool` (`:141`) reach
+   call sites as `run(.., true, false)` with no clue. `enum Direction { Forward,
+@@ -134,3 +132,54 @@ core can merge heterogeneous positions. Newtyping there fights the generic core.
+ Delete `EvmBlock`/`EvmTransaction`; then `Timestamp` newtype, `PrivacyTracking`
+ enum, `EventSignatureRow` struct, and the `12`→const fix — one commit each. The
+ CLI flag-enums and `SourceKey` are a good follow-on.
++
++## Unsmell follow-ups — `EventSignatureRow` struct change (2026-11-01)
++
++Smells found next to the `EventSignatureRow` change but outside its changed
++lines. Each is self-contained.
++
++- **Event lookup key travels as three loose values.** `(chain_id, address,
++  event_name)` is threaded through `resolve_event` / `resolve_event_topic`
++  (`src/signatures.rs`), `SignatureCache::get`/`put`, `SqliteSignatureCache`
++  (`src/bin/chainfold/signature_cache.rs`) and
++  `EventSignatureCache::{get,insert}_event_signature`. Introduce an
++  `EventKey { chain_id, address, event_name }` in `signatures` (source-agnostic
++  primitives) with a conversion to the `ChainId`/`Address` form in the cache
++  layer. That also removes the twice-written `ChainId::new(chain_id),
++  &Address::from(address)` in the adapter. Public trait change: decide whether
++  `signatures` stays primitive-only.
++- **Adapter error mapping written twice.** `src/bin/chainfold/signature_cache.rs`
++  `get`/`put` both do `.map_err(|e| SignatureError::Cache(e.to_string()))`.
++  Give it one name (a `From<CacheError> for SignatureError` in the lib, or a
++  local fn).
++- **`signature` and `topic0` can disagree.** `EventSignatureRow` and
++  `ResolvedEvent` store both, but `topic0` is always keccak256 of `signature`.
++  Options: an `EventSignature` type that computes its topic on construction,
++  or keep both and check on read. Spans `signatures` and the cache.
++- **`ResolvedEvent.topic0: [u8; 32]`.** `signatures` is source-agnostic, so the
++  bytes stay raw there; the conversion now lives in
++  `event_signature_cache.rs` `From` impls. Revisit if `signatures` ever takes
++  an EVM dependency.
++- **Unused `EventSignatureCache::open`.** `src/evm/cache/event_signature_cache.rs:39`
++  has no callers; `open_in_memory` is test-only. Delete `open`, or keep both if
++  the standalone-open pattern of `log_cache.rs`/`erc20_cache.rs` is deliberate
++  (then `path: &str` → `&Path` across all three).
++- **Docs in `event_signature_cache.rs` and the adapter.**
++  - Module doc (lines 1-8) mixes mechanism ("cheap handle over the shared
++    connection"), the row's fields read back, the caller's reason
++    ("zero-network", also stated in `cache.rs` and `signatures.rs`) and naming
++    history. Rewrite as the cache's place in the system.
++  - `EventSignatureCache` type doc ("Durable SQLite-backed event-signature
++    cache.") restates the name plus mechanism.
++  - `open` doc is imperative, repeats `CacheDb::open`'s effects and reads the
++    body back. `open_in_memory`'s "Useful for tests." is a caller's reason,
++    also at `cache.rs:115`.
++  - "`abi_json` is null for rows cached before the column existed" is stated
++    in `signatures.rs` (`ResolvedEvent::abi_json`) and `cache.rs` schema; keep
++    one owner.
++  - `src/bin/chainfold/signature_cache.rs:1` "Adapter: implements…" joins two
++    ideas with a colon.
++- **`erc20_cache.rs` repeats the hand-rolled optional row.**
++  `src/evm/cache/erc20_cache.rs:114-121,151-158` use `query_map` + `rows.next()`
++  + `match` with an inline `len() == 32` check. Use `query_row(..).optional()`
++  and `Topic::from_slice` / `B256::try_from`, as `get_event_signature` now does.
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 115ae20..9c7cac8 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -2,9 +2,9 @@
+ //! SQLite-backed [`EventSignatureCache`] so the CLI reuses the same cache
+ //! file for event-signature caching.
+ 
+-use alloy::primitives::{Address, B256};
++use alloy::primitives::Address;
+ use async_trait::async_trait;
+-use chainfold::evm::{ChainId, EventSignatureCache, Topic};
++use chainfold::evm::{ChainId, EventSignatureCache};
+ use chainfold::signatures::{ResolvedEvent, SignatureCache, SignatureError};
+ 
+ pub struct SqliteSignatureCache {
+@@ -27,13 +27,7 @@ impl SignatureCache for SqliteSignatureCache {
+     ) -> Result<Option<ResolvedEvent>, SignatureError> {
+         self.cache
+             .get_event_signature(ChainId::new(chain_id), &Address::from(address), event_name)
+-            .map(|opt| {
+-                opt.map(|row| ResolvedEvent {
+-                    signature: row.signature,
+-                    topic0: row.topic0.b256().into(),
+-                    abi_json: row.abi_json,
+-                })
+-            })
++            .map(|row| row.map(ResolvedEvent::from))
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+ 
+@@ -49,9 +43,7 @@ impl SignatureCache for SqliteSignatureCache {
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+-                &entry.signature,
+-                Topic::from(B256::from(entry.topic0)),
+-                entry.abi_json.as_deref(),
++                &entry.into(),
+             )
+             .map_err(|e| SignatureError::Cache(e.to_string()))
+     }
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..8f32c60 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -8,21 +8,46 @@
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+ use alloy::primitives::{Address, B256};
++use rusqlite::OptionalExtension;
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
++use crate::signatures::ResolvedEvent;
+ 
+-/// A single resolved row from `event_signatures`.
++/// One cached resolution of an event name to its signature, as
++/// [`EventSignatureCache`] stores and returns it.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct EventSignatureRow {
+     /// Canonical event signature, e.g. `Transfer(address,address,uint256)`.
+     pub signature: String,
+-    /// `topic0` — the keccak256 hash of the signature.
++    /// The keccak256 hash of `signature`. Logs of this event carry it as
++    /// their first topic.
+     pub topic0: Topic,
+-    /// JSON of the matched ABI event item, when populated.
++    /// The JSON of the ABI event item that `signature` was taken from, when
++    /// the row has one (see [`ResolvedEvent::abi_json`]).
+     pub abi_json: Option<String>,
+ }
+ 
++impl From<EventSignatureRow> for ResolvedEvent {
++    fn from(row: EventSignatureRow) -> Self {
++        Self {
++            signature: row.signature,
++            topic0: row.topic0.b256().0,
++            abi_json: row.abi_json,
++        }
++    }
++}
++
++impl From<&ResolvedEvent> for EventSignatureRow {
++    fn from(entry: &ResolvedEvent) -> Self {
++        Self {
++            signature: entry.signature.clone(),
++            topic0: Topic::new(B256::from(entry.topic0)),
++            abi_json: entry.abi_json.clone(),
++        }
++    }
++}
++
+ /// Durable SQLite-backed event-signature cache.
+ pub struct EventSignatureCache {
+     conn: SharedConn,
+@@ -56,24 +81,25 @@ impl EventSignatureCache {
+             "SELECT signature, topic0, abi_json FROM event_signatures
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+         )?;
+-        let mut rows = stmt.query_map(
+-            rusqlite::params![chain_id, address.as_slice(), event_name],
+-            |row| {
+-                let sig: String = row.get(0)?;
+-                let topic: Vec<u8> = row.get(1)?;
+-                let abi: Option<String> = row.get(2)?;
+-                Ok((sig, topic, abi))
+-            },
+-        )?;
+-        match rows.next() {
+-            Some(Ok((sig, topic, abi))) if topic.len() == 32 => Ok(Some(EventSignatureRow {
+-                signature: sig,
+-                topic0: Topic::from(B256::from_slice(&topic)),
+-                abi_json: abi,
+-            })),
+-            Some(Err(e)) => Err(e.into()),
+-            _ => Ok(None),
+-        }
++        let found = stmt
++            .query_row(
++                rusqlite::params![chain_id, address.as_slice(), event_name],
++                |row| {
++                    let topic: Vec<u8> = row.get(1)?;
++                    // A malformed topic reads as a miss, so the resolver
++                    // fetches the event again and overwrites the row.
++                    let Some(topic0) = Topic::from_slice(&topic) else {
++                        return Ok(None);
++                    };
++                    Ok(Some(EventSignatureRow {
++                        signature: row.get(0)?,
++                        topic0,
++                        abi_json: row.get(2)?,
++                    }))
++                },
++            )
++            .optional()?;
++        Ok(found.flatten())
+     }
+ 
+     pub fn insert_event_signature(
+@@ -81,9 +107,7 @@ impl EventSignatureCache {
+         chain_id: ChainId,
+         address: &Address,
+         event_name: &str,
+-        signature: &str,
+-        topic0: Topic,
+-        abi_json: Option<&str>,
++        row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+         conn.execute(
+@@ -94,9 +118,9 @@ impl EventSignatureCache {
+                 chain_id,
+                 address.as_slice(),
+                 event_name,
+-                signature,
+-                topic0.as_slice(),
+-                abi_json,
++                row.signature,
++                row.topic0.as_slice(),
++                row.abi_json,
+             ],
+         )?;
+         Ok(())
+@@ -111,29 +135,31 @@ impl EventSignatureCache {
+ mod tests {
+     use super::*;
+ 
++    const CHAIN: ChainId = ChainId::new(1);
+     const ADDR: Address = Address::repeat_byte(0x42);
+-    const TOPIC0: B256 = B256::repeat_byte(0xDD);
++    const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));
+ 
+-    #[test]
+-    fn signature_round_trip_with_abi() {
++    /// Asserts that `row` reads back unchanged after it is stored under
++    /// `event_name`.
++    fn assert_round_trips(event_name: &str, row: &EventSignatureRow) {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Transfer",
+-                "Transfer(address,address,uint256)",
+-                Topic::from(TOPIC0),
+-                Some("{\"type\":\"event\"}"),
+-            )
+-            .unwrap();
+-        let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Transfer")
+-            .unwrap()
++            .insert_event_signature(CHAIN, &ADDR, event_name, row)
+             .unwrap();
+-        assert_eq!(row.signature, "Transfer(address,address,uint256)");
+-        assert_eq!(row.topic0, Topic::from(TOPIC0));
+-        assert_eq!(row.abi_json.as_deref(), Some("{\"type\":\"event\"}"));
++        let got = cache.get_event_signature(CHAIN, &ADDR, event_name).unwrap();
++        assert_eq!(got.as_ref(), Some(row));
++    }
++
++    #[test]
++    fn signature_round_trip_with_abi() {
++        assert_round_trips(
++            "Transfer",
++            &EventSignatureRow {
++                signature: "Transfer(address,address,uint256)".to_owned(),
++                topic0: TOPIC0,
++                abi_json: Some("{\"type\":\"event\"}".to_owned()),
++            },
++        );
+     }
+ 
+     #[test]
+@@ -141,7 +167,7 @@ mod tests {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         assert!(
+             cache
+-                .get_event_signature(ChainId::new(1), &ADDR, "Nope")
++                .get_event_signature(CHAIN, &ADDR, "Nope")
+                 .unwrap()
+                 .is_none()
+         );
+@@ -149,21 +175,35 @@ mod tests {
+ 
+     #[test]
+     fn signature_nullable_abi() {
++        assert_round_trips(
++            "Approval",
++            &EventSignatureRow {
++                signature: "Approval()".to_owned(),
++                topic0: TOPIC0,
++                abi_json: None,
++            },
++        );
++    }
++
++    #[test]
++    fn signature_malformed_topic_reads_as_miss() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+-            .insert_event_signature(
+-                ChainId::new(1),
+-                &ADDR,
+-                "Approval",
+-                "Approval()",
+-                Topic::from(TOPIC0),
+-                None,
+-            )
+-            .unwrap();
+-        let row = cache
+-            .get_event_signature(ChainId::new(1), &ADDR, "Approval")
++            .conn
++            .lock()
+             .unwrap()
++            .execute(
++                "INSERT INTO event_signatures
++                 (chain_id, address, event_name, signature, topic0, abi_json)
++                 VALUES (?1, ?2, 'Short', 'Short()', ?3, NULL)",
++                rusqlite::params![CHAIN, ADDR.as_slice(), [0xDDu8; 31].as_slice()],
++            )
+             .unwrap();
+-        assert!(row.abi_json.is_none());
++        assert!(
++            cache
++                .get_event_signature(CHAIN, &ADDR, "Short")
++                .unwrap()
++                .is_none()
++        );
+     }
+ }
+diff --git a/src/evm/types.rs b/src/evm/types.rs
+index 3b81155..7178711 100644
+--- a/src/evm/types.rs
++++ b/src/evm/types.rs
+@@ -73,6 +73,12 @@ impl Topic {
+         self.0
+     }
+ 
++    /// Returns the topic held in `bytes`, or `None` when `bytes` is not 32
++    /// bytes long.
++    pub fn from_slice(bytes: &[u8]) -> Option<Self> {
++        B256::try_from(bytes).ok().map(Self)
++    }
++
+     /// Raw bytes, for hashing / `SQLite` binds.
+     pub fn as_slice(&self) -> &[u8] {
+         self.0.as_slice()

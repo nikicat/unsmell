@@ -1,0 +1,308 @@
+diff --git a/TODO.md b/TODO.md
+index 2dc8cb6..8b2b71f 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -87,3 +87,24 @@ These sit on lines the change did not touch. The run fixed the ones on changed l
+ - **The `iter` closure matches `Ok`/`Err` to pass the error on.** `let log = result?;` says the same.
+ - **Docs.** The `apply_topics` doc lists alloy's slot methods (mechanism). The comment above the warmup test (`history.rs:906-909`) is four lines of motivation.
+ - **The fetcher prefetches block 0's header for a log with no block number.** HEAD skipped such logs. Now `blocks_needing_header` follows `TimestampSource::of`, which maps a missing number to block 0 through `log_block_number`, so the prefetch and the stamping agree. `insert_logs`, on the other hand, tests for a missing `block_hash`. This belongs to the `MinedLog` item above: parse each log once, decide in one place whether it is mined, and leave unmined logs out of both the cache and the prefetch.
++
++## Smells found by the third unsmell run on the `block_timestamp` change (2026-11-01)
++
++These sit on lines the change did not touch, or wait on a larger item above. The run fixed the ones on changed lines.
++
++### History (`src/evm/history.rs`)
++
++- **`log_to_evm_event` is a free function that builds an `EvmEvent` from a `Log`.** It belongs with what it builds, as `EvmEvent::from_log`, or on the `MinedLog` type above. Do it with `MinedLog`.
++- **The "cut just before block B" is written by hand** in `time_pos` (`EvmPosition::new(block - 1, u32::MAX)`), in `tests/phase1_layering.rs` and in `iter_uses_log_block_timestamp_without_header_fetch`. Fix: `EvmPosition::before_block(b)`, next to the planned `end_of_block`.
++- **`this.hist(EvmPosition::earliest(), tip)` is written three times** in the `HistStoreBackend` impl (`snapshots`, `next`, `subscribe`). Fix: a private `hist_to(tip)` on `EvmLogHistory`.
++- **The bound `P: Provider<Ethereum> + Clone + Send + Sync + 'static` is spelled four times.** Fix: one named trait with a blanket impl.
++- **Tests:** `warm_cache` returns an unnamed `(Arc<LogCache>, [u8; 32])`. `blocks_needing_header_skips_logs_with_timestamp` rebuilds `make_log(100, 0, BH_100)` and `make_log(101, 0, BH_101)`, which `warm_cache` also builds, pairing each block with its hash by hand. `GENESIS_TS` is a bare `u64` while `STAMPED_TS` is a `Timestamp`.
++- **Docs.** `subscribe`'s doc opens with its own name ("Subscribe to …"), and `collect`'s ("Iterate a Hist …") is imperative.
++
++### Cache (`src/evm/cache.rs`, `src/evm/cache/log_cache.rs`)
++
++- **`self.conn.lock().unwrap()` is written 11 times in `log_cache.rs`** (18 across `src/evm/cache/`). Fix: one `SharedConn` method that returns the guard and owns the poison policy.
++- **`topics.get(i).map(|t| t.as_slice().to_vec())` is written four times in `insert_logs`.** Fold it into the row struct planned above.
++- **Facts written twice:** the uniqueness key `(filter_hash, block_hash, log_index)` (`cache.rs:128`, `log_cache.rs:131`), and the BLAKE3 filter hash (`cache.rs:125`, `log_cache.rs:38-41`). `compute_filter_hash` should own the second.
++- **`migrations()` and `configure_connection` are `pub(crate)`** but only `cache.rs` calls them. Make them private.
++- **The `CacheDb::open` and `LogCache::open` docs do not say that they create the file.**
+diff --git a/examples/history_explorer.rs b/examples/history_explorer.rs
+index f28ed0d..7b64cb0 100644
+--- a/examples/history_explorer.rs
++++ b/examples/history_explorer.rs
+@@ -20,7 +20,7 @@ use alloy::network::Ethereum;
+ use alloy::providers::{Provider, ProviderBuilder};
+ use alloy::rpc::client::ClientBuilder;
+ use alloy::transports::http::reqwest::Url;
+-use chainfold::arch::{Hist, HistBackend, HistStore, HistoryError, Positioned, watch_hist};
++use chainfold::arch::{HistStore, HistoryError, Positioned, watch_hist};
+ use chainfold::evm::{
+     EvmEvent, EvmLogHistory, EvmPosition, LogCache, SubscribeTransport, rpc_retry_layer,
+     versioned_path,
+@@ -204,8 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
+             start: EvmPosition,
+             end: EvmPosition,
+         ) -> Result<usize, HistoryError> {
+-            let backend: Arc<dyn HistBackend<EvmEvent, EvmPosition>> = backend.clone();
+-            let hist = Hist::new(backend, start, end);
++            let hist = backend.hist(start, end);
+             let mut s = hist.iter();
+             let mut n = 0;
+             while let Some(item) = s.next().await {
+@@ -274,8 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
+         println!("\nHistory closed ({count} events).");
+     } else {
+         println!("Navigating forward from block {}:\n", start.block);
+-        let backend_dyn: Arc<dyn HistBackend<EvmEvent, EvmPosition>> = backend.clone();
+-        let hist = Hist::new(backend_dyn, start, end);
++        let hist = backend.hist(start, end);
+         let mut s = hist.iter();
+         let mut count = 0;
+         while let Some(item) = s.next().await {
+diff --git a/src/bin/chainfold/evm/events.rs b/src/bin/chainfold/evm/events.rs
+index 98641b3..75d7b90 100644
+--- a/src/bin/chainfold/evm/events.rs
++++ b/src/bin/chainfold/evm/events.rs
+@@ -6,7 +6,7 @@ use alloy::json_abi::Event;
+ use alloy::network::Ethereum;
+ use alloy::primitives::B256;
+ use alloy::providers::Provider;
+-use chainfold::arch::{Hist, HistBackend, Positioned, watch_hist};
++use chainfold::arch::{Positioned, watch_hist};
+ use chainfold::evm::{CacheDb, EvmEvent, EvmLogHistory, EvmPosition, SubscribeTransport};
+ use chainfold::signatures::{resolve_event, topic_from_signature};
+ use futures_util::StreamExt;
+@@ -85,8 +85,7 @@ pub async fn run<P: Provider<Ethereum> + Clone + Send + Sync + 'static>(
+         }
+         println!("\nHistory closed ({count} events).");
+     } else {
+-        let backend_dyn: Arc<dyn HistBackend<EvmEvent, EvmPosition>> = backend.clone();
+-        let hist = Hist::new(backend_dyn, start, end);
++        let hist = backend.hist(start, end);
+         let mut stream = hist.iter();
+         let mut count = 0;
+         while let Some(item) = stream.next().await {
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 24b42a1..ca6d5c4 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -199,6 +199,16 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+         HistStore::new(Arc::clone(self) as Arc<dyn HistStoreBackend<_, _>>)
+     }
+ 
++    /// Returns the history of the filtered logs between the cuts `start` and
++    /// `end`.
++    pub fn hist(
++        self: &Arc<Self>,
++        start: EvmPosition,
++        end: EvmPosition,
++    ) -> Hist<EvmEvent, EvmPosition> {
++        Hist::new(Arc::clone(self) as Arc<dyn HistBackend<_, _>>, start, end)
++    }
++
+     pub fn chain_id(&self) -> u64 {
+         self.chain_id
+     }
+@@ -419,26 +429,26 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistStoreBackend<Evm
+     for EvmLogHistory<P>
+ {
+     fn snapshots(&self) -> HistStream<EvmEvent, EvmPosition> {
+-        let backend: Arc<dyn HistBackend<_, _>> = self.arc_self();
++        let this = self.arc_self();
+         let mut latest_sub = self.latest_store.subscribe();
+         Box::pin(poll_fn(move |cx| {
+-            latest_sub.as_mut().poll_next(cx).map(|tip_opt| {
+-                tip_opt.map(|tip| Hist::new(backend.clone(), EvmPosition::earliest(), tip))
+-            })
++            latest_sub
++                .as_mut()
++                .poll_next(cx)
++                .map(|tip_opt| tip_opt.map(|tip| this.hist(EvmPosition::earliest(), tip)))
+         }))
+     }
+ 
+     async fn next(&self) -> Hist<EvmEvent, EvmPosition> {
+-        let backend: Arc<dyn HistBackend<_, _>> = self.arc_self();
+         let tip = self.latest_store.get();
+-        Hist::new(backend, EvmPosition::earliest(), tip)
++        self.arc_self().hist(EvmPosition::earliest(), tip)
+     }
+ 
+     fn subscribe(
+         &self,
+         cb: Box<dyn Fn(Hist<EvmEvent, EvmPosition>) + Send + Sync>,
+     ) -> AsyncDisposable {
+-        let backend: Arc<dyn HistBackend<_, _>> = self.arc_self();
++        let this = self.arc_self();
+         let mut stream = self.latest_store.subscribe();
+         let cancel = CancellationToken::new();
+         let cancel2 = cancel.clone();
+@@ -448,8 +458,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> HistStoreBackend<Evm
+                     _ = cancel2.cancelled() => break,
+                     tip = stream.next() => {
+                         let Some(tip) = tip else { break };
+-                        let hist = Hist::new(backend.clone(), EvmPosition::earliest(), tip);
+-                        cb(hist);
++                        cb(this.hist(EvmPosition::earliest(), tip));
+                     }
+                 }
+             }
+@@ -522,11 +531,11 @@ where
+     }
+ }
+ 
+-/// Where the timestamp of a log's block comes from. Because [`log_timestamp`]
+-/// and [`blocks_needing_header`] both decide by it, the second lists exactly
+-/// the headers that the first reads.
++/// Where the timestamp of a log's block comes from. [`log_timestamp`] and
++/// [`blocks_needing_header`] both get a log's source from this type, so the
++/// two always agree on where the timestamp comes from.
+ enum TimestampSource {
+-    /// The timestamp the provider put on the log.
++    /// The timestamp that the log carries.
+     Log(Timestamp),
+     /// The header of the block with the given number.
+     Header(u64),
+@@ -549,8 +558,8 @@ impl TimestampSource {
+     }
+ }
+ 
+-/// Returns the numbers of the blocks whose header [`log_timestamp`] reads for
+-/// `logs`, once per log.
++/// Returns the number of each block whose header [`log_timestamp`] reads for
++/// `logs`. A block appears once for each of its logs that needs the header.
+ fn blocks_needing_header(logs: &[Log]) -> impl Iterator<Item = u64> + '_ {
+     logs.iter()
+         .filter_map(|log| TimestampSource::of(log).header_block())
+@@ -761,18 +770,6 @@ mod tests {
+             .unwrap()
+     }
+ 
+-    fn make_hist<P>(
+-        history: &Arc<EvmLogHistory<P>>,
+-        start: EvmPosition,
+-        end: EvmPosition,
+-    ) -> Hist<EvmEvent, EvmPosition>
+-    where
+-        P: Provider<Ethereum> + Clone + Send + Sync + 'static,
+-    {
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        Hist::new(backend, start, end)
+-    }
+-
+     /// Iterate a Hist into a Vec<Positioned> with no in-flight fetcher.
+     async fn collect(hist: Hist<EvmEvent, EvmPosition>) -> Vec<Positioned<EvmEvent, EvmPosition>> {
+         hist.iter().try_collect().await.unwrap()
+@@ -783,7 +780,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = make_hist(&history, EvmPosition::earliest(), end);
++        let hist = history.hist(EvmPosition::earliest(), end);
+ 
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 3);
+@@ -797,7 +794,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = make_hist(&history, EvmPosition::earliest(), end);
++        let hist = history.hist(EvmPosition::earliest(), end);
+ 
+         // Split past end ⇒ head = full, tail = empty.
+         let (head, tail) = hist.split(EvmPosition::new(9999, 0));
+@@ -824,7 +821,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let pos = EvmPosition::new(150, 0);
+-        let hist = make_hist(&history, pos, pos);
++        let hist = history.hist(pos, pos);
+         assert!(hist.is_empty());
+         assert!(collect(hist).await.is_empty());
+     }
+@@ -834,7 +831,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = make_hist(&history, EvmPosition::earliest(), end);
++        let hist = history.hist(EvmPosition::earliest(), end);
+         let items = collect(hist).await;
+         // block 100 header inserted with GENESIS_TS + 1200
+         assert_eq!(items[0].item.timestamp, GENESIS_TS + 1200);
+@@ -842,16 +839,15 @@ mod tests {
+     }
+ 
+     /// A log that carries its own timestamp is stamped without its block
+-    /// header. No header for its block is cached and the mock provider answers
+-    /// no `get_block_by_number`, so a header lookup would fail the stream.
++    /// header. The mock provider answers no `get_block_by_number`, so a header
++    /// lookup would fail the stream.
+     #[tokio::test]
+     async fn iter_uses_log_block_timestamp_without_header_fetch() {
+         let (cache, fh) = warm_cache();
+         cache.insert_logs(&fh, &[make_stamped_log()]).unwrap();
+ 
+         let history = make_history(cache).await;
+-        let hist = make_hist(
+-            &history,
++        let hist = history.hist(
+             EvmPosition::new(STAMPED_BLOCK - 1, u32::MAX),
+             EvmPosition::new(STAMPED_BLOCK, u32::MAX),
+         );
+@@ -969,7 +965,7 @@ mod tests {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = make_hist(&history, EvmPosition::earliest(), end);
++        let hist = history.hist(EvmPosition::earliest(), end);
+ 
+         // Install the counter only around the walk — make_history's setup RPCs
+         // (chain_id, block_number) happen before this and aren't counted.
+diff --git a/tests/owned_erc20.rs b/tests/owned_erc20.rs
+index ca1a130..7ff9b10 100644
+--- a/tests/owned_erc20.rs
++++ b/tests/owned_erc20.rs
+@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
+ use std::sync::Arc;
+ 
+ use alloy::providers::ProviderBuilder;
+-use chainfold::arch::{Hist, HistBackend, Position};
++use chainfold::arch::Position;
+ use chainfold::evm::{
+     EvmEvent, EvmLogHistory, EvmPosition, IN_KEY, LogCache, OUT_KEY, OwnedErc20, TRANSFER_TOPIC,
+ };
+@@ -72,8 +72,7 @@ async fn owned_erc20_matches_broad_filter_then_client_side() {
+     let to_block = FORK_BLOCK;
+     let start = EvmPosition::new(from_block - 1, u32::MAX);
+     let end = EvmPosition::new(to_block, u32::MAX);
+-    let backend: Arc<dyn HistBackend<EvmEvent, EvmPosition>> = broad.clone();
+-    let hist = Hist::new(backend, start, end);
++    let hist = broad.hist(start, end);
+     let mut stream = hist.iter();
+     let mut all_transfers: Vec<EvmEvent> = Vec::new();
+     while let Some(item) = stream.next().await {
+diff --git a/tests/phase1_layering.rs b/tests/phase1_layering.rs
+index 604a9f0..7cd4834 100644
+--- a/tests/phase1_layering.rs
++++ b/tests/phase1_layering.rs
+@@ -15,8 +15,7 @@ use std::time::Instant;
+ use alloy::network::Ethereum;
+ use alloy::providers::{Provider, ProviderBuilder};
+ use alloy::transports::http::reqwest::Url;
+-use chainfold::arch::{Hist, HistBackend};
+-use chainfold::evm::{EvmEvent, EvmLogHistory, EvmPosition, LogCache, TRANSFER_TOPIC};
++use chainfold::evm::{EvmLogHistory, EvmPosition, LogCache, TRANSFER_TOPIC};
+ use futures_util::StreamExt;
+ use tempfile::TempDir;
+ 
+@@ -54,8 +53,7 @@ where
+         EvmPosition::new(from_block - 1, u32::MAX)
+     };
+     let end = EvmPosition::new(to_block, u32::MAX);
+-    let backend: Arc<dyn HistBackend<EvmEvent, EvmPosition>> = history.clone();
+-    let hist = Hist::new(backend, start, end);
++    let hist = history.hist(start, end);
+     let mut stream = hist.iter();
+     let mut count = 0;
+     while let Some(item) = stream.next().await {

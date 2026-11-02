@@ -1,0 +1,39 @@
+id: 87752dd493
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t9
+judge: null
+labels:
+- label: neutral
+  note: this better should be a type annotation of return value
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-16
+  at:
+  - seb.py:45-49
+  reach:
+  - seb.py:45-49
+  row: narrating doc comment
+  claim: call() exits the whole process on any non-2xx response; nothing documents it, and every caller
+    (authorize, load_session, transactions) inherits the exit
+  fix: 'a one-line doc on call: ''Returns the decoded JSON body. Exits the program with the status and
+    body when the API answers with an error.'''
+  decision: SKIP
+  score: 4
+  reason: true but adds little in a single-file script; no missing-docs lint
+  same:
+  - b1-2
+  triage:
+    id: b1-16
+    decision: SKIP
+    score: 4
+    reason: true, adds little
+    task: t9
+    after:
+    - t1
+after:
+- 2233303edb
+check: ok

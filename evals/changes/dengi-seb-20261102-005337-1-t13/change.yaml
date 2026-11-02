@@ -1,0 +1,33 @@
+id: dengi-seb-20261102-005337-1-t13
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t13
+judge: null
+labels: []
+findings:
+- id: b1-23
+  at:
+  - seb.py:57
+  - seb.py:2
+  reach:
+  - seb.py:57
+  row: speculative generality
+  claim: EB_ASPSP lets the bank name vary, but the country is hard-coded as "LT", and the program is named
+    and documented as SEB LT. So the env var only works for another Lithuanian bank, and nothing documents
+    that.
+  fix: 'Either drop EB_ASPSP and use the constant ASPSP = {"name": "SEB", "country": "LT"}, or add EB_COUNTRY
+    to Config (b1-2).'
+  decision: SKIP
+  score: 4
+  reason: Removing an env var is a CLI change (ASK territory), and the gain is small. Below the threshold.
+  same:
+  - b1-2
+  triage:
+    id: b1-23
+    decision: SKIP
+    score: 4
+    reason: dropping an env var is a CLI change for small gain
+    task: t13
+check: ok

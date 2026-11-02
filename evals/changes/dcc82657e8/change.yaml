@@ -1,0 +1,34 @@
+id: dcc82657e8
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t13
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-8
+  at:
+  - src/evm/cache/log_cache.rs:296-310
+  - src/evm/cache/log_cache.rs:41-63
+  reach:
+  - src/evm/cache/log_cache.rs:41-63
+  - src/evm/cache/log_cache.rs:261-327
+  row: inline generic machinery
+  claim: compact_ranges merges overlapping inclusive ranges by hand and compute_gaps computes their complement;
+    both are interval-set operations written inline.
+  fix: A small interval-set helper (merge, difference) used by both, or an existing crate.
+  decision: SKIP
+  score: 3
+  reason: Unchanged lines, unrelated to the changeset; well tested as is.
+  same: []
+  triage:
+    id: b1-8
+    decision: SKIP
+    score: 3
+    task: t13
+    reason: unchanged lines
+check: ok

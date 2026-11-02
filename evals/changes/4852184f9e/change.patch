@@ -1,0 +1,189 @@
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..e47a101 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -130,8 +130,8 @@ impl LogCache {
+                 let topics = log.topics();
+                 stmt.execute(rusqlite::params![
+                     &filter_hash[..],
+-                    log.block_number.unwrap_or(0) as i64,
+-                    log.log_index.unwrap_or(0) as i64,
++                    log.block_number.unwrap_or(0),
++                    log.log_index.unwrap_or(0),
+                     log.address().as_slice(),
+                     topics.first().map(|t| t.as_slice().to_vec()),
+                     topics.get(1).map(|t| t.as_slice().to_vec()),
+@@ -140,8 +140,8 @@ impl LogCache {
+                     log.data().data.as_ref(),
+                     block_hash.as_slice(),
+                     log.transaction_hash.map(|h| h.0.to_vec()),
+-                    log.transaction_index.unwrap_or(0) as i64,
+-                    log.block_timestamp.map(|t| t as i64),
++                    log.transaction_index.unwrap_or(0),
++                    log.block_timestamp,
+                 ])?;
+             }
+         }
+@@ -168,7 +168,7 @@ impl LogCache {
+              LIMIT 1",
+         )?;
+         let mut rows = stmt.query_map(
+-            rusqlite::params![&filter_hash[..], &block_hash[..], log_index as i64],
++            rusqlite::params![&filter_hash[..], &block_hash[..], log_index],
+             row_to_log,
+         )?;
+         match rows.next() {
+@@ -197,7 +197,7 @@ impl LogCache {
+         )?;
+         let logs = stmt
+             .query_map(
+-                rusqlite::params![&filter_hash[..], from_block as i64, to_block as i64],
++                rusqlite::params![&filter_hash[..], from_block, to_block],
+                 row_to_log,
+             )?
+             .collect::<Result<Vec<_>, _>>()?;
+@@ -221,12 +221,7 @@ impl LogCache {
+         conn.execute(
+             "INSERT INTO scanned_ranges (filter_hash, start_block, end_block, end_block_hash)
+              VALUES (?1, ?2, ?3, ?4)",
+-            rusqlite::params![
+-                &filter_hash[..],
+-                start as i64,
+-                end as i64,
+-                &end_block_hash[..],
+-            ],
++            rusqlite::params![&filter_hash[..], start, end, &end_block_hash[..]],
+         )?;
+         Ok(())
+     }
+@@ -247,7 +242,7 @@ impl LogCache {
+         )?;
+         let ranges = stmt
+             .query_map(rusqlite::params![&filter_hash[..]], |row| {
+-                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
++                Ok((row.get(0)?, row.get(1)?))
+             })?
+             .collect::<Result<Vec<_>, _>>()?;
+         Ok(ranges)
+@@ -274,17 +269,14 @@ impl LogCache {
+                  ORDER BY start_block ASC",
+             )?;
+             let result: Vec<(i64, u64, u64, Vec<u8>)> = stmt
+-                .query_map(
+-                    rusqlite::params![&filter_hash[..], up_to_block as i64],
+-                    |row| {
+-                        Ok((
+-                            row.get(0)?,
+-                            row.get::<_, i64>(1)? as u64,
+-                            row.get::<_, i64>(2)? as u64,
+-                            row.get::<_, Vec<u8>>(3)?,
+-                        ))
+-                    },
+-                )?
++                .query_map(rusqlite::params![&filter_hash[..], up_to_block], |row| {
++                    Ok((
++                        row.get(0)?,
++                        row.get(1)?,
++                        row.get(2)?,
++                        row.get::<_, Vec<u8>>(3)?,
++                    ))
++                })?
+                 .collect::<Result<_, _>>()?;
+             result
+         };
+@@ -317,7 +309,7 @@ impl LogCache {
+                 tx.execute(
+                     "INSERT INTO scanned_ranges (filter_hash, start_block, end_block, end_block_hash)
+                      VALUES (?1, ?2, ?3, ?4)",
+-                    rusqlite::params![&filter_hash[..], *start as i64, *end as i64, &end_hash[..]],
++                    rusqlite::params![&filter_hash[..], *start, *end, &end_hash[..]],
+                 )?;
+             }
+             tx.commit()?;
+@@ -340,7 +332,7 @@ impl LogCache {
+                 "INSERT OR IGNORE INTO reorged_blocks (block_hash, block_number) VALUES (?1, ?2)",
+             )?;
+             for (hash, number) in blocks {
+-                stmt.execute(rusqlite::params![&hash[..], *number as i64])?;
++                stmt.execute(rusqlite::params![&hash[..], *number])?;
+             }
+         }
+         tx.commit()?;
+@@ -368,7 +360,7 @@ impl LogCache {
+         let conn = self.conn.lock().unwrap();
+         let deleted = conn.execute(
+             "DELETE FROM reorged_blocks WHERE block_number < ?1",
+-            rusqlite::params![block_number as i64],
++            rusqlite::params![block_number],
+         )?;
+         Ok(deleted)
+     }
+@@ -389,7 +381,7 @@ impl LogCache {
+         conn.execute(
+             "INSERT OR REPLACE INTO cached_block_headers (height, hash, parent_hash, timestamp)
+              VALUES (?1, ?2, ?3, ?4)",
+-            rusqlite::params![height as i64, &hash[..], &parent_hash[..], timestamp as i64],
++            rusqlite::params![height, &hash[..], &parent_hash[..], timestamp],
+         )?;
+         Ok(())
+     }
+@@ -400,10 +392,10 @@ impl LogCache {
+         let mut stmt = conn.prepare_cached(
+             "SELECT hash, parent_hash, timestamp FROM cached_block_headers WHERE height = ?1",
+         )?;
+-        let mut rows = stmt.query_map(rusqlite::params![height as i64], |row| {
++        let mut rows = stmt.query_map(rusqlite::params![height], |row| {
+             let hash_bytes: Vec<u8> = row.get(0)?;
+             let parent_bytes: Vec<u8> = row.get(1)?;
+-            let timestamp: i64 = row.get(2)?;
++            let timestamp: u64 = row.get(2)?;
+ 
+             let mut hash = [0u8; 32];
+             hash.copy_from_slice(&hash_bytes);
+@@ -414,7 +406,7 @@ impl LogCache {
+                 height,
+                 hash,
+                 parent_hash,
+-                timestamp: timestamp as u64,
++                timestamp,
+             })
+         })?;
+ 
+@@ -430,8 +422,8 @@ impl LogCache {
+ // ============================================================
+ 
+ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+-    let block_number: i64 = row.get(0)?;
+-    let log_index: i64 = row.get(1)?;
++    let block_number: u64 = row.get(0)?;
++    let log_index: u64 = row.get(1)?;
+     let address_bytes: Vec<u8> = row.get(2)?;
+     let topic0: Option<Vec<u8>> = row.get(3)?;
+     let topic1: Option<Vec<u8>> = row.get(4)?;
+@@ -440,8 +432,8 @@ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+     let data: Vec<u8> = row.get(7)?;
+     let block_hash: Vec<u8> = row.get(8)?;
+     let tx_hash: Option<Vec<u8>> = row.get(9)?;
+-    let tx_index: i64 = row.get(10)?;
+-    let block_timestamp: Option<i64> = row.get(11)?;
++    let tx_index: u64 = row.get(10)?;
++    let block_timestamp: Option<u64> = row.get(11)?;
+ 
+     let mut topics = Vec::new();
+     for bytes in [topic0, topic1, topic2, topic3].into_iter().flatten() {
+@@ -458,11 +450,11 @@ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+             data: log_data,
+         },
+         block_hash: Some(B256::from_slice(&block_hash)),
+-        block_number: Some(block_number as u64),
+-        block_timestamp: block_timestamp.map(|t| t as u64),
++        block_number: Some(block_number),
++        block_timestamp,
+         transaction_hash: tx_hash.map(|b| B256::from_slice(&b)),
+-        transaction_index: Some(tx_index as u64),
+-        log_index: Some(log_index as u64),
++        transaction_index: Some(tx_index),
++        log_index: Some(log_index),
+         removed: false,
+     })
+ }

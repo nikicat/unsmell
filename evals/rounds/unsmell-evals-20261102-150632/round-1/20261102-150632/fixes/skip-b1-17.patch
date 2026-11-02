@@ -1,0 +1,24 @@
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..f50d2bb 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -172,10 +172,18 @@ def evaluate(fixture, rounds, args):
+     return report
+ 
+ 
++def positive(text):
++    """Returns text as an int. Errors when it is below 1."""
++    n = int(text)
++    if n < 1:
++        raise argparse.ArgumentTypeError(f"{n} is below 1")
++    return n
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     parser.add_argument("fixtures", nargs="+", type=Path)
+-    parser.add_argument("--rounds", type=int, default=4, help="most rounds per fixture")
++    parser.add_argument("--rounds", type=positive, default=4, help="most rounds per fixture")
+     parser.add_argument("--args", default="fix everything", help="the arguments each round passes to the skill")
+     parser.add_argument("--jobs", type=int, default=4, help="fixtures run at once")
+     args = parser.parse_args()

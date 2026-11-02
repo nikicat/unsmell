@@ -1,0 +1,61 @@
+id: a63dada88a
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - .gitignore:1-3
+  reach:
+  - .gitignore:1-3
+  row: bug (secrets not ignored)
+  claim: seb.py writes or reads private.pem (seb.py:21), session.json (seb.py:23, 67) and dengi.db (seb.py:94)
+    in the working directory, which is the repo when run with uv run seb; .gitignore ignores none of them,
+    so the RS256 private key, the bank session and the ledger are one git add away from a commit
+  fix: .gitignore also lists private.pem, session.json and dengi.db (or *.pem, session.json, *.db)
+  decision: FIX
+  score: 8
+  reason: credentials and bank data are unprotected; three lines, no behaviour change
+  same: []
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 8
+    reason: key, session and ledger sit in the repo directory and are not ignored
+    task: t2
+- id: cross-2
+  at:
+  - seb.py:21
+  - seb.py:23
+  - seb.py:94
+  - .gitignore:1-3
+  reach:
+  - seb.py:19-24
+  - seb.py:94
+  - .gitignore:1-3
+  row: split protocol
+  claim: the files seb.py creates or reads in the working directory (private.pem, session.json, dengi.db)
+    must also be spelled in .gitignore to stay out of commits; .gitignore spells none of them, so the
+    private key, bank session and ledger are unprotected
+  fix: .gitignore lists private.pem, session.json and dengi.db; if b1-18 moves them out of the repo to
+    a data directory, the entries become a safety net only
+  decision: FIX
+  score: 8
+  reason: secrets and bank data one git add away from a commit; three lines
+  same:
+  - b1-1
+  - b1-18
+  triage:
+    id: cross-2
+    decision: FIX
+    score: 8
+    reason: same fix as b1-1
+    task: t2
+check: ok

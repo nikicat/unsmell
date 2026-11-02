@@ -1,0 +1,20 @@
+diff --git a/seb.py b/seb.py
+index cbf12ff..5d1504d 100644
+--- a/seb.py
++++ b/seb.py
+@@ -1,8 +1,13 @@
+ #!/usr/bin/env python
+-"""Fetch SEB LT account history via Enable Banking.
++"""Fetches the SEB LT account history through Enable Banking.
+ 
+ Usage: uv run seb [date_from YYYY-MM-DD]
+-Upserts booked transactions into dengi.db; without date_from, resumes from the last stored day.
++
++Upserts the booked transactions of each account into dengi.db. Without
++date_from, each account resumes from its last stored booking day. When no
++valid session is stored, the program asks you to log in with Smart-ID and to
++paste the URL you land on. It exits when that URL does not belong to this
++login.
+ """
+ import json
+ import os

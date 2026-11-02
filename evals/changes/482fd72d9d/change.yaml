@@ -1,0 +1,32 @@
+id: 482fd72d9d
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t12
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-7
+  at:
+  - src/evm/cache/log_cache.rs:126-145
+  reach:
+  - src/evm/cache/log_cache.rs:126-146
+  row: computing loop with effects
+  claim: insert_logs' loop, which the changeset extended with a 13th param, both selects (skip logs without
+    block_hash, default missing block_number/log_index/transaction_index to 0) and executes the INSERT.
+  fix: filter_map the logs with a block_hash first, then execute over the result.
+  decision: SKIP
+  score: 3
+  reason: Unchanged lines; small tidy-up.
+  same: []
+  triage:
+    id: b1-7
+    decision: SKIP
+    score: 3
+    task: t12
+    reason: unchanged lines
+check: ok

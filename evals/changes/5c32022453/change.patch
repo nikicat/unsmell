@@ -1,0 +1,61 @@
+diff --git a/schema.sql b/schema.sql
+index 2fd259b..01a1be5 100644
+--- a/schema.sql
++++ b/schema.sql
+@@ -24,3 +24,6 @@ CREATE TABLE IF NOT EXISTS txn (
+ ) STRICT;
+ 
+ CREATE INDEX IF NOT EXISTS txn_date ON txn (iban, booking_date);
++
++-- Bump when this file changes, so that Store.open rebuilds txn in existing databases.
++PRAGMA user_version = 1;
+diff --git a/seb.py b/seb.py
+index ab9a4a1..06cb71b 100644
+--- a/seb.py
++++ b/seb.py
+@@ -159,14 +159,44 @@ def booked(txs: list[dict]) -> list[dict]:
+     return [t for t in txs if t["status"] == "BOOK"]
+ 
+ 
++def user_version(db: sqlite3.Connection) -> int:
++    return db.execute("PRAGMA user_version").fetchone()[0]
++
++
++def rebuild(schema: str) -> str:
++    """Returns a script that recreates txn from schema and keeps its stored columns.
++    The other columns are generated from raw, so the copy loses nothing."""
++    return (
++        "BEGIN;"
++        " CREATE TEMP TABLE txn_old AS SELECT iban, entry_reference, raw FROM txn;"
++        " DROP TABLE txn;\n"
++        f"{schema}\n"
++        "INSERT INTO txn (iban, entry_reference, raw) SELECT * FROM txn_old;"
++        " DROP TABLE txn_old;"
++        " COMMIT;"
++    )
++
++
+ @dataclass(frozen=True)
+ class Store:
+     db: sqlite3.Connection
+ 
+     @classmethod
+     def open(cls, path: Path | str) -> Store:
++        """Opens the database at path and brings its schema up to schema.sql.
++        Rebuilds the txn table when the database has an older schema version.
++        Exits when the database has a newer one."""
++        schema = Path(__file__).with_name("schema.sql").read_text()
++        # schema.sql owns the version. Running it on an empty database reads the
++        # version without touching the one at path.
++        latest =sqlite3.connect(":memory:")
++        latest.executescript(schema)
+         db = sqlite3.connect(path)
+-        db.executescript(Path(__file__).with_name("schema.sql").read_text())
++        found, want = user_version(db), user_version(latest)
++        if found > want:
++            sys.exit(f"{path} has schema version {found}, newer than {want} in schema.sql")
++        exists = db.execute("SELECT 1 FROM sqlite_schema WHERE name = 'txn'").fetchone()
++        db.executescript(rebuild(schema) if exists and found < want else schema)
+         return cls(db)
+ 
+     def last_booking_date(self, key: str) -> date | None:

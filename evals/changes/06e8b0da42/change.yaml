@@ -1,0 +1,36 @@
+id: 06e8b0da42
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: skip-b2-31
+judge: null
+labels: []
+findings:
+- id: b2-31
+  at:
+  - evals/changes.py:51
+  - evals/changes.py:70
+  - evals/changes.py:258
+  - evals/changes.py:278
+  reach:
+  - evals/changes.py:51
+  - evals/changes.py:70
+  - evals/changes.py:258
+  - evals/changes.py:278
+  row: compressed doc
+  claim: 'Comments join a second idea with a colon or semicolon (''ANSI SGR codes for show''s output;
+    NO_COLOR or a pipe turns them off'', ''HEAD is the fixture''s base: round-0 minus ...'', change_id''s
+    ''Returns the id of a patch: a hash of ...''), and 278 is a long trailing comment.'
+  fix: Split each into plain sentences on its own line; the NO_COLOR sentence moves to TTY.
+  decision: SKIP
+  score: 3
+  reason: rewording correct comments
+  same: []
+  triage:
+    id: b2-31
+    decision: SKIP
+    score: 3
+    reason: rewording correct comments
+    task: skip-b2-31
+check: ok

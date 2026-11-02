@@ -1,0 +1,205 @@
+read: [src/evm/cache/event_signature_cache.rs, src/bin/chainfold/signature_cache.rs]
+unread: []
+findings:
+  - id: b1-1
+    at: [src/evm/cache/event_signature_cache.rs:59-76, src/evm/cache/event_signature_cache.rs:98]
+    reach: [src/evm/cache/event_signature_cache.rs:10, src/evm/cache/event_signature_cache.rs:59-76, src/evm/cache/event_signature_cache.rs:98, src/evm/cache/event_signature_cache.rs:112-115, src/evm/cache.rs:34-55, arch.md:391-394]
+    row: misplaced rule
+    claim: >
+      Topic's SQLite encoding as a 32-byte BLOB is written inside EventSignatureCache:
+      the write side binds `topic0.as_slice()` (:98), the read side pulls a raw `Vec<u8>`
+      into an unnamed tuple (:62-65), checks `topic.len() == 32` and builds
+      `Topic::from(B256::from_slice(&topic))` outside the row closure (:69-71). The changeset
+      narrowed EventSignatureRow.topic0 to Topic (:21), but its siblings ChainId and
+      FilterHash keep their SQLite mapping as `ToSql` impls in src/evm/cache.rs:34-55, and
+      Topic has none. A wrong-length BLOB also turns into Ok(None), a silent cache miss.
+    fix: >
+      `impl ToSql for Topic` and `impl FromSql for Topic` in src/evm/cache.rs next to
+      FilterHash's (FromSql: `B256::try_from(blob)` → `FromSqlError::InvalidBlobSize { expected_size: 32, .. }`
+      on a wrong length), each with a doc in the style of the ChainId/FilterHash ones.
+      insert binds `topic0` directly. get's closure returns
+      `EventSignatureRow { signature: row.get(0)?, topic0: row.get(1)?, abi_json: row.get(2)? }`
+      and the body is `rows.next().transpose().map_err(Into::into)`; the tuple, the guard and
+      the match go. `B256` moves into the tests' imports. arch.md:392/394 lists Topic beside
+      ChainId/FilterHash as having its SQLite mapping in the cache layer.
+    decision: FIX
+    score: 7
+    reason: >
+      Full tell of a misplaced rule with named siblings (ChainId, FilterHash ToSql) and on
+      changed lines (:69-71, :85). Behaviour: a corrupt topic0 BLOB becomes an error instead
+      of a silent None; the report names it under Behaviour. Crate-internal (impls on a crate type).
+    same: [b1-13]
+  - id: b1-2
+    at: [src/evm/cache/event_signature_cache.rs:17-24, src/bin/chainfold/signature_cache.rs:31-35]
+    reach: [src/evm/cache/event_signature_cache.rs:15-24, src/evm/cache/event_signature_cache.rs:48-103, src/bin/chainfold/signature_cache.rs:28-57, src/signatures.rs:47-55, src/evm/cache.rs:32, src/evm.rs:33]
+    row: duplication
+    claim: >
+      The changeset turned EventSignatureRow into a struct (:17-24) with exactly the fields of
+      `signatures::ResolvedEvent` (src/signatures.rs:48-55): signature, topic0, abi_json, each
+      with the same meaning and the same None rule for abi_json. Two types now hold one record,
+      and the adapter copies it field by field (signature_cache.rs:31-35) and unpacks it
+      again for insert (:52-54). The two copies change for the same reason.
+    fix: >
+      Options. (a) One type: ResolvedEvent (with topic0: Topic, see b1-3) is the record;
+      get_event_signature returns Option<ResolvedEvent> and insert takes &ResolvedEvent;
+      EventSignatureRow and its re-exports are deleted; the adapter's get/put just map errors.
+      evm::cache then depends on crate::signatures (its module doc already links that trait).
+      (b) Keep both: `impl From<EventSignatureRow> for ResolvedEvent` next to ResolvedEvent,
+      adapter get becomes `opt.map(ResolvedEvent::from)`. I'd pick (a).
+    decision: ASK
+    score: 6
+    reason: two defensible designs; both change public exported types (EventSignatureRow is re-exported from chainfold::evm)
+    same: [b1-3, b1-4]
+  - id: b1-3
+    at: [src/bin/chainfold/signature_cache.rs:33, src/bin/chainfold/signature_cache.rs:53, src/bin/chainfold/signature_cache.rs:29, src/bin/chainfold/signature_cache.rs:49-50]
+    reach: [src/signatures.rs:47-74, src/signatures.rs:82-123, src/bin/chainfold/signature_cache.rs:22-57, src/bin/chainfold/evm/events.rs]
+    row: primitive obsession
+    claim: >
+      ResolvedEvent.topic0 is `[u8; 32]` and the SignatureCache trait takes `chain_id: u64`
+      and `address: [u8; 20]` (src/signatures.rs:50, 62-63, 69-70). So the adapter converts at
+      every call: `row.topic0.b256().into()` (:33) and `Topic::from(B256::from(entry.topic0))`
+      (:53), both rewritten by the changeset, plus `ChainId::new` / `Address::from` (:29, :49-50).
+      The two topic0 lines exist only because the lib's own trait is blind to the Topic type
+      the changeset introduced into the cache.
+    fix: >
+      ResolvedEvent.topic0: Topic; SignatureCache::get/put, resolve_event, resolve_event_topic
+      take ChainId and Address; topic_from_signature returns Topic. The adapter's conversions go;
+      callers in src/bin/chainfold/evm/events.rs convert once where they get the raw values.
+    decision: ASK
+    score: 6
+    reason: root cause of changed lines :33/:53, but it changes the public signatures API across modules
+    same: [b1-2]
+  - id: b1-4
+    at: [src/evm/cache/event_signature_cache.rs:79-87]
+    reach: [src/evm/cache/event_signature_cache.rs:79-103, src/evm/cache/event_signature_cache.rs:117-168, src/bin/chainfold/signature_cache.rs:47-56]
+    row: data clump
+    claim: >
+      insert_event_signature takes six values, and the last three (signature, topic0, abi_json,
+      :84-86, :85 changed) are an EventSignatureRow, the type the changeset just named; the
+      adjacent `event_name: &str, signature: &str` are transposable. The tests then compare the
+      fetched row field by field (:134-136, :167) although the changeset derived PartialEq/Eq on
+      the row, which nothing uses.
+    fix: >
+      `insert_event_signature(chain_id, address, event_name, row: &EventSignatureRow)` (or
+      `&ResolvedEvent` under b1-2 option a); tests build the expected row once and
+      `assert_eq!(fetched, row)`.
+    decision: ASK
+    score: 5
+    reason: its final parameter type depends on the b1-2 answer; public method signature
+    same: [b1-2]
+  - id: b1-5
+    at: [src/evm/cache/event_signature_cache.rs:115, src/evm/cache/event_signature_cache.rs:126, src/evm/cache/event_signature_cache.rs:135, src/evm/cache/event_signature_cache.rs:159]
+    reach: [src/evm/cache/event_signature_cache.rs:112-168]
+    row: repeated derivation
+    claim: >
+      The test const TOPIC0 is a B256 (:115), and the changeset wraps it in `Topic::from(TOPIC0)`
+      at every use (:126, :135, :159), while every API that takes or returns it now speaks Topic.
+    fix: "`const TOPIC0: Topic = Topic::new(B256::repeat_byte(0xDD));` and pass `TOPIC0` at the three sites"
+    decision: FIX
+    score: 5
+    reason: changed lines, three copies of one derivation, three-line fix
+    same: []
+  - id: b1-6
+    at: [src/evm/cache/event_signature_cache.rs:20]
+    reach: [src/evm/cache/event_signature_cache.rs:20]
+    row: tautological comment
+    claim: >
+      The field doc added by the changeset, "`topic0` — the keccak256 hash of the signature.",
+      opens with its field's own name and then an em-dash appositive.
+    fix: "/// The keccak256 hash of `signature`. Logs of this event carry it as topic 0."
+    decision: FIX
+    score: 5
+    reason: doc-opening rule hit on a changed line (§3 says fix every match); one line
+    same: []
+  - id: b1-7
+    at: [src/evm/cache/event_signature_cache.rs:22]
+    reach: [src/evm/cache/event_signature_cache.rs:22, src/signatures.rs:51-53]
+    row: duplicated knowledge
+    claim: >
+      The abi_json doc added by the changeset says "JSON of the matched ABI event item, when
+      populated." It leaves out what None means: a row cached before the abi_json column existed
+      (migration at src/evm/cache.rs:258-262; resolve_event always writes Some). The same
+      transitional rule is stated on ResolvedEvent.abi_json (src/signatures.rs:51-53).
+      "matched" has no referent.
+    fix: >
+      "/// JSON of the contract's ABI event item named `event_name`. None on rows cached before
+      /// the column was added." If b1-2 option (a) is taken this field goes and only the
+      ResolvedEvent doc remains as the owner.
+    decision: FIX
+    score: 5
+    reason: states a missing None condition on a changed line; transitional state must say it is transitional (§5)
+    same: [b1-2]
+  - id: b1-8
+    at: [src/evm/cache/event_signature_cache.rs:15]
+    reach: [src/evm/cache/event_signature_cache.rs:15]
+    row: tautological comment
+    claim: >
+      The struct doc added by the changeset, "A single resolved row from `event_signatures`.",
+      is the declaration read back; it does not say who produces or consumes the row.
+    fix: "/// One cached event-signature resolution, as get_event_signature returns it."
+    decision: SKIP
+    score: 2
+    reason: the doc is correct; rewording only
+    same: []
+  - id: b1-9
+    at: [src/evm/cache/event_signature_cache.rs:1-8]
+    reach: [src/evm/cache/event_signature_cache.rs:1-8]
+    row: duplicated knowledge
+    claim: >
+      The module doc still spells the stored row as a tuple `(signature, topic0, abi)` (:5) after
+      the changeset named it EventSignatureRow, and "zero-network" lookups are also stated at
+      src/signatures.rs:18 and src/evm/cache.rs:246.
+    fix: "replace the tuple with a link to [`EventSignatureRow`]; keep the zero-network fact only on the resolver (src/signatures.rs:18)"
+    decision: SKIP
+    score: 3
+    reason: unchanged lines, not false; small gain
+    same: []
+  - id: b1-10
+    at: [src/bin/chainfold/signature_cache.rs:37, src/bin/chainfold/signature_cache.rs:56]
+    reach: [src/bin/chainfold/signature_cache.rs:37, src/bin/chainfold/signature_cache.rs:56, src/signatures.rs:38]
+    row: repeated derivation
+    claim: "`.map_err(|e| SignatureError::Cache(e.to_string()))` is written twice and drops the error source"
+    fix: "SignatureError::Cache wraps CacheError with #[from]; the adapter uses `?`/`map_err(Into::into)`"
+    decision: SKIP
+    score: 4
+    reason: unchanged lines; two copies; changing the error variant's payload is an API change
+    same: []
+  - id: b1-11
+    at: [src/evm/cache/event_signature_cache.rs:36-46]
+    reach: [src/evm/cache/event_signature_cache.rs:36-46]
+    row: speculative generality
+    claim: >
+      EventSignatureCache::open has no caller in the repo, and open_in_memory is used only by
+      this file's tests. Their docs open with the function's own name ("Open …"), use the
+      imperative, restate the body ("Equivalent to `CacheDb::open(path)?.signatures()`") and
+      name a caller ("Useful for tests.").
+    fix: "delete open; make open_in_memory #[cfg(test)] (or have tests call CacheDb::open_in_memory()?.signatures()) and drop its doc"
+    decision: PLAN
+    score: 5
+    reason: dead public API on unchanged lines; removing a pub fn of the library is outside changed lines
+    same: []
+  - id: b1-12
+    at: [src/evm/cache/event_signature_cache.rs:48-53, src/evm/cache/event_signature_cache.rs:79-83, src/bin/chainfold/signature_cache.rs:22-27, src/bin/chainfold/signature_cache.rs:40-45]
+    reach: [src/signatures.rs:59-123, src/evm/cache/event_signature_cache.rs:48-103, src/bin/chainfold/signature_cache.rs:20-58]
+    row: data clump
+    claim: >
+      The cache key (chain_id, address, event_name) is threaded through get_event_signature,
+      insert_event_signature, SignatureCache::get/put, resolve_event and resolve_event_topic:
+      six functions, three values that always travel together.
+    fix: "an `EventSignatureKey { chain_id: ChainId, address: Address, event_name }` (borrowed name) passed as one value through all six"
+    decision: PLAN
+    score: 6
+    reason: full data-clump tell, but on unchanged lines and across the public signatures trait
+    same: [b1-3]
+  - id: b1-13
+    at: [src/evm/cache/erc20_cache.rs:114-121, src/evm/cache/erc20_cache.rs:151-158]
+    reach: [src/evm/cache/erc20_cache.rs:100-160]
+    row: repeated derivation
+    claim: >
+      erc20_cache repeats the shape b1-1 removes: read a BLOB as Vec<u8>, guard
+      `bytes.len() == 32`, copy into an array, and map a wrong length to Ok(None), here for U256.
+    fix: "a FromSql-based U256 column decode (newtype or helper) in src/evm/cache.rs used by both queries, like b1-1's Topic impl"
+    decision: PLAN
+    score: 5
+    reason: outside this batch and outside changed lines; same class as b1-1
+    same: [b1-1]

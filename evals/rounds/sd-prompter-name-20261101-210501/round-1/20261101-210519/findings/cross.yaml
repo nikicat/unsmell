@@ -1,0 +1,30 @@
+read: [inventory/b1.md, findings/b1.yaml]
+unread: []
+findings:
+  - id: cross-1
+    at: [internal/proxy/forward.go:68-71, internal/proxy/proxy.go:164-166, internal/proxy/prompter.go:28-32]
+    reach: [internal/proxy/forward.go:68-71, internal/proxy/proxy.go:164-166]
+    row: duplicated knowledge
+    claim: >-
+      The inventory (comment facts F1 and F2, placement) shows that the fallback rationale
+      "owning the backend SystemPrompter name pre-empts the display-less gcr-prompter
+      fallback" is also written outside the changeset, in the nameHasOwner doc
+      (forward.go:68-71) and in proxy.go:164-166. b1-5 names these copies in its claim, but
+      its reach and fix cover only prompter.go and prompter_test.go. b1-3 has them in its
+      reach, but only so they can agree with whichever fallback behaviour is true. A
+      shared helper's doc (nameHasOwner) also states a reason that belongs to one of its
+      callers. This change removed that helper's front-bus use in newPrompterBridge, so the
+      copy may now describe a use that no longer exists.
+    fix: >-
+      F1 is stated once, in the prompterBridge type doc. nameHasOwner's doc says only what
+      it returns. proxy.go:164-166 points to the bridge, or says just what that line does,
+      without repeating the reasoning. Whatever b1-3 decides about the fallback goes in the
+      type doc and nowhere else. Fold this into the b1-5 task by extending its reach to
+      these two files.
+    decision: FIX
+    score: 5
+    reason: >-
+      The copies are in unchanged files, but they are the same fact b1-5 fixes on changed
+      lines, and they have already drifted (b1-3). If b1-5 is fixed without them, two of
+      the drifted copies stay.
+    same: [b1-5, b1-3]

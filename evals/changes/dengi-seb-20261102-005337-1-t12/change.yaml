@@ -1,0 +1,31 @@
+id: dengi-seb-20261102-005337-1-t12
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t12
+judge: null
+labels: []
+findings:
+- id: b1-22
+  at:
+  - seb.py:95
+  - pyproject.toml:17-18
+  reach:
+  - seb.py:95
+  - pyproject.toml:17-18
+  row: split protocol
+  claim: '"schema.sql" is spelled in the loader (seb.py:95) and in the wheel''s only-include (pyproject.toml:18),
+    and the wheel installs schema.sql at the top of site-packages.'
+  fix: Package the code as dengi/ with schema.sql inside it, and load the schema with importlib.resources.
+  decision: SKIP
+  score: 2
+  reason: The packaging works as written, and the restructure is out of proportion.
+  same: []
+  triage:
+    id: b1-22
+    decision: SKIP
+    score: 2
+    reason: restructure out of proportion
+    task: t12
+check: ok

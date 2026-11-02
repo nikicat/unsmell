@@ -1,0 +1,301 @@
+diff --git a/TODO.md b/TODO.md
+index 442baa6..2dc8cb6 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -64,3 +64,26 @@ Found while cleaning up the per-log timestamp change. None was fixed in that run
+ ### Tests
+ 
+ - **`make_test_log` (`log_cache.rs`) and `make_log` (`history.rs`) build the same `Log`.** Share one test fixture.
++
++## Smells found by the second unsmell run on the `block_timestamp` change (2026-11-01)
++
++These sit on lines the change did not touch. The run fixed the ones on changed lines.
++
++### Cache (`src/evm/cache.rs`, `src/evm/cache/log_cache.rs`)
++
++- **Bug: `versioned_path` splits at a dot in a directory name** (`cache.rs:42`). `"./foo"` becomes `".v3./foo"`, not the `"./foo.v3"` that its doc promises. The test covers only `"foo"` and hardcodes `v3` instead of `CACHE_VERSION`. Fix: take a `&Path` and use `Path::file_stem`/`extension`, and build the expected strings in the test from `CACHE_VERSION`.
++- **The schema comment says reorged logs are excluded from all cache queries** (`cache.rs:156`), but `get_log_by_ref` does not check `reorged_blocks`. The same fact is written about five times (`cache.rs:130`, `148`, `156`, `log_cache.rs:94`, `341`). Fix: state it once, on `reorged_blocks`, with the exception.
++- **Rows are still read by position** in `get_scanned_ranges`, `compact_ranges` and `get_block_header`, while `row_to_log` now reads by name. Read by name everywhere, or fold into the row-struct item above.
++- **`filter_hash` is passed to seven `LogCache` methods.** It is context, not input. A per-filter view (`LogCache::filter(hash)`) could hold it. `EvmLogHistory` also keeps `store` and `filter_hash` as sibling fields and hands both to `LogIndex::with_chunk_size`. That would also stop `get_log_by_ref` from taking two adjacent `&[u8; 32]`. Goes with the "No filter type" item above.
++- **`compute_gaps` is an interval-set difference written inline.** Move it into the interval helper planned for `compact_ranges`.
++- **Unnamed tuples:** `get_scanned_ranges -> Vec<(u64, u64)>`, the `(i64, u64, u64, Vec<u8>)` and `(u64, u64, Vec<u8>)` rows in `compact_ranges`, and `&[([u8; 32], u64)]` in `mark_reorged`. Name them (a `BlockRange`, a scanned-range row).
++- **Docs.** Docs at `log_cache.rs:30`, `47`, `108`, `114`, `123`, `219`, `341`, `388`, `405` and `cache.rs:78`, `89` are imperative ("Compute", "Open", "Insert") instead of third person. `BlockHeader`'s "A cached block header." and `LogCache::open`'s "Equivalent to …" are tautologies. "Useful for tests." (twice) is a caller's reason. `compute_filter_hash` explains its 0xFF sentinel. The `cleanup_reorged_before` doc speaks of "the finality boundary" but takes a `block_number`, and it does not state the strict bound. The schema comments at `cache.rs:123-131` and `162-171` run 9-10 lines and describe how callers use the tables.
++
++### History (`src/evm/history.rs`)
++
++- **The `update_tip_to` comment** (`history.rs:248-250`) says that touching the header saves later `iter` calls a round trip. That is no longer true for logs that carry their own timestamp. Reword it when `HeaderSource` lands.
++- **Smaller repeats:** `.map_err(|e| HistoryError::internal(e.to_string()))` (twice, in `ensure_block_header_via`). `format!("0x{}", hex::encode(..))` (three times). The tests repeat the `warm_cache` header times (`GENESIS_TS + 1200`, `+ 1212`, `+ 2400`) as literals and in comments.
++- **The `subscribe` task builds its cancellation `select!` loop by hand** (`history.rs:445-456`). `tokio_util`'s `CancellationToken::run_until_cancelled` would replace it.
++- **The `iter` closure matches `Ok`/`Err` to pass the error on.** `let log = result?;` says the same.
++- **Docs.** The `apply_topics` doc lists alloy's slot methods (mechanism). The comment above the warmup test (`history.rs:906-909`) is four lines of motivation.
++- **The fetcher prefetches block 0's header for a log with no block number.** HEAD skipped such logs. Now `blocks_needing_header` follows `TimestampSource::of`, which maps a missing number to block 0 through `log_block_number`, so the prefetch and the stamping agree. `insert_logs`, on the other hand, tests for a missing `block_hash`. This belongs to the `MinedLog` item above: parse each log once, decide in one place whether it is mined, and leave unmined logs out of both the cache and the prefetch.
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 82df9ed..aa56d93 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -14,8 +14,8 @@ use alloy::rpc::types::Log;
+ use super::{CacheError, SharedConn};
+ use crate::evm::observe::{SqliteOp, sqlite_span};
+ 
+-/// Expands to the `cached_logs` columns that hold one [`Log`], in the order
+-/// the INSERT in [`LogCache::insert_logs`] binds them.
++/// Expands to the `cached_logs` columns that hold one [`Log`]. The INSERT in
++/// [`LogCache::insert_logs`] binds its parameters in this order.
+ macro_rules! log_columns {
+     () => {
+         "block_number, log_index, address, topic0, topic1, topic2, topic3, \
+@@ -23,6 +23,14 @@ macro_rules! log_columns {
+     };
+ }
+ 
++/// Expands to a query that selects [`log_columns`] from `cached_logs`, with
++/// the given clauses after the FROM. [`row_to_log`] decodes its rows.
++macro_rules! select_logs {
++    ($clauses:literal) => {
++        concat!("SELECT ", log_columns!(), " FROM cached_logs ", $clauses)
++    };
++}
++
+ // ============================================================
+ // Helpers
+ // ============================================================
+@@ -168,12 +176,9 @@ impl LogCache {
+         log_index: u32,
+     ) -> Result<Option<Log>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(concat!(
+-            "SELECT ",
+-            log_columns!(),
+-            " FROM cached_logs
+-             WHERE filter_hash = ?1 AND block_hash = ?2 AND log_index = ?3
+-             LIMIT 1",
++        let mut stmt = conn.prepare_cached(select_logs!(
++            "WHERE filter_hash = ?1 AND block_hash = ?2 AND log_index = ?3
++             LIMIT 1"
+         ))?;
+         let mut rows = stmt.query_map(
+             rusqlite::params![&filter_hash[..], &block_hash[..], log_index as i64],
+@@ -195,13 +200,10 @@ impl LogCache {
+     ) -> Result<Vec<Log>, CacheError> {
+         let _span = sqlite_span(SqliteOp::GetLogsInRange).entered();
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(concat!(
+-            "SELECT ",
+-            log_columns!(),
+-            " FROM cached_logs
+-             WHERE filter_hash = ?1 AND block_number >= ?2 AND block_number <= ?3
++        let mut stmt = conn.prepare_cached(select_logs!(
++            "WHERE filter_hash = ?1 AND block_number >= ?2 AND block_number <= ?3
+                AND block_hash NOT IN (SELECT block_hash FROM reorged_blocks)
+-             ORDER BY block_number ASC, log_index ASC",
++             ORDER BY block_number ASC, log_index ASC"
+         ))?;
+         let logs = stmt
+             .query_map(
+@@ -437,7 +439,7 @@ impl LogCache {
+ // Row decoding
+ // ============================================================
+ 
+-/// Decodes a row selected with [`log_columns`].
++/// Decodes a row selected with [`select_logs`].
+ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+     let block_number: i64 = row.get("block_number")?;
+     let log_index: i64 = row.get("log_index")?;
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 4bbc703..24b42a1 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -502,9 +502,8 @@ fn apply_topics(mut filter: Filter, topics: &[Option<[u8; 32]>; 4]) -> Filter {
+     filter
+ }
+ 
+-/// Returns the block time of `log`, in unix seconds. Uses the timestamp the
+-/// provider put on the log when there is one, and the block header otherwise.
+-/// Errors as [`ensure_block_header_via`] does when the header is needed.
++/// Returns the timestamp of the block that holds `log`. Errors as
++/// [`ensure_block_header_via`] does when the log carries no timestamp of its own.
+ async fn log_timestamp<P>(
+     provider: &P,
+     store: &LogCache,
+@@ -523,13 +522,13 @@ where
+     }
+ }
+ 
+-/// Where the block time of a log comes from. Both the per-log lookup and the
+-/// fetcher's header prefetch decide by it, so they agree on which headers
+-/// are read.
++/// Where the timestamp of a log's block comes from. Because [`log_timestamp`]
++/// and [`blocks_needing_header`] both decide by it, the second lists exactly
++/// the headers that the first reads.
+ enum TimestampSource {
+-    /// The timestamp the provider put on the log, in unix seconds.
++    /// The timestamp the provider put on the log.
+     Log(Timestamp),
+-    /// The header of the block with this number.
++    /// The header of the block with the given number.
+     Header(u64),
+ }
+ 
+@@ -540,15 +539,21 @@ impl TimestampSource {
+             None => Self::Header(log_block_number(log)),
+         }
+     }
++
++    /// Returns the number of the block whose header has to be read, if any.
++    fn header_block(&self) -> Option<u64> {
++        match *self {
++            Self::Header(block_number) => Some(block_number),
++            Self::Log(_) => None,
++        }
++    }
+ }
+ 
+-/// Returns the numbers of the blocks whose header [`log_timestamp`] reads for `logs`.
++/// Returns the numbers of the blocks whose header [`log_timestamp`] reads for
++/// `logs`, once per log.
+ fn blocks_needing_header(logs: &[Log]) -> impl Iterator<Item = u64> + '_ {
+     logs.iter()
+-        .filter_map(|log| match TimestampSource::of(log) {
+-            TimestampSource::Header(block_number) => Some(block_number),
+-            TimestampSource::Log(_) => None,
+-        })
++        .filter_map(|log| TimestampSource::of(log).header_block())
+ }
+ 
+ /// Returns the number of the block that holds `log`. A pending log has no
+@@ -678,7 +683,7 @@ mod tests {
+     const BH_0: [u8; 32] = [0x00; 32];
+     const BH_100: [u8; 32] = [0xA0; 32];
+     const BH_101: [u8; 32] = [0xA1; 32];
+-    const BH_150: [u8; 32] = [0x9A; 32];
++    const BH_STAMPED: [u8; 32] = [0x9A; 32];
+     const BH_200: [u8; 32] = [0xA2; 32];
+ 
+     fn make_log(block_num: u64, log_idx: u64, block_hash: [u8; 32]) -> Log {
+@@ -701,14 +706,17 @@ mod tests {
+         }
+     }
+ 
+-    /// The block time that [`make_stamped_log`] carries. It differs from every
++    /// The block of [`make_stamped_log`]. [`warm_cache`] holds no header for it.
++    const STAMPED_BLOCK: u64 = 150;
++
++    /// The timestamp that [`make_stamped_log`] carries. It differs from every
+     /// header timestamp in [`warm_cache`].
+-    const BLOCK_150_TS: u64 = GENESIS_TS + 1800;
++    const STAMPED_TS: Timestamp = GENESIS_TS + 1800;
+ 
+-    /// Returns a log in block 150 that carries its own timestamp.
++    /// Returns a log that carries its own timestamp.
+     fn make_stamped_log() -> Log {
+-        let mut log = make_log(150, 0, BH_150);
+-        log.block_timestamp = Some(BLOCK_150_TS);
++        let mut log = make_log(STAMPED_BLOCK, 0, BH_STAMPED);
++        log.block_timestamp = Some(STAMPED_TS);
+         log
+     }
+ 
+@@ -753,6 +761,18 @@ mod tests {
+             .unwrap()
+     }
+ 
++    fn make_hist<P>(
++        history: &Arc<EvmLogHistory<P>>,
++        start: EvmPosition,
++        end: EvmPosition,
++    ) -> Hist<EvmEvent, EvmPosition>
++    where
++        P: Provider<Ethereum> + Clone + Send + Sync + 'static,
++    {
++        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
++        Hist::new(backend, start, end)
++    }
++
+     /// Iterate a Hist into a Vec<Positioned> with no in-flight fetcher.
+     async fn collect(hist: Hist<EvmEvent, EvmPosition>) -> Vec<Positioned<EvmEvent, EvmPosition>> {
+         hist.iter().try_collect().await.unwrap()
+@@ -762,9 +782,8 @@ mod tests {
+     async fn iter_walks_all_logs_in_window() {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = Hist::new(backend, EvmPosition::earliest(), end);
++        let hist = make_hist(&history, EvmPosition::earliest(), end);
+ 
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 3);
+@@ -777,9 +796,8 @@ mod tests {
+     async fn split_clamps_anchor_to_window() {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = Hist::new(backend, EvmPosition::earliest(), end);
++        let hist = make_hist(&history, EvmPosition::earliest(), end);
+ 
+         // Split past end ⇒ head = full, tail = empty.
+         let (head, tail) = hist.split(EvmPosition::new(9999, 0));
+@@ -805,9 +823,8 @@ mod tests {
+     async fn iter_empty_window_yields_nothing() {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let pos = EvmPosition::new(150, 0);
+-        let hist = Hist::new(backend, pos, pos);
++        let hist = make_hist(&history, pos, pos);
+         assert!(hist.is_empty());
+         assert!(collect(hist).await.is_empty());
+     }
+@@ -816,9 +833,8 @@ mod tests {
+     async fn iter_picks_up_timestamp_from_store() {
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = Hist::new(backend, EvmPosition::earliest(), end);
++        let hist = make_hist(&history, EvmPosition::earliest(), end);
+         let items = collect(hist).await;
+         // block 100 header inserted with GENESIS_TS + 1200
+         assert_eq!(items[0].item.timestamp, GENESIS_TS + 1200);
+@@ -826,7 +842,7 @@ mod tests {
+     }
+ 
+     /// A log that carries its own timestamp is stamped without its block
+-    /// header. No header for block 150 is cached and the mock provider answers
++    /// header. No header for its block is cached and the mock provider answers
+     /// no `get_block_by_number`, so a header lookup would fail the stream.
+     #[tokio::test]
+     async fn iter_uses_log_block_timestamp_without_header_fetch() {
+@@ -834,15 +850,14 @@ mod tests {
+         cache.insert_logs(&fh, &[make_stamped_log()]).unwrap();
+ 
+         let history = make_history(cache).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+-        let hist = Hist::new(
+-            backend,
+-            EvmPosition::new(149, u32::MAX),
+-            EvmPosition::new(150, u32::MAX),
++        let hist = make_hist(
++            &history,
++            EvmPosition::new(STAMPED_BLOCK - 1, u32::MAX),
++            EvmPosition::new(STAMPED_BLOCK, u32::MAX),
+         );
+         let items = collect(hist).await;
+         assert_eq!(items.len(), 1);
+-        assert_eq!(items[0].item.timestamp, BLOCK_150_TS);
++        assert_eq!(items[0].item.timestamp, STAMPED_TS);
+     }
+ 
+     #[test]
+@@ -953,9 +968,8 @@ mod tests {
+ 
+         let (store, _) = warm_cache();
+         let history = make_history(store).await;
+-        let backend: Arc<dyn HistBackend<_, _>> = history.clone();
+         let end = EvmPosition::new(200, u32::MAX);
+-        let hist = Hist::new(backend, EvmPosition::earliest(), end);
++        let hist = make_hist(&history, EvmPosition::earliest(), end);
+ 
+         // Install the counter only around the walk — make_history's setup RPCs
+         // (chain_id, block_number) happen before this and aren't counted.

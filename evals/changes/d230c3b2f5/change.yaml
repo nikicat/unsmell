@@ -1,0 +1,34 @@
+id: d230c3b2f5
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-005337
+  round: 1
+  change: t3
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-14
+  at:
+  - .gitignore:1-3
+  reach:
+  - .gitignore:1-3
+  row: missing ignore
+  claim: seb.py reads private.pem (the app's RSA private key, :21) and writes session.json (the bank session,
+    :67) and dengi.db (the bank transactions, :94), all relative to cwd, which for `uv run seb` is normally
+    the repo root. .gitignore lists none of them, so a later `git add -A` commits a private key and personal
+    financial data.
+  fix: Add private.pem, session.json and dengi.db (plus dengi.db-journal) to .gitignore.
+  decision: FIX
+  score: 7
+  reason: Secret files have no protection in the tree they are written to. Three lines.
+  same: []
+  triage:
+    id: b1-14
+    decision: FIX
+    score: 7
+    reason: private key and bank data unprotected in the tree they are written to
+    task: t3
+check: ok

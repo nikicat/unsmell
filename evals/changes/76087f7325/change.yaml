@@ -1,0 +1,80 @@
+id: 76087f7325
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t10
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - internal/proxy/prompter.go:23
+  - internal/proxy/prompter.go:129
+  - internal/proxy/prompter.go:140
+  - internal/proxy/prompter.go:146
+  - internal/proxy/prompter.go:196
+  - internal/proxy/prompter.go:204
+  - internal/proxy/prompter.go:210
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  - internal/proxy/prompter_test.go:60
+  reach:
+  - internal/proxy/prompter.go:23
+  - internal/proxy/prompter.go:129
+  - internal/proxy/prompter.go:140
+  - internal/proxy/prompter.go:146
+  - internal/proxy/prompter.go:196
+  - internal/proxy/prompter.go:204
+  - internal/proxy/prompter.go:210
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  - internal/proxy/prompter_test.go:60
+  row: tautological comment
+  claim: docs on unchanged lines open with their declaration's own name (prompterBridge, BeginPrompting,
+    PerformPrompt, StopPrompting, prompterCallback, PromptReady, PromptDone, mockShellPrompter, mockKeyringCallback,
+    TestPrompterBridge); no revive exported rule keeps the convention
+  fix: drop the name; functions start at the verb, types at the noun phrase
+  decision: PLAN
+  score: 5
+  reason: catalog tell in full, but on unchanged lines (the changed-line ones are in b1-4, b1-5, b1-7)
+  same: []
+  triage:
+    id: b1-10
+    decision: PLAN
+    score: 5
+    reason: unchanged lines; prompter.go:23 rides with t4
+    task: t10
+    after:
+    - t4
+- id: b1-17
+  at:
+  - internal/proxy/prompter.go:122
+  - internal/proxy/prompter_test.go:14
+  - internal/proxy/prompter_test.go:43
+  reach:
+  - internal/proxy/prompter.go:105-190
+  - internal/proxy/prompter_test.go:14-50
+  row: compressed doc
+  claim: 'reported by the t10 editor: on unchanged lines, the StopPrompting doc joins a second idea with
+    a semicolon, both mock docs join one with a colon, and several prompter.go docs speak as we and us'
+  fix: plain two-sentence docs in the third person
+  decision: PLAN
+  score: 5
+  reason: unchanged lines
+  same:
+  - b1-10
+  triage:
+    id: b1-17
+    decision: PLAN
+    score: 5
+    reason: found by the t10 editor; unchanged lines, the same docs as b1-10
+    task: t10
+    after:
+    - t4
+after:
+- 4d5efb4fb1
+check: ok

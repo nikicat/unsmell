@@ -1,0 +1,45 @@
+diff --git a/src/bin/chainfold/signature_cache.rs b/src/bin/chainfold/signature_cache.rs
+index 4f3704b..32e8612 100644
+--- a/src/bin/chainfold/signature_cache.rs
++++ b/src/bin/chainfold/signature_cache.rs
+@@ -45,7 +45,7 @@ impl SignatureCache for SqliteSignatureCache {
+         entry: &ResolvedEvent,
+     ) -> Result<(), SignatureError> {
+         self.cache
+-            .insert_event_signature(
++            .put_event_signature(
+                 ChainId::new(chain_id),
+                 &Address::from(address),
+                 event_name,
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index 14f806c..587963e 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -72,7 +72,8 @@ impl EventSignatureCache {
+         .map_err(CacheError::from)
+     }
+ 
+-    pub fn insert_event_signature(
++    /// Stores the row under the key, replacing any row already there.
++    pub fn put_event_signature(
+         &self,
+         chain_id: ChainId,
+         address: &Address,
+@@ -114,7 +115,7 @@ mod tests {
+     fn signature_round_trip_with_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+-            .insert_event_signature(
++            .put_event_signature(
+                 ChainId::new(1),
+                 &ADDR,
+                 "Transfer",
+@@ -149,7 +150,7 @@ mod tests {
+     fn signature_nullable_abi() {
+         let cache = EventSignatureCache::open_in_memory().unwrap();
+         cache
+-            .insert_event_signature(
++            .put_event_signature(
+                 ChainId::new(1),
+                 &ADDR,
+                 "Approval",

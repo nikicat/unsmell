@@ -1,0 +1,326 @@
+diff --git a/src/evm.rs b/src/evm.rs
+index 0bb5d27..4451f97 100644
+--- a/src/evm.rs
++++ b/src/evm.rs
+@@ -29,7 +29,7 @@ pub use types::{
+ 
+ pub use cache::{
+     BlockHeader, CACHE_VERSION, CacheDb, CacheError, CachedErc20Metadata, Erc20Cache,
+-    EventSignatureCache, EventSignatureRow, LogCache, compute_filter_hash, compute_gaps,
++    EventSignatureCache, EventSignatureRow, FilterHash, LogCache, compute_filter_hash, compute_gaps,
+     versioned_path,
+ };
+ pub use erc20::{
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 8596f73..d1c0e7c 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -27,7 +27,7 @@ mod log_cache;
+ 
+ pub use erc20_cache::{CachedErc20Metadata, Erc20Cache};
+ pub use event_signature_cache::{EventSignatureCache, EventSignatureRow};
+-pub use log_cache::{BlockHeader, LogCache, compute_filter_hash, compute_gaps};
++pub use log_cache::{BlockHeader, FilterHash, LogCache, compute_filter_hash, compute_gaps};
+ 
+ // ============================================================
+ // Versioning
+@@ -281,6 +281,6 @@ mod tests {
+         assert!(db.erc20().get_erc20_metadata(&addr, 1).unwrap().is_some());
+         // Distinct concern on the same file.
+         let logs = db.logs();
+-        assert!(logs.get_scanned_ranges(&[0u8; 32]).unwrap().is_empty());
++        assert!(logs.get_scanned_ranges(&FilterHash::from_bytes([0u8; 32])).unwrap().is_empty());
+     }
+ }
+diff --git a/src/evm/cache/log_cache.rs b/src/evm/cache/log_cache.rs
+index 0afcdcc..d350c36 100644
+--- a/src/evm/cache/log_cache.rs
++++ b/src/evm/cache/log_cache.rs
+@@ -18,11 +18,29 @@ use crate::evm::observe::{SqliteOp, sqlite_span};
+ // Helpers
+ // ============================================================
+ 
++/// BLAKE3 hash of a log filter (address, topic0-3); keys the cached logs and
++/// scanned ranges of one filter.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct FilterHash([u8; 32]);
++
++impl FilterHash {
++    /// The raw hash bytes, as stored in the `filter_hash` columns.
++    pub fn as_bytes(&self) -> &[u8; 32] {
++        &self.0
++    }
++
++    /// A hash with the given bytes, for tests that need a fixed filter key.
++    #[cfg(test)]
++    pub(crate) const fn from_bytes(bytes: [u8; 32]) -> Self {
++        Self(bytes)
++    }
++}
++
+ /// Compute a deterministic BLAKE3 hash of (address, topic0-3).
+ ///
+ /// Null topics use a 0xFF sentinel (all-ones, 32 bytes) to distinguish
+ /// "no topic filter" from any real topic value.
+-pub fn compute_filter_hash(address: &[u8; 20], topics: &[Option<[u8; 32]>; 4]) -> [u8; 32] {
++pub fn compute_filter_hash(address: &[u8; 20], topics: &[Option<[u8; 32]>; 4]) -> FilterHash {
+     let mut hasher = blake3::Hasher::new();
+     hasher.update(address);
+     let sentinel = [0xFF_u8; 32];
+@@ -32,7 +50,7 @@ pub fn compute_filter_hash(address: &[u8; 20], topics: &[Option<[u8; 32]>; 4]) -
+             None => hasher.update(&sentinel),
+         };
+     }
+-    *hasher.finalize().as_bytes()
++    FilterHash(*hasher.finalize().as_bytes())
+ }
+ 
+ /// Compute uncovered sub-ranges within `requested` given sorted, non-overlapping `scanned` ranges.
+@@ -113,7 +131,7 @@ impl LogCache {
+ 
+     /// Insert logs. Deduplicates by (`filter_hash`, `block_hash`, `log_index`).
+     /// Logs without a `block_hash` (pending/mempool) are silently skipped.
+-    pub fn insert_logs(&self, filter_hash: &[u8; 32], logs: &[Log]) -> Result<(), CacheError> {
++    pub fn insert_logs(&self, filter_hash: &FilterHash, logs: &[Log]) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+         let tx = conn.unchecked_transaction()?;
+         {
+@@ -129,7 +147,7 @@ impl LogCache {
+                 };
+                 let topics = log.topics();
+                 stmt.execute(rusqlite::params![
+-                    &filter_hash[..],
++                    &filter_hash.as_bytes()[..],
+                     log.block_number.unwrap_or(0) as i64,
+                     log.log_index.unwrap_or(0) as i64,
+                     log.address().as_slice(),
+@@ -155,7 +173,7 @@ impl LogCache {
+     /// a reorged block.
+     pub fn get_log_by_ref(
+         &self,
+-        filter_hash: &[u8; 32],
++        filter_hash: &FilterHash,
+         block_hash: &[u8; 32],
+         log_index: u32,
+     ) -> Result<Option<Log>, CacheError> {
+@@ -168,7 +186,7 @@ impl LogCache {
+              LIMIT 1",
+         )?;
+         let mut rows = stmt.query_map(
+-            rusqlite::params![&filter_hash[..], &block_hash[..], log_index as i64],
++            rusqlite::params![&filter_hash.as_bytes()[..], &block_hash[..], log_index as i64],
+             row_to_log,
+         )?;
+         match rows.next() {
+@@ -181,7 +199,7 @@ impl LogCache {
+     /// ordered by (`block_number`, `log_index`).
+     pub fn get_logs_in_range(
+         &self,
+-        filter_hash: &[u8; 32],
++        filter_hash: &FilterHash,
+         from_block: u64,
+         to_block: u64,
+     ) -> Result<Vec<Log>, CacheError> {
+@@ -197,7 +215,7 @@ impl LogCache {
+         )?;
+         let logs = stmt
+             .query_map(
+-                rusqlite::params![&filter_hash[..], from_block as i64, to_block as i64],
++                rusqlite::params![&filter_hash.as_bytes()[..], from_block as i64, to_block as i64],
+                 row_to_log,
+             )?
+             .collect::<Result<Vec<_>, _>>()?;
+@@ -212,7 +230,7 @@ impl LogCache {
+     /// separately for finalized ranges.
+     pub fn record_scanned_range(
+         &self,
+-        filter_hash: &[u8; 32],
++        filter_hash: &FilterHash,
+         start: u64,
+         end: u64,
+         end_block_hash: &[u8; 32],
+@@ -222,7 +240,7 @@ impl LogCache {
+             "INSERT INTO scanned_ranges (filter_hash, start_block, end_block, end_block_hash)
+              VALUES (?1, ?2, ?3, ?4)",
+             rusqlite::params![
+-                &filter_hash[..],
++                &filter_hash.as_bytes()[..],
+                 start as i64,
+                 end as i64,
+                 &end_block_hash[..],
+@@ -235,7 +253,7 @@ impl LogCache {
+     /// Excludes ranges whose `end_block_hash` is in `reorged_blocks`.
+     pub fn get_scanned_ranges(
+         &self,
+-        filter_hash: &[u8; 32],
++        filter_hash: &FilterHash,
+     ) -> Result<Vec<(u64, u64)>, CacheError> {
+         let _span = sqlite_span(SqliteOp::GetScannedRanges).entered();
+         let conn = self.conn.lock().unwrap();
+@@ -246,7 +264,7 @@ impl LogCache {
+              ORDER BY start_block ASC",
+         )?;
+         let ranges = stmt
+-            .query_map(rusqlite::params![&filter_hash[..]], |row| {
++            .query_map(rusqlite::params![&filter_hash.as_bytes()[..]], |row| {
+                 Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+             })?
+             .collect::<Result<Vec<_>, _>>()?;
+@@ -260,7 +278,7 @@ impl LogCache {
+     /// the constituent range with the highest `end_block`.
+     pub fn compact_ranges(
+         &self,
+-        filter_hash: &[u8; 32],
++        filter_hash: &FilterHash,
+         up_to_block: u64,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+@@ -275,7 +293,7 @@ impl LogCache {
+             )?;
+             let result: Vec<(i64, u64, u64, Vec<u8>)> = stmt
+                 .query_map(
+-                    rusqlite::params![&filter_hash[..], up_to_block as i64],
++                    rusqlite::params![&filter_hash.as_bytes()[..], up_to_block as i64],
+                     |row| {
+                         Ok((
+                             row.get(0)?,
+@@ -317,7 +335,7 @@ impl LogCache {
+                 tx.execute(
+                     "INSERT INTO scanned_ranges (filter_hash, start_block, end_block, end_block_hash)
+                      VALUES (?1, ?2, ?3, ?4)",
+-                    rusqlite::params![&filter_hash[..], *start as i64, *end as i64, &end_hash[..]],
++                    rusqlite::params![&filter_hash.as_bytes()[..], *start as i64, *end as i64, &end_hash[..]],
+                 )?;
+             }
+             tx.commit()?;
+@@ -350,13 +368,13 @@ impl LogCache {
+     /// Delete scanned ranges whose `end_block_hash` is in `reorged_blocks`.
+     /// Call after [`Self::mark_reorged`] so gaps are recomputed for affected
+     /// block ranges.
+-    pub fn invalidate_reorged_ranges(&self, filter_hash: &[u8; 32]) -> Result<usize, CacheError> {
++    pub fn invalidate_reorged_ranges(&self, filter_hash: &FilterHash) -> Result<usize, CacheError> {
+         let conn = self.conn.lock().unwrap();
+         let deleted = conn.execute(
+             "DELETE FROM scanned_ranges
+              WHERE filter_hash = ?1
+                AND end_block_hash IN (SELECT block_hash FROM reorged_blocks)",
+-            rusqlite::params![&filter_hash[..]],
++            rusqlite::params![&filter_hash.as_bytes()[..]],
+         )?;
+         Ok(deleted)
+     }
+@@ -475,7 +493,7 @@ fn row_to_log(row: &rusqlite::Row) -> Result<Log, rusqlite::Error> {
+ mod tests {
+     use super::*;
+ 
+-    const FH: [u8; 32] = [0xAA; 32];
++    const FH: FilterHash = FilterHash::from_bytes([0xAA; 32]);
+     const BLOCK_HASH_A: [u8; 32] = [0xBB; 32];
+     const BLOCK_HASH_B: [u8; 32] = [0xBC; 32];
+     const BLOCK_HASH_C: [u8; 32] = [0xBD; 32];
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..e16e20d 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -44,7 +44,7 @@ use crate::arch::{
+     AsyncDisposable, Hist, HistBackend, HistStore, HistStoreBackend, HistStream, HistoryError,
+     ItemStream, Positioned, Store, Timestamp,
+ };
+-use crate::evm::cache::{BlockHeader, LogCache, compute_filter_hash};
++use crate::evm::cache::{BlockHeader, FilterHash, LogCache, compute_filter_hash};
+ use crate::evm::log_index::{BlockPos, Fetcher, LogIndex, LogPage};
+ use crate::evm::observe::{CacheLayer, CacheOutcome, RpcMethod, cache_event, rpc_span};
+ use crate::evm::subscriber::{EvmLogSubscriber, SubscribeTransport, SubscriberCallbacks};
+@@ -71,7 +71,7 @@ pub struct EvmLogHistory<P> {
+     provider: P,
+     store: Arc<LogCache>,
+     index: Arc<LogIndex>,
+-    filter_hash: [u8; 32],
++    filter_hash: FilterHash,
+     address: [u8; 20],
+     topics: [Option<[u8; 32]>; 4],
+     chunk_size: u64,
+@@ -187,7 +187,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+             topic2 = %fmt_topic(topics[2].as_ref()),
+             topic3 = %fmt_topic(topics[3].as_ref()),
+             chunk_size,
+-            filter_hash = %format!("0x{}", hex::encode(&filter_hash[..8])),
++            filter_hash = %format!("0x{}", hex::encode(&filter_hash.as_bytes()[..8])),
+             "EvmLogHistory created"
+         );
+ 
+@@ -203,7 +203,7 @@ impl<P: Provider<Ethereum> + Clone + Send + Sync + 'static> EvmLogHistory<P> {
+         self.chain_id
+     }
+ 
+-    pub fn filter_hash(&self) -> &[u8; 32] {
++    pub fn filter_hash(&self) -> &FilterHash {
+         &self.filter_hash
+     }
+ 
+@@ -661,7 +661,7 @@ mod tests {
+         }
+     }
+ 
+-    fn warm_cache() -> (Arc<LogCache>, [u8; 32]) {
++    fn warm_cache() -> (Arc<LogCache>, FilterHash) {
+         let cache = Arc::new(LogCache::open_in_memory().unwrap());
+         let fh = compute_filter_hash(&ADDR, &TOPICS);
+ 
+diff --git a/src/evm/log_index.rs b/src/evm/log_index.rs
+index def65d7..e31bc32 100644
+--- a/src/evm/log_index.rs
++++ b/src/evm/log_index.rs
+@@ -31,7 +31,7 @@ use std::sync::Mutex;
+ 
+ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+ 
+-use super::cache::LogCache;
++use super::cache::{FilterHash, LogCache};
+ use std::sync::Arc;
+ 
+ mod block_pos;
+@@ -55,7 +55,7 @@ use range_tree::Range;
+ /// [`Self::ensure_window_loaded`].
+ pub struct LogIndex {
+     store: Arc<LogCache>,
+-    filter_hash: [u8; 32],
++    filter_hash: FilterHash,
+     fetcher: Fetcher,
+     /// Aligned scanned-range chunk size (blocks). Determines the
+     /// granularity at which gaps get fetched and the alignment of
+@@ -77,14 +77,14 @@ pub struct LogIndex {
+ impl LogIndex {
+     /// Construct a fresh, empty index over `store` for `filter_hash`.
+     /// Aligned chunk size defaults to `1000` blocks via [`Self::with_chunk_size`].
+-    pub fn new(store: Arc<LogCache>, filter_hash: [u8; 32], fetcher: Fetcher) -> Self {
++    pub fn new(store: Arc<LogCache>, filter_hash: FilterHash, fetcher: Fetcher) -> Self {
+         Self::with_chunk_size(store, filter_hash, fetcher, 1000)
+     }
+ 
+     /// Like [`Self::new`] but with an explicit aligned chunk size.
+     pub fn with_chunk_size(
+         store: Arc<LogCache>,
+-        filter_hash: [u8; 32],
++        filter_hash: FilterHash,
+         fetcher: Fetcher,
+         chunk_size: u64,
+     ) -> Self {
+@@ -144,7 +144,7 @@ impl LogIndex {
+     }
+ 
+     /// Filter hash this index serves.
+-    pub fn filter_hash(&self) -> &[u8; 32] {
++    pub fn filter_hash(&self) -> &FilterHash {
+         &self.filter_hash
+     }
+ 
+@@ -188,7 +188,7 @@ mod tests {
+     use tokio::task::yield_now;
+     use tokio::time::sleep;
+ 
+-    pub(super) const FH: [u8; 32] = [0xAA; 32];
++    pub(super) const FH: FilterHash = FilterHash::from_bytes([0xAA; 32]);
+     pub(super) const HASH_A: [u8; 32] = [0xBB; 32];
+     pub(super) const HASH_B: [u8; 32] = [0xBC; 32];
+ 

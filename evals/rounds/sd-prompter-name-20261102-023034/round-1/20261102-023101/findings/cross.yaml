@@ -1,0 +1,5 @@
+# One batch holds the whole changeset, so no fact can sit in two batches;
+# no cross-file agent was run.
+read: []
+unread: []
+findings: []

@@ -1,0 +1,53 @@
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 05bc8f5..4dcda50 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -53,8 +53,6 @@ type prompterBridge struct {
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+ 	owned     bool                     // claimed the name on the backend bus
+-	active    bool                     // claimed + exported (idempotency guard)
+-	closed    bool                     // close() called; block late activation
+ }
+ 
+ // newPrompterBridge sets up the bridge when the topology needs one: the backend
+@@ -93,18 +91,12 @@ func newPrompterBridge(frontConn, backendConn *dbus.Conn, logger *logging.Logger
+ 	return b, nil
+ }
+ 
+-// activate claims org.gnome.keyring.SystemPrompter on the backend bus BEFORE any
+-// client triggers an unlock, so gnome-keyring's prompter calls land on us and
+-// the gcr-prompter fallback is never activated, then exports the bridge.
+-// Idempotent, and a no-op after close(). DoNotQueue: if something already owns
+-// the name (a gcr-prompter that an unlock somehow activated first), we can't
+-// take over — leave it be.
++// Claims org.gnome.keyring.SystemPrompter on the backend bus and exports the
++// bridge there. Leaves the bridge inactive when another connection already
++// holds the name. Errors when the claim or the export fails.
+ func (b *prompterBridge) activate() error {
+-	b.mu.Lock()
+-	defer b.mu.Unlock()
+-	if b.closed || b.active {
+-		return nil
+-	}
++	// The bridge does not queue for the name. A fallback prompter that already
++	// holds it cannot be taken over, so the bridge leaves it to its owner.
+ 	reply, err := b.backendConn.RequestName(systemPrompterName, dbus.NameFlagDoNotQueue)
+ 	if err != nil {
+ 		return fmt.Errorf("claim %s on backend bus: %w", systemPrompterName, err)
+@@ -119,7 +111,6 @@ func (b *prompterBridge) activate() error {
+ 		b.owned = false
+ 		return fmt.Errorf("export prompter bridge: %w", err)
+ 	}
+-	b.active = true
+ 	b.logger.Info("prompter bridge active: keyring unlock prompts forwarded to the session prompter")
+ 	return nil
+ }
+@@ -180,7 +171,6 @@ func (b *prompterBridge) unexportCallback(path dbus.ObjectPath) {
+ 
+ func (b *prompterBridge) close() {
+ 	b.mu.Lock()
+-	b.closed = true
+ 	for path := range b.callbacks {
+ 		_ = b.frontConn.Export(nil, path, prompterCallbackInterface)
+ 		delete(b.callbacks, path)

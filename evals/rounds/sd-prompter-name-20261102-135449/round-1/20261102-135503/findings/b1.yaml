@@ -1,0 +1,123 @@
+read: [internal/proxy/prompter.go, internal/proxy/prompter_test.go]
+unread: []
+findings:
+  - id: b1-1
+    at: [internal/proxy/prompter.go:56-57, internal/proxy/prompter.go:90-125, internal/proxy/prompter.go:183]
+    reach: [internal/proxy/prompter.go:53-125, internal/proxy/prompter.go:181-194]
+    row: temporal coupling
+    claim: "activate now has one caller (newPrompterBridge, prompter.go:90). The changeset removed its second caller, the watcher goroutine awaitFrontPrompter (HEAD prompter.go:152-175, call at HEAD :169). Its lock (:103-104), its `closed || active` guard (:105-107), the fields active and closed (:56-57), the `b.closed = true` in close (:183) and the doc sentence 'Idempotent, and a no-op after close()' (:99) only served that async caller. activate runs before b is exported or returned, so nothing else can hold b, close cannot have run, and active is always false when read."
+    fix: "Fold activate into newPrompterBridge. After the topology check and the struct literal, the constructor requests the name with DoNotQueue, handles the non-primary reply, exports b, releases the name and errors if the export fails, and logs. No lock, no guard. Delete the fields active and closed, the `b.closed = true` line in close, and the activate doc. The one surviving fact from that doc (DoNotQueue, so an existing owner is left alone) becomes a one-line `//` comment at the RequestName call. If a helper is wanted for length, it is an unguarded `claimName` with no doc beyond that comment, not a second entry point."
+    decision: FIX
+    score: 6
+    reason: "Dead state and a dead lock left by the changeset's removal of the watcher. Behaviour-preserving, contained in one file, and it removes the activate doc's stale caps, the 'then' narration and the 'somehow' wording along with it."
+    same: [b1-3]
+  - id: b1-2
+    at: [internal/proxy/prompter.go:66-68, internal/proxy/prompter_test.go:147-149, internal/proxy/prompter.go:28-30, internal/proxy/prompter_test.go:61-63]
+    reach: [internal/proxy/prompter.go:23-46, internal/proxy/prompter.go:60-74, internal/proxy/prompter_test.go:60-66, internal/proxy/prompter_test.go:143-150, internal/proxy/proxy.go:164-167, internal/proxy/forward.go:68-71]
+    row: duplicated knowledge
+    claim: "The changeset added text at prompter.go:66-68 and prompter_test.go:148-149 saying that in the local-takeover topology the gcr-prompter fallback 'actually draws its own (GTK) dialog instead of just hanging'. The type doc (prompter.go:28-30), TestPrompterBridge's doc (prompter_test.go:61-63), proxy.go:165-166 and forward.go:71 all say the fallback is display-less, cannot draw, and the unlock hangs. One of the two statements is false. The fact also has six copies, and that is how they came to disagree."
+    fix: "Ask the user which is true. State it once, in the prompterBridge type doc, which owns why the bridge exists. The constructor doc, both test docs and proxy.go:164-167 then drop their copies (they may say 'see prompterBridge'). The nameHasOwner doc at forward.go:68-71 drops its prompter-bridge sentence (see b1-8)."
+    decision: ASK
+    score: 9
+    reason: "A doc states something false. Which side is false is a domain fact the code cannot tell, so ask. Once it is answered, the dedup is a mechanical FIX."
+    same: [b1-1, b1-5]
+  - id: b1-3
+    at: [internal/proxy/prompter.go:55, internal/proxy/prompter.go:112-115, internal/proxy/prompter.go:188-193]
+    reach: [internal/proxy/prompter.go:53-125, internal/proxy/prompter.go:181-194]
+    row: algebraic blindness
+    claim: "When RequestName is not primary (prompter.go:112-115), the constructor still returns a non-nil bridge that owns no name and exports nothing. The field owned exists only so close() knows whether to release, and active/closed (b1-1) existed beside it. Returning (nil, nil) there, as the same-bus case at :76-80 already does for 'nothing to bridge', would mean every returned bridge owns the name."
+    fix: "Stacked on b1-1. On a non-primary reply, newPrompterBridge logs and returns (nil, nil). Delete the field owned. close() always calls ReleaseName after unexporting the callbacks (still outside mu). The constructor doc's nil case reads 'Returns nil when there is nothing to bridge or another process already owns the name.'"
+    decision: FIX
+    score: 5
+    reason: "Removes an inert-object state and a flag that tracks it. The only consumer is proxy.go, which already handles a nil prompter, so the change is not visible outside the package."
+    same: [b1-1]
+  - id: b1-4
+    at: [internal/proxy/prompter_test.go:75-76, internal/proxy/prompter_test.go:98]
+    reach: [internal/proxy/prompter_test.go:75-76, internal/proxy/prompter_test.go:98]
+    row: ambiguous noun
+    claim: "TestPrompterBridge still says the front prompter is present 'so the bridge's guard sees it and activates' (:75-76) and asserts 'bridge should activate when the front bus has a prompter and the backend does not' (:98). The changeset removed that guard, `nameHasOwner(frontConn, systemPrompterName)` at HEAD prompter.go:87. The bridge no longer looks at the front bus, so both statements are false."
+    fix: "Comment at :75 becomes '// gnome-shell's prompter on the front bus.' and the :98 message becomes 'bridge should be created when the backend bus has no prompter'."
+    decision: FIX
+    score: 9
+    reason: "A comment and an assertion message state a condition the code no longer has. This is residue of the changeset's deletion."
+    same: []
+  - id: b1-5
+    at: [internal/proxy/prompter.go:60-74, internal/proxy/prompter_test.go:143-150, internal/proxy/prompter_test.go:167-168, internal/proxy/prompter_test.go:187-188]
+    reach: [internal/proxy/prompter.go:60-74, internal/proxy/prompter_test.go:143-150, internal/proxy/prompter_test.go:167-168, internal/proxy/prompter_test.go:187-188]
+    row: long comment
+    claim: "The changeset rewrote the newPrompterBridge doc to 15 lines and the test doc to 8. Both have cause (b), the wrong subject. They contain history ('does NOT wait for gnome-shell's front prompter to appear first', 'without re-arming anything', 'is the relogin regression'), emphasis caps (NOT, BEFORE, IMMEDIATELY), the D-Bus-activation mechanism below, and environment facts ('by which point the interactive session — and thus gnome-shell — is up'). They also repeat the type doc's reason (Fact A) and 'forwarding resolves by name' (Fact C, three copies, including the test comment at :187-188). The constructor doc uses a 'must' precondition and colon joins, omits the error contract, and opens with its own name. The test comments at :167-168 and :187-188 repeat Facts A and C again."
+    fix: "Constructor doc becomes 'Returns a bridge that owns org.gnome.keyring.SystemPrompter on the backend bus from the start, so gnome-keyring's unlock prompts reach gnome-shell even before gnome-shell's prompter is up. Returns nil when the backend bus already has a prompter. Errors when the name cannot be requested or the bridge cannot be exported.' (Adjust the nil sentence per b1-3.) Test doc becomes 'Checks that the bridge owns the backend prompter name before gnome-shell's prompter exists, and forwards to it once it appears.' The comment at :167-168 is dropped, since the assertion message says it. The comment at :187-188 becomes '// gnome-shell's prompter now gets the forwarded call.' The reason for the immediate claim lives only in the type doc (b1-2)."
+    decision: FIX
+    score: 6
+    reason: "Shortens comments that narrate history, repeat a fact and use caps on changed lines, and adds the missing error contract."
+    same: [b1-2, b1-1]
+  - id: b1-6
+    at: [internal/proxy/prompter.go:23-46]
+    reach: [internal/proxy/prompter.go:23-46]
+    row: interface read back
+    claim: "The prompterBridge type doc is 24 lines. It opens with its own name and lists the protocol's methods for each direction, which is the interface read back. It also carries mechanism (WAYLAND_DISPLAY, D-Bus activation) and the verbatim-payload fact, which has four copies (Fact E: prompter.go:34-36, :141, :204-205, forward.go:39-41). These are unchanged lines, but the doc is the owner that b1-2 settles."
+    fix: "Two to three lines on its place in the system: 'The only route from the backend gnome-keyring to the user's unlock dialog. It owns the system prompter name on the backend bus so that gnome-keyring never falls back to <the true fact from b1-2>, and it relays the prompter conversation to gnome-shell without reading it.' The per-direction method list moves to `//` comments at the Prompter and Callback method groups. The verbatim fact stays on callForwarder only."
+    decision: PLAN
+    score: 5
+    reason: "Unchanged lines that are not the root cause of a changed-line smell, apart from the fact b1-2 settles."
+    same: [b1-2]
+  - id: b1-7
+    at: [internal/proxy/prompter_test.go:68-97, internal/proxy/prompter_test.go:152-185, internal/proxy/prompter_test.go:132-136, internal/proxy/prompter_test.go:197-217]
+    reach: [internal/proxy/prompter_test.go:60-217]
+    row: repeated derivation
+    claim: "Both tests build the same fixture inline: two test buses with kill/wait cleanup, the mock shell with three channels plus Export, RequestName and the primary-owner check, the proxy conns plus New, ConnectWith and Cleanup, and the keyring conn with its prompter object. The receive-with-timeout select is written three times (recvCall, recvReply, and inline at :132-136)."
+    fix: "Add test helpers: startBridgeBuses(t) (frontAddr, backendAddr), startMockShell(t, frontAddr) *mockShellPrompter, connectProxy(t, frontAddr, backendAddr) *Proxy, and one generic recvWithin[T any](t, ch <-chan T, what string) T used for all three waits."
+    decision: PLAN
+    score: 5
+    reason: "The duplication predates the changeset (HEAD had the same two setups). The lines are mostly unchanged."
+    same: []
+  - id: b1-8
+    at: [internal/proxy/forward.go:68-71, internal/proxy/proxy.go:164-167]
+    reach: [internal/proxy/forward.go:68-71, internal/proxy/proxy.go:164-167]
+    row: wrong-layer doc
+    claim: "The nameHasOwner doc explains its result with its caller ('which is what lets the prompter bridge claim … before the display-less gcr-prompter fallback would be activated'). That is caller-layer text, and it is another copy of Facts A and B. The proxy.go:164-167 call-site comment repeats the same reason. nameHasOwner is still used in production (prompter.go:76, the backend check), so it is not test-only after the changeset."
+    fix: "nameHasOwner doc becomes 'Checks whether name currently has an owner on conn. A name that is activatable but not running has none. Returns false when the query fails.' proxy.go:164-167 keeps only 'No-op when the topology doesn't need it.' or is dropped."
+    decision: PLAN
+    score: 5
+    reason: "Outside the batch and on unchanged lines. It becomes part of b1-2's task if the main agent folds the dedup there."
+    same: [b1-2]
+  - id: b1-9
+    at: [e2e/gnome/vm/demo-driver-install.sh:138-139]
+    reach: [e2e/gnome/vm/demo-driver-install.sh:138-139]
+    row: ambiguous noun
+    claim: "The demo-driver comment '(which the bridge now re-establishes after the relogin)' describes the deferred re-activation that the changeset removed (watchFrontPrompter/awaitFrontPrompter, HEAD prompter.go:130-175). The bridge now claims the name at start and resolves gnome-shell by name per call, and it re-establishes nothing."
+    fix: "Drop the parenthetical, or write '(the bridge forwards to it by name, so it keeps working across the relogin)'."
+    decision: FIX
+    score: 6
+    reason: "A comment in another file describes a mechanism the changeset deleted. It is residue of the changeset, so it is a root-cause fix outside the batch."
+    same: []
+  - id: b1-10
+    at: [internal/proxy/prompter.go:199-202, internal/proxy/prompter.go:161]
+    reach: [internal/proxy/prompter.go:159-162, internal/proxy/prompter.go:199-202]
+    row: speculative generality
+    claim: "prompterCallback.logger is set at :161 and never read. PromptReady and PromptDone only forward."
+    fix: "Delete the field and its initializer."
+    decision: PLAN
+    score: 5
+    reason: "Dead field on unchanged lines."
+    same: []
+  - id: b1-11
+    at: [internal/proxy/prompter.go:47, internal/proxy/prompter.go:129, internal/proxy/prompter.go:140, internal/proxy/prompter.go:146, internal/proxy/prompter.go:196, internal/proxy/prompter.go:204, internal/proxy/prompter.go:210, internal/proxy/prompter_test.go:14, internal/proxy/prompter_test.go:43, internal/proxy/prompter_test.go:60]
+    reach: [internal/proxy/prompter.go:23-214, internal/proxy/prompter_test.go:14-66]
+    row: tautological comment
+    claim: "Ten docs on unchanged lines open with their declaration's own name ('prompterBridge reconnects', 'BeginPrompting starts', 'TestPrompterBridge is', and so on). No revive `exported` or stylecheck rule is enabled. The changed-line cases (newPrompterBridge :60, activate :96, the second test :143) are covered by b1-1 and b1-5."
+    fix: "Drop the leading name. Each function doc starts at its verb ('Starts a prompt…', 'Relays…') and each type doc at its noun phrase."
+    decision: PLAN
+    score: 5
+    reason: "Unchanged lines. Fix all of them in one pass when the file is next touched."
+    same: []
+  - id: b1-12
+    at: [internal/proxy/prompter.go:177, internal/proxy/prompter.go:185]
+    reach: [internal/proxy/prompter.go:170-194]
+    row: duplication
+    claim: "Unexporting a callback proxy, `b.frontConn.Export(nil, path, prompterCallbackInterface)` plus `delete(b.callbacks, path)`, is written in both unexportCallback and close."
+    fix: "Add a lock-held helper unexportLocked(path) and call it from both."
+    decision: SKIP
+    score: 3
+    reason: "Two copies of a two-line idiom on unchanged lines. Below the threshold."
+    same: []

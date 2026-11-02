@@ -1,0 +1,467 @@
+read:
+  - evals/run.py
+  - evals/test_run.py
+  - evals/README.md
+unread: []
+findings:
+  - id: b1-1
+    at:
+      - evals/run.py:94-119
+      - evals/run.py:143-144
+      - evals/run.py:155
+    reach:
+      - evals/run.py:94-119
+      - evals/run.py:142-155
+      - evals/changes.py:257
+      - evals/changes.py:353-355
+    row: unparsed input
+    claim: >-
+      fixture.toml is read into a raw dict at run.py:143 and its keys are tested
+      by hand in materialize (`"commit" in spec` twice, spec.get("source", ""),
+      spec['commit']) and in evaluate (spec["check"]). fixture and spec always
+      travel together. A commit fixture without `source` silently copies from
+      the current directory, since Path("") is ".". changes.py:257 and :354
+      parse the same file again and run the check the same way as run.py:155.
+    fix: >-
+      A Fixture dataclass in run.py, built by Fixture.load(dir), with dir, check
+      and an origin that is either Commit(source, commit) or Trees(head, base or
+      None); load errors when check is missing or a commit has no source.
+      materialize becomes Fixture.materialize(workdir) with a match on the
+      origin, and Fixture.run_check(repo, env) runs the check. evaluate and
+      changes.py use Fixture.load instead of tomllib and the check by hand.
+    decision: FIX
+    score: 8
+    reason: the full tell of unparsed input (key access past the edge, parsed three times), plus a silent cwd fallback
+    same: []
+  - id: b1-2
+    at:
+      - evals/run.py:149
+      - evals/run.py:156-159
+      - evals/run.py:162-164
+      - evals/run.py:168-171
+      - evals/run.py:186-188
+    reach:
+      - evals/run.py:142-188
+      - evals/changes.py:105-116
+    row: unnamed tuple
+    claim: >-
+      The report and each round are dicts with implicit keys, written at
+      run.py:149 and :156-158 and read back by key at :163, :168-170 and
+      :187-188. converged re-derives Delta.empty from the counts at :169. The
+      progress and summary lines are formatted inline in evaluate and main.
+      changes.py:105-116 reads the same keys from report.json.
+    fix: >-
+      Round and Report dataclasses in run.py. Report has converged and
+      oscillated as properties, a __str__ for the summary line, and
+      save(path) and load(path) for report.json. Round has a __str__ for the
+      progress line. evaluate returns a Report, main prints it, and changes.py
+      reads report.json through Report.load.
+    decision: FIX
+    score: 7
+    reason: dict with implicit keys whose schema a second module also depends on
+    same: [b1-5]
+  - id: b1-3
+    at:
+      - evals/run.py:129-139
+    reach:
+      - evals/run.py:122-139
+      - evals/run.py:152-167
+    row: concept mixing
+    claim: >-
+      run_skill never looks at the claude exit status or the JSON is_error
+      field, and returns 0.0 when stdout is not JSON. A failed call (expired
+      login, rate limit) leaves the tree unchanged, so evaluate sees an empty
+      delta, breaks, and reports the fixture as converged.
+    fix: >-
+      run_skill errors when claude exits non-zero or its reply has is_error,
+      with the start of stderr in the message, as changes.claude already does.
+      evaluate records the failure on the fixture's report, which then counts as
+      not converged, instead of treating the round as a fixed point.
+    decision: FIX
+    score: 9
+    reason: a bug, the eval reports success when the run failed
+    same: [b1-4]
+  - id: b1-4
+    at:
+      - evals/run.py:122-139
+      - evals/run.py:147-148
+    reach:
+      - evals/run.py:122-148
+      - evals/changes.py:76-87
+    row: duplication
+    claim: >-
+      The headless claude call is written twice. run.py:123-129 and
+      changes.py:77-81 both build `claude -p --output-format json
+      --no-session-persistence` with the CLAUDE_CONFIG_DIR overlay, and both
+      decode stdout and read total_cost_usd (run.py:137, changes.py:84). The
+      SKILL.md path used for skill.sha256 is spelled inline at run.py:148.
+    fix: >-
+      One claude(prompt, *flags, cwd=None) function in run.py that sets the
+      config dir, runs the call, errors on failure and returns a Reply(result,
+      structured, cost_usd). run_skill and changes.claude call it. The SKILL.md
+      path becomes a module constant beside SKILL_REPO.
+    decision: FIX
+    score: 7
+    reason: the same call shape and reply parsing in two modules that must agree
+    same: [b1-3]
+  - id: b1-5
+    at:
+      - evals/run.py:132-134
+      - evals/run.py:145-152
+      - evals/run.py:171
+    reach:
+      - evals/run.py:100
+      - evals/run.py:122-171
+      - evals/changes.py:103-121
+    row: split protocol
+    claim: >-
+      The layout of a run directory (repo/, skill.sha256, round-N.json, the
+      round-N/ record directory derived from log.with_suffix(""), report.json)
+      is written by run.py and read by changes.py:103-121, each spelling the
+      names itself.
+    fix: >-
+      A RunDir dataclass in run.py with the path of the run and properties or
+      methods for repo, skill_hash, report, round_log(n) and round_record(n).
+      run_skill takes the round's paths from it instead of deriving the record
+      directory from the log name, and changes.extract reads through it.
+    decision: FIX
+    score: 7
+    reason: names that a writer and a reader in two modules must spell the same way
+    same: [b1-2, b1-6]
+  - id: b1-6
+    at:
+      - evals/run.py:150
+      - evals/run.py:160-161
+    reach:
+      - evals/run.py:149-161
+      - evals/changes.py:118
+    row: repeated derivation
+    claim: >-
+      `git(repo, "update-ref", f"refs/rounds/{n}", git(repo, "commit-tree",
+      tree, "-m", f"round {n}").strip())` is written for round 0 and again for
+      each round. changes.py:118 builds the same ref name.
+    fix: >-
+      One function record_round(repo, n, tree) and one round_ref(n) beside the
+      run layout of b1-5. evaluate calls record_round for round 0 and in the
+      loop, and changes.py uses round_ref.
+    decision: FIX
+    score: 6
+    reason: a derivation written twice in one function, and a ref name a second module reads
+    same: [b1-5]
+  - id: b1-7
+    at:
+      - evals/run.py:122
+      - evals/run.py:142
+      - evals/run.py:185
+    reach:
+      - evals/run.py:122-188
+    row: missing receiver
+    claim: >-
+      The skill arguments are per-process context. main's closure captures
+      args.rounds and args.args once and hands them to every evaluate call, and
+      evaluate passes args straight down to run_skill. The parameter is named
+      `args`, the same name as the argparse namespace it comes from (args.args).
+    fix: >-
+      An Eval dataclass(rounds, skill_args) built once in main. evaluate and
+      run_skill become its methods, and main calls pool.map(eval.evaluate,
+      fixtures).
+    decision: FIX
+    score: 6
+    reason: both tells met, a closure captures the value and one sibling passes it straight to the other
+    same: []
+  - id: b1-8
+    at:
+      - evals/run.py:60-67
+    reach:
+      - evals/run.py:57-68
+      - evals/test_run.py:9-25
+    row: inline generic machinery
+    claim: >-
+      Delta.between parses `git diff -U0` by hand. The path is line[6:] of the
+      +++ line, so every deleted file becomes "ev/null". A file that one round
+      deletes and a later round restores is therefore not counted as a
+      reversal. An added line whose text starts with "++", or a removed line
+      starting with "--" (a SQL or Lua comment), is taken for a file header:
+      the line is dropped, and a "+++" line also resets the path. A user's
+      diff.noprefix setting shifts every path.
+    fix: >-
+      Parse the diff with unidiff.PatchSet (run.py gets the uv script header
+      that changes.py has), taking the source path for removed lines and the
+      target path for added lines. Or, without the dependency, run git diff
+      with --no-prefix and track headers by state, so that only lines before a
+      file's first @@ count as headers. test_run.py gains a case that deletes a
+      file and restores it, and one with a removed "-- " line.
+    decision: ASK
+    score: 9
+    reason: a bug in the reversal measure; the fix is either a new dependency or a hand-written parser, so the user picks
+    same: [b1-9]
+  - id: b1-9
+    at:
+      - evals/run.py:65-66
+    reach:
+      - evals/run.py:57-68
+    row: misleading name
+    claim: >-
+      The comment above `if len(text) > 3` has an unexplained "ponytail:" tag,
+      joins two ideas with a semicolon, and describes the line-set approach as a
+      whole rather than the rule it sits on. The threshold 3 is not explained
+      anywhere.
+    fix: >-
+      Name the rule as a predicate on Delta, such as significant(text), whose
+      doc says that lines of three characters or fewer (braces, blank lines)
+      carry no change of their own. The note that a moved line counts as
+      removed and added goes into Delta's docstring as two plain sentences.
+    decision: FIX
+    score: 5
+    reason: an inline rule with no name and a compressed comment that explains something else
+    same: [b1-8]
+  - id: b1-10
+    at:
+      - evals/run.py:73-79
+    reach:
+      - evals/run.py:73-79
+      - evals/run.py:149-167
+    row: repeated derivation
+    claim: >-
+      reversals and rework each build `set().union(*(d.X for d in earlier))`
+      from the list of earlier deltas that evaluate keeps.
+    fix: >-
+      A classmethod Delta.union(deltas) that returns one Delta holding all
+      added and all removed lines. evaluate keeps that one accumulated Delta
+      instead of a list, and reversals(earlier) and rework(earlier) take it
+      and intersect with its sets.
+    decision: FIX
+    score: 5
+    reason: the same derivation written twice
+    same: []
+  - id: b1-11
+    at:
+      - evals/README.md:61-72
+    reach:
+      - evals/README.md:61-72
+    row: ambiguous noun
+    claim: >-
+      The README says that change.patch "is one hunk of one round" and lists the
+      labels as good, bad or neutral. changes.py:18-20 makes a change the patch
+      of one task of one skill run, and changes.py:50 also has unsure. The
+      README also repeats the id-hashing and rounds/ facts that the changes.py
+      docstring and change_id already state.
+    fix: >-
+      Describe a change as the patch of one task of one round, list the four
+      labels, and point to `evals/changes.py --help` for what change.yaml
+      holds and how the id is made, instead of restating it.
+    decision: FIX
+    score: 9
+    reason: the doc states something false
+    same: []
+  - id: b1-12
+    at:
+      - evals/run.py:43
+      - evals/run.py:58
+      - evals/run.py:82
+      - evals/run.py:122
+    reach:
+      - evals/run.py:38-139
+      - evals/changes.py
+    row: missing receiver
+    claim: >-
+      The eval repo is passed to snapshot, Delta.between, clear, run_skill and
+      every git call.
+    fix: >-
+      A Repo(path) class with git, snapshot, diff and clear as methods. git
+      stays usable on the source and review repos that changes.py drives.
+    decision: SKIP
+    score: 4
+    reason: git is a generic helper used on several repos, so the shared column is weak, and the fix churns every git call in changes.py
+    same: []
+  - id: b1-13
+    at:
+      - evals/run.py:4
+    reach:
+      - evals/run.py:4
+    row: duplicated knowledge
+    claim: >-
+      The module docstring is the --help description. Its Usage line repeats
+      the usage that argparse prints itself, and it leaves out --args.
+    fix: delete the Usage line; argparse prints the full usage
+    decision: FIX
+    score: 7
+    reason: a stale copy of a fact the code owns, and it already says less than the code
+    same: []
+  - id: b1-14
+    at:
+      - evals/run.py:6-11
+      - evals/run.py:97-98
+    reach:
+      - evals/run.py:2-12
+      - evals/run.py:94-99
+    row: duplicated knowledge
+    claim: >-
+      The fixture format (source and commit, or base/ and head/, plus check) is
+      stated in the module docstring, again in materialize's docstring, and
+      again in README.md:41-51. The throwaway repo and the config without
+      CLAUDE.md, hooks or plugins are stated in the module docstring and in
+      README.md:15-21.
+    fix: >-
+      The Fixture type of b1-1 owns the format in its docstring, and the README
+      Fixtures section stays as the user's guide. materialize keeps only its
+      first sentence. The module docstring says what the program does and
+      points to evals/README.md.
+    decision: FIX
+    score: 5
+    reason: one fact in three places
+    same: [b1-1]
+  - id: b1-15
+    at:
+      - evals/README.md:16-17
+    reach:
+      - evals/README.md:16-17
+    row: ambiguous noun
+    claim: >-
+      The README says that every round invokes `/unsmell:unsmell fix
+      everything`. That text is only the default of --args at run.py:179.
+    fix: say that each round invokes /unsmell:unsmell with the text of --args, which is `fix everything` by default
+    decision: FIX
+    score: 5
+    reason: the doc says less than the code
+    same: []
+  - id: b1-16
+    at:
+      - evals/run.py:82-85
+    reach:
+      - evals/run.py:82-85
+    row: concept mixing
+    claim: >-
+      clear uses a conditional expression as a statement, and Path.is_dir
+      follows symlinks, so a symlink to a directory in the base tree reaches
+      shutil.rmtree, which refuses symlinks, and materialize fails.
+    fix: >-
+      An if statement that calls rmtree only for a real directory
+      (is_dir() and not is_symlink()) and unlink otherwise.
+    decision: FIX
+    score: 5
+    reason: a crash on a valid fixture tree, and a fix of two lines
+    same: []
+  - id: b1-17
+    at:
+      - evals/run.py:178
+      - evals/run.py:168
+    reach:
+      - evals/run.py:178
+    row: unparsed input
+    claim: --rounds 0 or below runs no round, and run.py:168 then fails with IndexError
+    fix: reject a value under 1 at argparse with a type that checks it
+    decision: SKIP
+    score: 4
+    reason: an operator error with a loud failure
+    same: []
+  - id: b1-18
+    at:
+      - evals/run.py:145
+    reach:
+      - evals/run.py:145
+    row: primitive obsession
+    claim: >-
+      The workdir is named from fixture.name and a timestamp with one-second
+      resolution. Two fixtures with one basename, such as a tuning and a
+      held-out fixture, that start in the same second collide in
+      materialize's mkdir.
+    fix: create the workdir with a unique suffix, or with mkdir that retries on a taken name
+    decision: SKIP
+    score: 4
+    reason: rare and fails loudly
+    same: []
+  - id: b1-19
+    at:
+      - evals/run.py:88-91
+    reach:
+      - evals/run.py:88-91
+    row: misleading name
+    claim: >-
+      copy_tree's doc says it writes the files of source at rev, but git archive
+      leaves out export-ignore paths and rewrites export-subst files.
+    fix: check the tree out with a temporary index (GIT_INDEX_FILE plus git --work-tree=repo read-tree and checkout-index) instead of git archive
+    decision: SKIP
+    score: 3
+    reason: true for every fixture source today
+    same: []
+  - id: b1-20
+    at:
+      - evals/test_run.py:14-19
+    reach:
+      - evals/test_run.py:9-25
+    row: repeated derivation
+    claim: write_text and then snapshot is written three times
+    fix: a local helper that writes the text and returns the snapshot
+    decision: SKIP
+    score: 3
+    reason: three short lines in one test
+    same: []
+  - id: b1-21
+    at:
+      - evals/README.md:5-6
+    reach:
+      - evals/README.md:3-6
+    row: ambiguous noun
+    claim: >-
+      The README says that the fixtures also measure whether real smells get
+      fixed. Nothing in run.py measures that. The labelled changes and
+      changes.py score do.
+    fix: say that the labelled changes (see Changes and labels) measure whether real smells get fixed
+    decision: SKIP
+    score: 4
+    reason: true of the whole eval setup, only the subject is loose
+    same: []
+  - id: b1-22
+    at:
+      - evals/run.py:147
+    reach:
+      - evals/run.py:147-148
+    row: garbled sentence
+    claim: >-
+      "Which skill text the rounds ran, so that their changes can be traced to
+      it." is a question without its question mark, not a sentence.
+    fix: >-
+      The line moves into the helper that b1-23 extracts, as its doc. For
+      example, "Records the hash of the SKILL.md that the rounds run, so that
+      their changes can be traced to it."
+    decision: FIX
+    score: 5
+    reason: a comment that does not parse
+    same: [b1-23]
+  - id: b1-23
+    at:
+      - evals/run.py:142-172
+    reach:
+      - evals/run.py:142-172
+    row: mixed altitude
+    claim: >-
+      evaluate orders named steps (materialize, run_skill, snapshot,
+      Delta.between) between inline detail: the spec parse, the workdir name,
+      the skill hash, two update-ref chains, the shell check, the round dict,
+      the progress line format and the verdicts. All five roles are written
+      inline.
+    fix: >-
+      With b1-1, b1-2, b1-5 and b1-6 in place, evaluate reads as its steps.
+      It loads the fixture, materializes it, records the skill version, and
+      then loops. Each round runs the skill, snapshots, diffs, runs the
+      fixture's check, builds a Round, records the round ref and prints the
+      Round. At the end it saves the Report.
+    decision: FIX
+    score: 7
+    reason: a function with five inline roles, and the end shape the other findings reach together
+    same: [b1-2, b1-6, b1-22]
+  - id: b1-24
+    at:
+      - evals/run.py:54-55
+    reach:
+      - evals/run.py:50-79
+    row: unnamed tuple
+    claim: >-
+      Delta.added and Delta.removed are bare sets of (path, text) tuples, so
+      the element type says nothing about what a line is.
+    fix: a NamedTuple Line(path, text), with the fields typed as set[Line]
+    decision: FIX
+    score: 5
+    reason: a collection whose element type says nothing
+    same: []

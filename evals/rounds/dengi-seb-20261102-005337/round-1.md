@@ -1,0 +1,1 @@
+The watcher that just expired was a leftover and has no effect. The t1 editor had already finished before it expired, and its patch is included in the results above. Nothing else is still running.

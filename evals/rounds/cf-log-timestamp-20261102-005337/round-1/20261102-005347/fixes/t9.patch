@@ -1,0 +1,15 @@
+diff --git a/src/evm/history.rs b/src/evm/history.rs
+index 3ad392a..07dc584 100644
+--- a/src/evm/history.rs
++++ b/src/evm/history.rs
+@@ -528,7 +528,9 @@ fn log_to_evm_event(log: &Log) -> EvmEvent {
+     }
+ }
+ 
+-/// Cache-first block-header lookup. Falls back to RPC and persists.
++/// Returns the header of block `block_number`. The header is read from `store`
++/// when it is there. Otherwise it is fetched from `provider` and added to `store`.
++/// Errors when `provider` has no block at that height.
+ pub(crate) async fn ensure_block_header_via<P>(
+     provider: &P,
+     store: &LogCache,

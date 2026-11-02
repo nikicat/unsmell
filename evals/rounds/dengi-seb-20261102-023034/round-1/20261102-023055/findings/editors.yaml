@@ -1,0 +1,14 @@
+# A finding that the t5 editor reported while it worked.
+read: [seb.py]
+unread: []
+findings:
+  - id: e-1
+    at: [seb.py:48-50]
+    reach: [seb.py:43-55]
+    row: unparsed input
+    claim: "Enable Banking documents AccountResource.uid as optional (it is unset for a blocked or closed account), but Account.from_json (written by t1) indexes d[\"uid\"], so such an account raises KeyError"
+    fix: "Account.uid becomes str | None. main skips an account with no uid, because its transactions cannot be fetched"
+    decision: PLAN
+    score: 6
+    reason: "a latent crash. It was found after the survey, and this run makes no new editors (patches only)"
+    same: [b1-4]

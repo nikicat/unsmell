@@ -1,0 +1,20 @@
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index b4876de..6e9fdf3 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -1,11 +1,8 @@
+-//! [`EventSignatureCache`] — durable cache for the event-signature resolver.
++//! Stores resolved event signatures durably, keyed by chain, contract address
++//! and event name.
+ //!
+-//! A cheap handle over the shared connection vended by
+-//! [`CacheDb`](super::CacheDb). Stores resolved
+-//! `(chain, address, event name) → (signature, topic0, abi)` rows so repeated
+-//! lookups stay zero-network. Named `EventSignatureCache` (not
+-//! `SignatureCache`) to avoid colliding with the
+-//! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
++//! Callers reach it through [`CacheDb`](super::CacheDb), and the CLI's
++//! `SignatureCache` adapter sits on top of it.
+ 
+ use alloy::primitives::{Address, B256};
+ 

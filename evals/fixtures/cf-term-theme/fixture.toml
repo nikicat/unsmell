@@ -1,0 +1,4 @@
+# Rust, 9 files: a CLI rendering feature built around a visitor trait.
+source = "~/src/chainfold"
+commit = "dd15272"
+check = "CARGO_TARGET_DIR=$HOME/.cache/unsmell-eval/target/chainfold cargo check --all-targets --all-features --locked"

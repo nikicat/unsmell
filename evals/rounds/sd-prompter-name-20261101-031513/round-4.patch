@@ -1,0 +1,44 @@
+diff --git a/TODO.md b/TODO.md
+index 339b092..5e56047 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -50,3 +50,11 @@
+ - [ ] `demo-driver-install.sh:141` and `demo-driver.sh:108` both build the rd_agent unlock batch (`waittext Unlock`, `type`, `key enter`, `waittext`/`clicktext <label>`) inline. Give it one helper, such as `unlock_and_click <label>`, in the shared lib.
+ - [ ] The stash file `$HOME/secrets-dispatcher-fixed` is written by `demo.sh:153` and read by `demo-driver-install.sh:101`, `demo-driver.sh:88` and `demo.sh:313`. Give the path one owner. The owner-pid-and-readlink lookup in `demo-driver-install.sh:56–59` is also written in `demo.sh:304–308`.
+ - [ ] `demo-driver-install.sh` comment style on unchanged lines: trailing comments on `type_cmd`, `wait_for`, `owner_is`, `open_window` and the comment above `place` open with the function's name; lines 91, 117, 125 and 132 join two ideas with a colon or semicolon; line 142's trailing comment is too long for the line; lines 144–145 have a comma splice.
++
++## Unsmell run 2026-11-01 (fourth pass): prompter bridge and demo installer
++
++- [ ] `internal/proxy/prompter.go:103` and `:175` both spell `b.backendConn.ReleaseName(systemPrompterName)`. Give the release one helper, next to the unexport helper planned above.
++- [ ] `internal/proxy/prompter_test.go` builds method names by hand as `prompterInterface+".BeginPrompting"` and `prompterCallbackInterface+".PromptReady"` (lines 111, 119, 123, 128, 130, 138, 184). Add constants or a small `method(iface, member)` helper so the names are spelled once.
++- [ ] `internal/proxy/prompter.go` `PerformPrompt` doc: the parenthetical "(shows the dialog, collects the reply)" describes what gnome-shell does, not the bridge. Cut it when the doc is rewritten (see the second-pass doc entry).
++- [ ] `e2e/gnome/vm/demo-driver-install.sh:175–178` matches the phase names `part1|part2|uninstall`, and `demo.sh` spells them again at lines 237, 288 and 322. Give the phase names one owner, for example in the shared lib planned above.
++- [ ] `e2e/gnome/vm/demo-driver-install.sh:154`: the comment above `uninstall()` opens with the function's own name ("uninstall is its own demo…"). Fix it together with the comment-style entry above.
+diff --git a/internal/proxy/prompter.go b/internal/proxy/prompter.go
+index 496e1d0..5d88a03 100644
+--- a/internal/proxy/prompter.go
++++ b/internal/proxy/prompter.go
+@@ -55,8 +55,8 @@ type prompterBridge struct {
+ 
+ 	mu        sync.Mutex
+ 	callbacks map[dbus.ObjectPath]bool // callback proxies exported on frontConn
+-	// True once prompterBridge.activate has claimed the name and exported the
+-	// bridge. prompterBridge.close releases the name only then.
++	// True while the bridge holds SystemPrompter on the backend bus and is
++	// exported there. prompterBridge.close releases the name only while this flag is true.
+ 	owned bool
+ }
+ 
+diff --git a/internal/proxy/prompter_test.go b/internal/proxy/prompter_test.go
+index 6c7f67c..f4696b3 100644
+--- a/internal/proxy/prompter_test.go
++++ b/internal/proxy/prompter_test.go
+@@ -94,7 +94,7 @@ func TestPrompterBridge(t *testing.T) {
+ 	p := New(Config{ClientName: "prompter-test", LogLevel: slog.LevelDebug})
+ 	require.NoError(t, p.ConnectWith(proxyFrontConn, proxyBackendConn))
+ 	t.Cleanup(func() { p.Close() })
+-	require.NotNil(t, p.prompter, "bridge should activate when the backend bus has no prompter")
++	require.NotNil(t, p.prompter, "bridge should be created when the backend bus has no prompter")
+ 
+ 	// The backend gnome-keyring: a connection that exports a callback object
+ 	// and calls the SystemPrompter (now the bridge) on the backend bus.

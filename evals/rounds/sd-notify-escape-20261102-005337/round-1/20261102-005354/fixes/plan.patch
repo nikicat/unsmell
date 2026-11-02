@@ -1,0 +1,13 @@
+diff --git a/TODO.md b/TODO.md
+index 7636cd7..8a71590 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -12,3 +12,8 @@
+ - [x] Implement CLI for approving/rejecting
+ - [ ] Refactor
+ - [ ] Proxy webserver mode for development - load webapp from vite webserver instead of embedded html
++
++## Unsmell 2026-11-02: notification markup escaping
++
++- [ ] `internal/notification/desktop_test.go:790-802`: `contains`/`stringContains` reimplement `strings.Contains`. Delete both and call `strings.Contains` (or `assert.Contains`) at their call sites.
++- [ ] `internal/notification/desktop.go` (SSH branch of `formatBody`) and `internal/sshagent/proxy.go:73`: the `"destination"` item-attribute key is spelled separately by its writer and its reader. Add one constant on the approval side (for example `approval.AttrSSHDestination`) and use it in both.

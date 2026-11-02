@@ -1,0 +1,43 @@
+id: 4c161d4e3e
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t10
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-19
+  at:
+  - seb.py:19
+  - seb.py:30
+  - seb.py:28
+  - seb.py:54
+  - seb.py:74
+  reach:
+  - seb.py:19-30
+  - seb.py:54
+  - seb.py:74
+  row: duplication
+  claim: the API host is spelled in API and again as the JWT aud; datetime.now(timezone.utc) is written
+    three times where datetime.UTC exists
+  fix: aud derived from urlparse(API).netloc, or one HOST constant; datetime.now(UTC)
+  decision: SKIP
+  score: 3
+  reason: the aud is fixed by Enable Banking's JWT spec, so the coincidence is weak; the UTC spelling
+    is cosmetic
+  same: []
+  triage:
+    id: b1-19
+    decision: SKIP
+    score: 3
+    reason: aud is fixed by the JWT spec; UTC spelling cosmetic
+    task: t10
+    after:
+    - t1
+after:
+- 2233303edb
+check: ok

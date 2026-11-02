@@ -1,0 +1,131 @@
+diff --git a/TODO.md b/TODO.md
+index ee9e5d7..29c2cae 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -230,3 +230,31 @@ Found on unchanged lines of `src/evm/types.rs` while reviewing the
+ - **`FilterHash::as_bytes` and `as_slice` both return the same bytes.**
+   `src/evm/types.rs`. Keep one and update callers.
+ 
++
++## Unsmell follow-ups — `EventSignatureRow` SQL binding (2026-11-01, fourth pass)
++
++Found on unchanged lines next to the change.
++
++- **`CacheDb::open` and `open_in_memory` share their body.** `src/evm/cache.rs`
++  (`CacheDb::open`/`open_in_memory`): after opening the `Connection`, both
++  configure, migrate and wrap it in `Arc<Mutex<_>>`. Extract one
++  `from_connection(conn)` that both call.
++- **`ToSql` impl docs repeat one rationale three times.** `src/evm/cache.rs`
++  `ToSql for ChainId`/`FilterHash`/`Topic`, and `src/evm/types.rs`
++  (`FilterHash` doc): "lives in the persistence layer so the domain type stays
++  SQLite-free" and "no `FromSql` because…" are stated on each impl. The
++  `ChainId` and `FilterHash` docs are also long (history: "no `.get() as i64`
++  cast at every call site"). Put the layering rule once in the `cache.rs`
++  module doc, and keep only each impl's column type and its no-`FromSql`
++  reason.
++- **Imperative docs in `cache.rs`.** `CacheDb::open`/`open_in_memory`
++  ("Open a cache…") are imperative. Rewrite in third person ("Opens…").
++- **Stale names in `src/evm/types.rs` docs.** The module doc lists "block/tx"
++  types that no longer exist (`EvmBlock`/`EvmTransaction`). The section header
++  "Erc20 / OwnedErc20" names a type the file does not define. The
++  `EvmPosition` doc spells the sentinel as `EvmPosition { block: 0, log_index:
++  0 }`, but the fields are now `BlockNumber`/`LogIdx`. That sentinel fact is
++  also repeated at `EvmPosition::earliest`.
++- **`log_cache.rs` binds topics as copied bytes.** `src/evm/cache/log_cache.rs`
++  (around `:137-140`) does `t.as_slice().to_vec()`. Now that `Topic: ToSql`,
++  bind the `Topic` directly.
+diff --git a/src/evm/cache.rs b/src/evm/cache.rs
+index 4098004..ae5d756 100644
+--- a/src/evm/cache.rs
++++ b/src/evm/cache.rs
+@@ -55,7 +55,7 @@ impl ToSql for FilterHash {
+     }
+ }
+ 
+-/// `Topic` persists as its 32 raw bytes in a `BLOB` column. It has no
++/// Persists a topic as its 32 raw bytes in a `BLOB` column. There is no
+ /// `FromSql`, because each reader decides what a stored topic of the wrong
+ /// length means.
+ impl ToSql for Topic {
+diff --git a/src/evm/cache/event_signature_cache.rs b/src/evm/cache/event_signature_cache.rs
+index e6e199d..519c72a 100644
+--- a/src/evm/cache/event_signature_cache.rs
++++ b/src/evm/cache/event_signature_cache.rs
+@@ -8,8 +8,7 @@
+ //! [`SignatureCache`](crate::signatures::SignatureCache) resolver trait.
+ 
+ use alloy::primitives::{Address, B256};
+-use rusqlite::types::ToSql;
+-use rusqlite::{OptionalExtension, Row, params, params_from_iter};
++use rusqlite::{OptionalExtension, Row, params};
+ 
+ use super::{CacheError, SharedConn};
+ use crate::evm::types::{ChainId, Topic};
+@@ -50,18 +49,7 @@ impl From<&ResolvedEvent> for EventSignatureRow {
+ }
+ 
+ impl EventSignatureRow {
+-    /// The `event_signatures` columns that a row fills. [`Self::sql_values`]
+-    /// binds them in this order.
+-    const COLUMNS: &str = "signature, topic0, abi_json";
+-
+-    fn sql_values(&self) -> [&dyn ToSql; 3] {
+-        [&self.signature, &self.topic0, &self.abi_json]
+-    }
+-
+-    /// Reads the cached entry from one result row of an `event_signatures`
+-    /// query. It returns `None` for a malformed row, as
+-    /// [`EventSignatureCache::get_event_signature`] describes.
+-    fn from_sql(row: &Row<'_>) -> rusqlite::Result<Option<Self>> {
++    fn from_row(row: &Row<'_>) -> rusqlite::Result<Option<Self>> {
+         let topic: Vec<u8> = row.get("topic0")?;
+         let Ok(topic0) = Topic::try_from(topic.as_slice()) else {
+             return Ok(None);
+@@ -106,15 +94,14 @@ impl EventSignatureCache {
+         event_name: &str,
+     ) -> Result<Option<EventSignatureRow>, CacheError> {
+         let conn = self.conn.lock().unwrap();
+-        let mut stmt = conn.prepare_cached(&format!(
+-            "SELECT {} FROM event_signatures
++        let mut stmt = conn.prepare_cached(
++            "SELECT signature, topic0, abi_json FROM event_signatures
+              WHERE chain_id = ?1 AND address = ?2 AND event_name = ?3",
+-            EventSignatureRow::COLUMNS,
+-        ))?;
++        )?;
+         let found = stmt
+             .query_row(
+                 params![chain_id, address.as_slice(), event_name],
+-                EventSignatureRow::from_sql,
++                EventSignatureRow::from_row,
+             )
+             .optional()?;
+         Ok(found.flatten())
+@@ -131,16 +118,18 @@ impl EventSignatureCache {
+         row: &EventSignatureRow,
+     ) -> Result<(), CacheError> {
+         let conn = self.conn.lock().unwrap();
+-        let key = params![chain_id, address.as_slice(), event_name];
+-        let values: Vec<&dyn ToSql> = key.iter().copied().chain(row.sql_values()).collect();
+-        let placeholders = vec!["?"; values.len()].join(", ");
+         conn.execute(
+-            &format!(
+-                "INSERT OR REPLACE INTO event_signatures
+-                 (chain_id, address, event_name, {}) VALUES ({placeholders})",
+-                EventSignatureRow::COLUMNS,
+-            ),
+-            params_from_iter(values),
++            "INSERT OR REPLACE INTO event_signatures
++             (chain_id, address, event_name, signature, topic0, abi_json)
++             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
++            params![
++                chain_id,
++                address.as_slice(),
++                event_name,
++                row.signature,
++                row.topic0,
++                row.abi_json,
++            ],
+         )?;
+         Ok(())
+     }

@@ -1,0 +1,168 @@
+id: 11fbded8a9
+fixture: sd-notify-escape
+seen:
+- run: sd-notify-escape-20261102-023034
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-1
+  at:
+  - internal/notification/desktop.go:583-673
+  reach:
+  - internal/notification/desktop.go:582-678
+  - internal/notification/slow_upstream.go:80-111
+  row: primitive obsession
+  claim: The body handed to Notifier.Notify is FreeDesktop markup whose invariant is "client text escaped",
+    but it is a raw strings.Builder plus a string. The changeset added the rule as a local alias esc :=
+    html.EscapeString at desktop.go:591 and wrapped it by hand around 12 interpolation sites (desktop.go:601,
+    612, 620, 626, 628, 638, 653, 655, 657, 663). Nothing makes a new site escape, and the sibling body
+    formatter formatSlowUpstreamBody (slow_upstream.go:80-111) already writes labels, paths and process
+    names into the same kind of body unescaped.
+  fix: One unexported markup builder in package notification (e.g. type bodyMarkup struct wrapping strings.Builder)
+    whose methods text(s), bold(s), italic(s) escape their argument and write the tags, plus a processChain(chain,
+    showPIDs) method replacing the writeChain closure; formatBody and formatSlowUpstreamBody both build
+    their body with it, the esc alias and its comment go away (the rule's why moves to a two-line doc
+    on the type). Notifier.Notify keeps its string parameter (changing the exported interface would be
+    an ASK).
+  decision: FIX
+  score: 7
+  reason: Full tell of primitive obsession (a value with an "escaped" invariant the type does not carry)
+    and the rule is misplaced on a local alias. The fix is behaviour-preserving for formatBody; for slow_upstream
+    it is the bug fix of b1-2. Churn is about 40 lines, but the second caller already exists, so the type
+    earns itself.
+  same:
+  - b1-2
+  - b1-5
+  - b1-6
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 7
+    reason: the escaping invariant belongs on a type; formatBody is the only site in the diff, and slow_upstream
+      is handled by t2
+    task: t1
+- id: b1-3
+  at:
+  - internal/notification/desktop.go:635-648
+  - internal/notification/desktop.go:660-673
+  reach:
+  - internal/notification/desktop.go:632-675
+  row: duplication
+  claim: The "what is requested" text (one item label or "N items" for GetSecret/Delete/Write, search
+    attributes or "all" for Search) is written twice, differing only in the <b> versus <i> wrapper. The
+    changeset edited both copies in lockstep (desktop.go:638 and 663, 644 and 669), which is the "two
+    sites you edit together" tell.
+  fix: One helper (e.g. requestSubject(req) string, or a bodyMarkup method) that returns the plain subject
+    text; the new-format branch writes it with bold(), the legacy branch with italic(). The escapedSearchAttrs
+    closure folds into it.
+  decision: FIX
+  score: 7
+  reason: Duplicated rule on changed lines, mechanical and behaviour-preserving.
+  same:
+  - b1-1
+  triage:
+    id: b1-3
+    decision: FIX
+    score: 7
+    reason: the subject text is edited in lockstep in two places on changed lines
+    task: t1
+- id: b1-5
+  at:
+  - internal/notification/desktop.go:585-591
+  reach:
+  - internal/notification/desktop.go:585-591
+  row: long comment
+  claim: The comment the changeset added above esc is six lines, opens with the declaration's own name
+    ("esc escapes"), joins two ideas with a semicolon ("must be escaped; only our own literal <b>/<i>
+    tags are emitted raw"), packs a parenthetical noun stack, and is a warning to future editors about
+    an invariant a type could enforce (cause a). It also restates that comm is prctl-settable, a fact
+    owned by approval.SenderInfo/ProcessInfo docs (internal/approval/types.go:44, manager.go:147, README.md:146).
+  fix: Removed with the alias by b1-1; the type doc says in two plain sentences that its methods escape
+    every string they are given, so client text cannot add markup to the approve/deny prompt. No prctl
+    restatement.
+  decision: FIX
+  score: 6
+  reason: Long comment whose cause is structural; fixed by b1-1, plus duplicated knowledge.
+  same:
+  - b1-1
+  triage:
+    id: b1-5
+    decision: FIX
+    score: 6
+    reason: removed with the esc alias
+    task: t1
+- id: b1-6
+  at:
+  - internal/notification/desktop.go:593
+  - internal/notification/desktop.go:608
+  reach:
+  - internal/notification/desktop.go:593-615
+  row: tautological comment
+  claim: The changeset added "// writeChain appends ..." and "// escapedSearchAttrs renders ..." which
+    open with the declaration's own name (mechanical doc-opening check).
+  fix: These closures become methods or helpers under b1-1 and b1-3; their docs drop the name and start
+    at the verb ("Appends the process chain ...").
+  decision: FIX
+  score: 5
+  reason: Catalog tell met in full on changed lines; folded into b1-1's patch.
+  same:
+  - b1-1
+  - b1-3
+  triage:
+    id: b1-6
+    decision: FIX
+    score: 5
+    reason: the closures become methods with name-free docs
+    task: t1
+- id: b1-7
+  at:
+  - internal/notification/desktop_test.go:419-423
+  reach:
+  - internal/notification/desktop_test.go:419-423
+  row: duplicated knowledge
+  claim: The new test's doc is five lines, opens with the test's own name, cites "Vuln 7" which nothing
+    in the repo defines, joins a second idea with a colon, and repeats the why stated at desktop.go:589-590
+    (approve/deny buttons make injected markup a consent spoof).
+  fix: One line that says what the test pins, e.g. "// Pins that client-controlled text reaches the body
+    escaped while the body's own tags stay raw." The why stays only on the markup type (b1-1).
+  decision: FIX
+  score: 6
+  reason: Fact stated twice plus an unfindable referent and own-name opening, on changed lines.
+  same:
+  - b1-5
+  triage:
+    id: b1-7
+    decision: FIX
+    score: 6
+    reason: the Vuln 7 referent is undefined in the repo, and the why is stated twice
+    task: t1
+- id: b1-8
+  at:
+  - internal/notification/desktop_test.go:424-457
+  reach:
+  - internal/notification/desktop_test.go:424-457
+  row: test coverage
+  claim: The regression test exercises only the GPG branch (repo, commit, chain). The changeset also added
+    escaping on the SSH label and destination (desktop.go:626-628), item labels (638, 663), search attributes
+    (612) and the legacy InvokerName/Client header (653-657), none of which a test pins. b1-1 restructures
+    exactly those lines (pin before you move).
+  fix: A table-driven test over one request per branch (GPG, SSH with destination, GetSecret with chain,
+    Search with chain, legacy with InvokerName, legacy PID only, legacy bare), each with markup in every
+    client field, asserting no raw injected tag survives and the escaped text is present.
+  decision: FIX
+  score: 5
+  reason: Needed before b1-1 moves the escaping into a type; changed lines only.
+  same:
+  - b1-1
+  triage:
+    id: b1-8
+    decision: FIX
+    score: 5
+    reason: pin before t1 moves the escaping
+    task: t1
+check: ok

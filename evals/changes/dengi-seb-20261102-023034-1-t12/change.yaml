@@ -1,0 +1,35 @@
+id: dengi-seb-20261102-023034-1-t12
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-023034
+  round: 1
+  change: t12
+judge: null
+labels: []
+findings:
+- id: e-1
+  at:
+  - seb.py:48-50
+  reach:
+  - seb.py:43-55
+  row: unparsed input
+  claim: Enable Banking documents AccountResource.uid as optional (it is unset for a blocked or closed
+    account), but Account.from_json (written by t1) indexes d["uid"], so such an account raises KeyError
+  fix: Account.uid becomes str | None. main skips an account with no uid, because its transactions cannot
+    be fetched
+  decision: PLAN
+  score: 6
+  reason: a latent crash. It was found after the survey, and this run makes no new editors (patches only)
+  same:
+  - b1-4
+  triage:
+    id: e-1
+    decision: PLAN
+    score: 6
+    reason: a latent KeyError on a closed account. Found after the survey; the plan location is pending
+    task: t12
+    after:
+    - t1
+after:
+- 4a5f4c4b2c
+check: ok

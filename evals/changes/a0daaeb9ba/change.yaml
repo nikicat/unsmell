@@ -1,0 +1,305 @@
+id: a0daaeb9ba
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-023034
+  round: 1
+  change: t1
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-1
+  at:
+  - src/evm/history.rs:402-409
+  - src/evm/history.rs:520-522
+  - src/evm/history.rs:601-605
+  reach:
+  - src/evm/history.rs:395-416
+  - src/evm/history.rs:512-531
+  - src/evm/history.rs:599-609
+  row: duplication
+  claim: The changeset writes one rule three times. A log's timestamp is its own block_timestamp when
+    present, otherwise the block header's timestamp. iter checks `log.block_timestamp.is_none()` before
+    fetching the header (:404), build_fetcher checks `log.block_timestamp.is_some()` to skip the prefetch
+    (:603), and log_to_evm_event writes `log.block_timestamp.unwrap_or(0)` (:522). The prefetch exists
+    only to warm the cache for iter, so its skip condition and iter's fetch condition must agree, and
+    nothing links them.
+  fix: 'One private `async fn log_timestamp(provider, store, log: &Log) -> Result<Timestamp, HistoryError>`
+    next to ensure_block_header_via returns `log.block_timestamp` when it is Some and otherwise `ensure_block_header_via(provider,
+    store, block).await?.timestamp`. log_to_evm_event takes the resolved timestamp as a parameter (`log_to_evm_event(log,
+    timestamp)`), so iter becomes `let timestamp = log_timestamp(&provider, &store, &log).await?; let
+    event = log_to_evm_event(&log, timestamp);` with no `mut` and no overwrite. The prefetch loop becomes
+    `for log in &logs { let _ = log_timestamp(&provider, &store, log).await; }`. The rule then has one
+    owner, and its doc is the only place that states it (see b2-4). Behaviour: the prefetch would fetch
+    the block-0 header for a log without block_number, as iter already does; eth_getLogs returns block_number
+    for every mined log, so this is not reachable in practice.'
+  decision: FIX
+  score: 7
+  reason: Full tell of a duplicated rule on changed lines, with two sites that must agree (writer of the
+    cache warm-up and its reader). Private code, about 20 lines of churn.
+  same:
+  - b2-2
+  - b2-3
+  - b2-4
+  triage:
+    id: b2-1
+    decision: FIX
+    score: 7
+    reason: the timestamp rule is written at three sites (history.rs:404, :522, :603) that must agree,
+      and nothing links them
+    task: t1
+- id: b2-2
+  at:
+  - src/evm/history.rs:520-522
+  - src/evm/history.rs:401
+  reach:
+  - src/evm/history.rs:395-416
+  - src/evm/history.rs:512-529
+  row: algebraic blindness
+  claim: log_to_evm_event returns an EvmEvent whose timestamp is 0 to mean "unknown, the caller fills
+    it", and the comment at :520-521 explains what the zero means. Zero is also a real timestamp, since
+    the comment at :88-89 says some chains use timestamp 0 at genesis. At HEAD the caller always overwrote
+    the field. The changeset made the overwrite conditional (:404), so a half-built event now escapes
+    into a branch.
+  fix: 'log_to_evm_event takes `timestamp: Timestamp` and never invents one, as in b2-1. No EvmEvent exists
+    with an unknown timestamp.'
+  decision: FIX
+  score: 7
+  reason: Catalog tell met in full (a comment explaining what a zero value means, and zero is a valid
+    value). Same edit as b2-1.
+  same:
+  - b2-1
+  triage:
+    id: b2-2
+    decision: FIX
+    score: 7
+    reason: timestamp 0 as an "unknown" sentinel collides with a real genesis timestamp (history.rs:88-89);
+      passing the resolved timestamp in removes it
+    task: t1
+- id: b2-3
+  at:
+  - src/evm/history.rs:600-609
+  reach:
+  - src/evm/history.rs:599-609
+  row: computing loop with effects
+  claim: The prefetch loop in build_fetcher selects (skips logs that carry a timestamp via `continue`
+    at :603-605, skips logs without block_number via `if let Some`) and fetches headers in the same body.
+    The changeset added the first skip.
+  fix: With b2-1 the selection moves into log_timestamp, and the loop is one effect per log (`for log
+    in &logs { let _ = log_timestamp(...).await; }`). No separate filter chain is needed.
+  decision: FIX
+  score: 5
+  reason: Tell met on changed lines; resolved by the b2-1 edit with no extra code.
+  same:
+  - b2-1
+  triage:
+    id: b2-3
+    decision: FIX
+    score: 5
+    reason: the prefetch loop's skip disappears into log_timestamp, so it is the same fix as b2-1
+    task: t1
+- id: b2-4
+  at:
+  - src/evm/history.rs:402-403
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  - src/evm/history.rs:777-780
+  - src/evm/cache.rs:240-245
+  reach:
+  - src/evm/history.rs:402-403
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  - src/evm/history.rs:777-780
+  - src/evm/history.rs:531
+  row: duplicated knowledge
+  claim: The fact "a log that carries its own timestamp needs no block header, otherwise the header supplies
+    it" is stated in five comments that the changeset added. They are the iter comment (:402-403), the
+    log_to_evm_event comment (:520-521), the prefetch comment (:601-602), the new test doc (:777-780),
+    and the migration comment in cache.rs (:240-245, batch of cache.rs). No item owns the rule.
+  fix: The doc of log_timestamp (b2-1) owns the fact. For example, "Returns the block timestamp of the
+    given log. Uses the timestamp that the log carries, and otherwise reads the block header from the
+    cache or the provider. Errors when the header fetch fails." Delete :402-403 and :520-521. Replace
+    :601-602 with one line that says why the loop exists ("Warms the header cache so that HistBackend::iter
+    can resolve these timestamps without RPC"). The test doc points to log_timestamp instead of restating
+    the rule (b2-7). The migration comment keeps only what the column holds and that it is NULL when the
+    provider omitted it or the row predates the column (cache.rs batch).
+  decision: FIX
+  score: 6
+  reason: One fact with five copies, all on changed lines. Removes comments rather than adding any.
+  same:
+  - b2-1
+  - b2-5
+  triage:
+    id: b2-4
+    decision: FIX
+    score: 6
+    reason: one fact in five comments; the log_timestamp doc becomes its owner
+    task: t1
+- id: b2-5
+  at:
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  reach:
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  row: wrong-layer doc
+  claim: Both new comments describe another function's behaviour. :520-521 says "the caller fills it from
+    the (cached) block header", and :601-602 says "the query path reads it straight off the persisted
+    log". "Query path" names no item (it means HistBackend::iter at :375). "Persisted" is imprecise, because
+    LogIndex can serve a page that has not been drained to LogCache yet. :520-521 also joins two ideas
+    with a semicolon ("…when present; otherwise 0, and…"), which is the compressed style the user rejects.
+  fix: Both comments go away or shrink as in b2-4. Any pointer that stays names `HistBackend::iter` or
+    `log_timestamp`, not "the query path".
+  decision: FIX
+  score: 5
+  reason: Caller-layer facts and an undefined noun on changed lines. Same edit as b2-4.
+  same:
+  - b2-4
+  triage:
+    id: b2-5
+    decision: FIX
+    score: 5
+    reason: the comments that carry the caller's layer are the copies b2-4 removes
+    task: t1
+- id: cross-1
+  at:
+  - src/evm/cache.rs:241-246
+  - src/evm/history.rs:402-403
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  - src/evm/history.rs:777-780
+  reach:
+  - src/evm/cache.rs:241-246
+  - src/evm/history.rs:402-403
+  - src/evm/history.rs:520-521
+  - src/evm/history.rs:601-602
+  - src/evm/history.rs:777-780
+  row: duplicated knowledge
+  claim: The timestamp-resolution rule (use the log's own block_timestamp, else the block header's timestamp)
+    is stated in comments of both batches, all added by the changeset. The block_timestamp migration comment
+    in cache.rs (:241-246) states it with "the reader falls back to the cached block header", and the
+    history.rs comments at :402-403, :520-521, :601-602 and the test doc :777-780 state it again. The
+    cache.rs copy is also inaccurate, because ensure_block_header_via (history.rs:540-555) fetches the
+    header from the provider on a cache miss, so the fallback is not to the cached header only.
+  fix: One owner, the doc of the log_timestamp helper that b2-1 introduces in history.rs. The cache.rs
+    migration comment says only what the column holds (the block's timestamp in seconds as the provider
+    sent it with eth_getLogs, NULL when the provider omitted it or the row predates the migration). The
+    history.rs comments shrink or go as in b2-4 and b2-5.
+  decision: FIX
+  score: 6
+  reason: One fact stated in five comments across two batches, one copy slightly wrong. Removes comment
+    lines. The two batch findings each fix their own half, so they must share one task to reach one owner.
+  same:
+  - b1-1
+  - b2-4
+  - b2-5
+  triage:
+    id: cross-1
+    decision: FIX
+    score: 6
+    reason: the cross-batch view of b2-4 and b1-1; one task so the fact gets exactly one owner
+    task: t1
+- id: b1-1
+  at:
+  - src/evm/cache.rs:241-246
+  reach:
+  - src/evm/cache.rs:241-246
+  row: wrong-layer doc
+  claim: 'The comment that the changeset added on the block_timestamp migration describes the query path
+    in history.rs (EvmEvent.timestamp, skipping the eth_getBlockByNumber fetch, "the reader falls back
+    to the cached block header") rather than the column. The fallback fact is stated again at history.rs:401-402,
+    520-521 and 601-602, and it is inaccurate, because ensure_block_header_via (history.rs:540-555) fetches
+    the header on a cache miss. It is also compressed ("Nullable: most providers omit it, …" joins a second
+    idea with a colon, and "— in both cases" is a dash clause), it has six lines, and "the reader" has
+    no referent in the schema.'
+  fix: A comment of two or three plain sentences about the column only. For example, "The timestamp of
+    the log's block, in seconds, as the provider sent it with eth_getLogs. Not every provider sends it.
+    It is NULL when the provider left it out, and on rows written before this migration." The fallback
+    stays documented in history.rs alone.
+  decision: FIX
+  score: 6
+  reason: The comment states the caller's rule twice and gets it slightly wrong ("cached" header). Cause
+    (b) of a long comment, because it describes the caller instead of the column.
+  same: []
+  triage:
+    id: b1-1
+    decision: FIX
+    score: 6
+    reason: the migration comment describes history.rs and is slightly false (a cache miss fetches from
+      the provider); it must shrink in the same task that gives the fact its owner
+    task: t1
+- id: b2-7
+  at:
+  - src/evm/history.rs:783-796
+  reach:
+  - src/evm/history.rs:664-689
+  - src/evm/history.rs:782-808
+  row: repeated derivation
+  claim: The new test builds its cache inline and repeats three of warm_cache's lines. They are the header
+    for block 0 (:787 vs :673), the anchor header for block 200 (:790 vs :682), and record_scanned_range(&fh,
+    0, 200, &BH_200) (:796 vs :687). The anchor setup that make_history depends on is now written twice.
+  fix: Extract `fn anchored_cache() -> Arc<LogCache>` with the block-0 and block-200 headers, which make_history
+    needs. warm_cache adds its headers and logs on top of it, and the new test adds its block-150 log.
+    Each caller records the scanned range after inserting its logs.
+  decision: FIX
+  score: 5
+  reason: A test fixture built inline twice. Test-local, about 15 lines.
+  same:
+  - b2-17
+  triage:
+    id: b2-7
+    decision: FIX
+    score: 5
+    reason: the new test rebuilds warm_cache's anchor headers inline
+    task: t1
+- id: b2-8
+  at:
+  - src/evm/history.rs:777-780
+  - src/evm/history.rs:792
+  reach:
+  - src/evm/history.rs:777-780
+  - src/evm/history.rs:792
+  row: compressed doc
+  claim: The new test doc is four lines long. It restates the rule (b2-4) and hangs its proof on a reduced
+    clause after an em dash ("— proven by leaving no header cached … so a header fetch would error the
+    walk"). The comment at :792 ("deliberately NO header for 150") repeats the doc.
+  fix: Two plain sentences, for example "Checks that a log with its own block_timestamp needs no block
+    header. The cache holds no header for block 150, and the mock provider has no get_block_by_number
+    reply queued, so a header fetch would fail the walk." Drop the repeat at :792 or shorten it to "No
+    header for block 150."
+  decision: FIX
+  score: 5
+  reason: A long, compressed comment that states a fact twice, on changed lines.
+  same:
+  - b2-4
+  triage:
+    id: b2-8
+    decision: FIX
+    score: 5
+    reason: the new test doc is four compressed lines that restate the rule log_timestamp owns
+    task: t1
+- id: b2-16
+  at:
+  - src/evm/history.rs:531
+  reach:
+  - src/evm/history.rs:531
+  row: narrating doc comment
+  claim: The ensure_block_header_via doc is a noun phrase ("Cache-first block-header lookup.") with no
+    "Errors when" for a block that the provider does not have. b2-1 makes it the callee of the new timestamp
+    rule.
+  fix: '"Returns the header of the given block, from the cache or else from the provider, and caches a
+    fetched header. Errors when the provider has no such block."'
+  decision: SKIP
+  score: 4
+  reason: Unchanged line, and missing_errors_doc is allowed. True but adds little.
+  same: []
+  triage:
+    id: b2-16
+    decision: FIX
+    score: 5
+    reason: overrules SKIP 4; t1's log_timestamp doc points to ensure_block_header_via for its errors,
+      so that doc must state them
+    task: t1
+check: ok

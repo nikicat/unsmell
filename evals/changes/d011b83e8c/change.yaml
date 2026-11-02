@@ -1,0 +1,47 @@
+id: d011b83e8c
+fixture: dengi-seb
+seen:
+- run: dengi-seb-20261102-135449
+  round: 1
+  change: t5
+judge: null
+labels:
+- label: bad
+  note: it's better be iban validation
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b1-10
+  at:
+  - seb.py:97
+  - schema.sql:2
+  reach:
+  - seb.py:97
+  - schema.sql:2
+  - schema.sql:22
+  - schema.sql:25
+  row: misleading name
+  claim: the value named iban (and the txn.iban key column) holds the account uid when the account has
+    no IBAN; Enable Banking account uids are issued per session, so such an account would be re-keyed,
+    and its history duplicated, after every re-authorization
+  fix: either skip (or exit on) accounts without an IBAN and keep the column, or rename the column to
+    account_key and key on a stable identifier; the derivation lives on Account (b1-5)
+  decision: ASK
+  score: 6
+  reason: two defensible designs; changes a stored schema; the uid-per-session claim should be confirmed
+    against the Enable Banking docs
+  same:
+  - b1-5
+  triage:
+    id: b1-10
+    decision: ASK
+    score: 6
+    reason: Enable Banking documents uid as valid only while its session is AUTHORIZED, and identification_hash
+      as the cross-session id; so a no-IBAN account is re-keyed on every login (a bug). The fix renames
+      a stored column, so the user decides
+    task: t5
+    after:
+    - t1
+after:
+- 2233303edb
+check: ok

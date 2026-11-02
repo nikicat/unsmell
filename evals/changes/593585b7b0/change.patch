@@ -1,0 +1,16 @@
+diff --git a/evals/run.py b/evals/run.py
+index c4f3459..51fa5a5 100755
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -87,8 +87,9 @@ def clear(repo):
+ 
+ def copy_tree(source, rev, repo):
+     """Writes the files of source at rev into repo, without any of source's history."""
+-    archive = subprocess.run(["git", "-C", str(source), "archive", rev], check=True, capture_output=True).stdout
+-    subprocess.run(["tar", "-x", "-C", str(repo)], input=archive, check=True)
++    env = os.environ | {"GIT_INDEX_FILE": str(repo / ".git" / "copy-index")}
++    git(source, "read-tree", rev, env=env)
++    git(source, f"--work-tree={repo}", "checkout-index", "--all", env=env)
+ 
+ 
+ def materialize(fixture, spec, workdir):

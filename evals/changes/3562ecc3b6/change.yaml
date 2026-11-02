@@ -1,0 +1,108 @@
+id: 3562ecc3b6
+fixture: unsmell-evals
+seen:
+- run: unsmell-evals-20261102-150632
+  round: 1
+  change: t8
+judge: null
+labels: []
+findings:
+- id: b1-11
+  at:
+  - evals/README.md:61-72
+  reach:
+  - evals/README.md:61-72
+  row: ambiguous noun
+  claim: The README says that change.patch "is one hunk of one round" and lists the labels as good, bad
+    or neutral. changes.py:18-20 makes a change the patch of one task of one skill run, and changes.py:50
+    also has unsure. The README also repeats the id-hashing and rounds/ facts that the changes.py docstring
+    and change_id already state.
+  fix: Describe a change as the patch of one task of one round, list the four labels, and point to `evals/changes.py
+    --help` for what change.yaml holds and how the id is made, instead of restating it.
+  decision: FIX
+  score: 9
+  reason: the doc states something false
+  same: []
+  triage:
+    id: b1-11
+    decision: FIX
+    score: 9
+    reason: the doc states something false
+    task: t8
+- id: b1-15
+  at:
+  - evals/README.md:16-17
+  reach:
+  - evals/README.md:16-17
+  row: ambiguous noun
+  claim: The README says that every round invokes `/unsmell:unsmell fix everything`. That text is only
+    the default of --args at run.py:179.
+  fix: say that each round invokes /unsmell:unsmell with the text of --args, which is `fix everything`
+    by default
+  decision: FIX
+  score: 5
+  reason: the doc says less than the code
+  same: []
+  triage:
+    id: b1-15
+    decision: FIX
+    score: 5
+    reason: the doc says less than the code
+    task: t8
+- id: b2-29
+  at:
+  - evals/changes.py:18-25
+  reach:
+  - evals/changes.py:18-25
+  - evals/changes.py:70
+  - evals/README.md:63-72
+  row: duplicated knowledge
+  claim: 'The module doc explains that the id hashes the changed lines so a later run lands in the same
+    directory, which change_id''s doc and README.md:68-70 state again, and why rounds/<run>/ is kept,
+    which README.md:71-72 states again. README contradicts the code: it calls change.patch ''one hunk
+    of one round'' (the code stores one task) and says a label carries ''a category'' (no such field).'
+  fix: The module doc says what the tool is for in two lines and points to README; README owns the layout
+    and is corrected to one task per change and no category; change_id keeps its own contract.
+  decision: FIX
+  score: 6
+  reason: one fact in three places, one copy already false
+  same:
+  - b2-30
+  triage:
+    id: b2-29
+    decision: FIX
+    score: 6
+    reason: one fact in three places, one copy already false
+    task: t8
+- id: cross-6
+  at:
+  - evals/README.md:61-72
+  - evals/changes.py:18-25
+  - evals/changes.py:50
+  - evals/changes.py:70
+  reach:
+  - evals/README.md:61-72
+  - evals/changes.py:6-26
+  - evals/changes.py:69-73
+  row: duplicated knowledge
+  claim: 'What a change is, its labels, how its id is made and why rounds/<run>/ is kept are stated in
+    README.md:61-72 and again in the changes.py module doc (18-25) and change_id''s doc (70). The README
+    copy is false: it calls change.patch "one hunk of one round" where changes.py stores the patch of
+    one task, lists the labels as good, bad and neutral where LABELS also has unsure, and gives a label
+    "a category" that change.yaml has no field for.'
+  fix: README owns the layout and is corrected to one task of one round per change, the four labels and
+    no category. The changes.py module doc says what the tool is for and points to the README; change_id's
+    doc keeps only its own contract (what the id hashes).
+  decision: FIX
+  score: 9
+  reason: one fact in three places across two batches, and one copy states something false
+  same:
+  - b1-11
+  - b2-29
+  triage:
+    id: cross-6
+    decision: FIX
+    score: 9
+    reason: one fact in three places across two batches, and one copy states something false
+    task: t8
+check: ok

@@ -1,0 +1,68 @@
+id: 3f40243a4f
+fixture: cf-log-timestamp
+seen:
+- run: cf-log-timestamp-20261102-005337
+  round: 1
+  change: t2
+judge: null
+labels:
+- label: good
+  by: user
+  date: '2026-11-02'
+findings:
+- id: b2-4
+  at:
+  - src/evm/history.rs:783-796
+  reach:
+  - src/evm/history.rs:664-689
+  - src/evm/history.rs:782-796
+  row: repeated derivation
+  claim: 'The new test iter_uses_log_block_timestamp_without_header_fetch at history.rs:783-796 rebuilds
+    warm_cache''s fixture inline. It repeats open_in_memory with compute_filter_hash, the block 0 and
+    block 200 header inserts (same arguments as 669 and 678), and record_scanned_range(&fh, 0, 200, &BH_200)
+    (same as 687).
+
+    '
+  fix: 'Extract `fn anchored_cache() -> (Arc<LogCache>, [u8; 32])` in the tests module. It opens the in-memory
+    cache, computes fh, inserts the headers for blocks 0 and 200, and records the scanned range 0..=200
+    with BH_200. warm_cache calls it and then adds the headers for blocks 100 and 101 and the three logs.
+    The new test calls it and then inserts its block-150 log. First check that LogCache allows record_scanned_range
+    before insert_logs. warm_cache currently records the range after inserting the logs.
+
+    '
+  decision: FIX
+  score: 5
+  reason: A fixture is built twice, one copy on changed lines. The change is test-only and small.
+  same: []
+  triage:
+    id: b2-4
+    decision: FIX
+    score: 5
+    task: t2
+    reason: verified history.rs:783-793 rebuilds warm_cache's setup
+- id: b2-5
+  at:
+  - src/evm/history.rs:777-780
+  reach:
+  - src/evm/history.rs:777-780
+  row: compressed doc
+  claim: 'The doc of the new test at history.rs:777-780 runs four lines and hangs its proof on an em-dash
+    appositive ("— proven by leaving no header cached …").
+
+    '
+  fix: '"/// Checks that a log with its own `block_timestamp` gives its event that timestamp without a
+    block-header fetch. /// The cache holds no header for the log''s block, and the mock provider has
+    no reply queued, so a fetch would /// fail the walk."
+
+    '
+  decision: SKIP
+  score: 4
+  reason: The doc is correct and only compressed. Rewording it scores under the threshold.
+  same: []
+  triage:
+    id: b2-5
+    decision: SKIP
+    score: 4
+    task: t2
+    reason: its reach overlaps t2's, so the t2 patch carries the doc as it lands
+check: ok

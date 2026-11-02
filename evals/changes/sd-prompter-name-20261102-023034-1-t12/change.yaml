@@ -1,0 +1,39 @@
+id: sd-prompter-name-20261102-023034-1-t12
+fixture: sd-prompter-name
+seen:
+- run: sd-prompter-name-20261102-023034
+  round: 1
+  change: t12
+judge: null
+labels: []
+findings:
+- id: b1-16
+  at:
+  - internal/proxy/forward.go:38-40
+  - internal/proxy/prompter.go:34-36
+  reach:
+  - internal/proxy/forward.go:38-40
+  - internal/proxy/prompter.go:23-46
+  row: duplicated knowledge
+  claim: 'reported by the t4 editor: callForwarder''s type doc (forward.go:38-40) and the prompterBridge
+    type doc (prompter.go:34-36) both state that the exchange payload with the DH-encrypted password passes
+    through unread; both lines are unchanged by the changeset'
+  fix: callForwarder owns that it forwards bodies verbatim; the prompterBridge doc keeps only that the
+    dispatcher never sees the plaintext, or points to callForwarder
+  decision: PLAN
+  score: 5
+  reason: unchanged lines in both files
+  same:
+  - b1-13
+  triage:
+    id: b1-16
+    decision: PLAN
+    score: 5
+    reason: 'found by the t4 editor; unchanged lines. No patch: t4''s patch already shows the prompterBridge
+      side'
+    task: t12
+    after:
+    - t4
+after:
+- 4d5efb4fb1
+check: ok

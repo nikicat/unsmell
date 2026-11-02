@@ -1,0 +1,46 @@
+diff --git a/seb.py b/seb.py
+index ab9a4a1..dc6d8d0 100644
+--- a/seb.py
++++ b/seb.py
+@@ -93,6 +93,19 @@ def psu_headers() -> dict[str, str]:
+     return {"Psu-Ip-Address": ip, "Psu-User-Agent": "dengi"}
+ 
+ 
++def parse_redirect(url: str, state: str) -> str:
++    """Returns the authorization code from the URL that the bank redirected to.
++    Exits when the URL does not belong to the login with this state.
++    Exits with the bank's error and error_description when the URL has no code."""
++    q = parse_qs(urlparse(url).query)
++    if q.get("state") != [state]:
++        sys.exit(f"bad redirect: {q}")
++    if code := q.get("code"):
++        return code[0]
++    reason = q.get("error", ["no code"]) + q.get("error_description", [])
++    sys.exit(f"login failed: {': '.join(reason)}")
++
++
+ @dataclass(frozen=True)
+ class EnableBanking:
+     config: Config
+@@ -114,7 +127,7 @@ class EnableBanking:
+ 
+     def authorize(self) -> Session:
+         """Logs the user in at the bank and stores the new session.
+-        Exits when the pasted URL does not belong to this login."""
++        Exits as parse_redirect does for the pasted URL."""
+         state = str(uuid.uuid4())
+         # 180 days is the PSD2 maximum. The bank may grant less.
+         valid_until = datetime.now(timezone.utc) + timedelta(days=180)
+@@ -126,10 +139,8 @@ class EnableBanking:
+             "psu_type": "personal",
+         })["url"]
+         print(f"Open, log in with Smart-ID, then paste the URL you land on:\n{url}")
+-        q = parse_qs(urlparse(input("> ").strip()).query)
+-        if q.get("state") != [state]:
+-            sys.exit(f"bad redirect: {q}")
+-        session = Session.from_json(self.call("POST", "/sessions", json={"code": q["code"][0]}))
++        code = parse_redirect(input("> ").strip(), state)
++        session = Session.from_json(self.call("POST", "/sessions", json={"code": code}))
+         session.save(SESSION)
+         return session
+ 
