@@ -79,10 +79,11 @@ The loop:
 ```sh
 evals/run.py --jobs 5 evals/fixtures/*          # 1. run the skill
 evals/changes.py extract ~/.cache/unsmell-eval/runs/<run>...   # 2. split into changes
-evals/changes.py judge                          # 3. propose labels for new changes
-evals/changes.py next                           # 4. review one in the review repo, least certain first
+evals/changes.py check                          # 3. run each new change's fixture check
+evals/changes.py judge                          # 4. propose labels for new changes
+evals/changes.py next                           # 5. review one in the review repo, least certain first
 evals/changes.py label ID bad -f b1-4 -n "says how, not what"
-evals/changes.py score ~/.cache/unsmell-eval/runs/<run>...     # 5. count by label
+evals/changes.py score ~/.cache/unsmell-eval/runs/<run>...     # 6. count by label
 ```
 
 `next` and `show ID` rebuild the fixture in the review repo. Its HEAD is the

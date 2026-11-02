@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pydantic"]
+# ///
 """Runs unsmell on fixtures in a loop and reports whether it reaches a fixed point.
 
 See evals/README.md for the fixture format and how a run is isolated.
@@ -14,10 +18,21 @@ import sys
 import tomllib
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, NotRequired, Self, TypedDict, cast
+from typing import Annotated, NamedTuple, Self
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    DirectoryPath,
+    Discriminator,
+    Field,
+    Tag,
+    ValidationError,
+    computed_field,
+)
 
 SKILL_REPO = Path(__file__).resolve().parent.parent
 SKILL_MD = SKILL_REPO / "skills" / "unsmell" / "SKILL.md"
@@ -134,56 +149,49 @@ def commit_base(repo: Path) -> None:
             shutil.rmtree(item) if item.is_dir() and not item.is_symlink() else item.unlink()
 
 
-@dataclass(frozen=True)
-class Commit:
+class Commit(BaseModel, frozen=True):
     """A fixture origin that is a commit in another repo. The commit is the head, and its parent is the base."""
 
-    source: Path
-    rev: str
+    source: Annotated[Path, AfterValidator(Path.expanduser)]
+    rev: str = Field(alias="commit")
 
 
-@dataclass(frozen=True)
-class Trees:
+class Trees(BaseModel, frozen=True):
     """A fixture origin that the fixture directory holds in head/ and, unless the base is empty, in base/."""
 
-    base: Path | None
-    head: Path
+    base: DirectoryPath | None
+    head: DirectoryPath
 
 
-@dataclass(frozen=True)
-class Fixture:
+def origin_kind(spec: object) -> str:
+    """Returns "commit" when the fixture.toml data names a commit, and "trees" otherwise."""
+    return "commit" if isinstance(spec, dict) and "commit" in spec else "trees"
+
+
+class Fixture(BaseModel, frozen=True):
     """A changeset that the eval reviews, read from a fixture directory."""
 
     name: str
     check: str  # a shell command that must pass after every round
-    origin: Commit | Trees
+    origin: Annotated[Annotated[Commit, Tag("commit")] | Annotated[Trees, Tag("trees")], Discriminator(origin_kind)]
 
     @classmethod
     def load(cls, path: Path) -> Self:
         """Reads the fixture stored in the directory at path.
 
-        Errors when fixture.toml has no check, names a commit without a source, or names neither a commit
-        nor a head/ tree.
+        Errors when fixture.toml has no check, names a commit without a source, or names no commit while there
+        is no head/.
         """
         spec = tomllib.loads((path / "fixture.toml").read_text())
-        if "check" not in spec:
-            raise ValueError(f"{path}: fixture.toml has no check")
-        match spec:
-            case {"commit": rev, "source": source}:
-                origin = Commit(Path(source).expanduser(), rev)
-            case {"commit": _}:
-                raise ValueError(f"{path}: fixture.toml names a commit but no source")
-            case _ if (path / "head").is_dir():
-                origin = Trees(path / "base" if (path / "base").is_dir() else None, path / "head")
-            case _:
-                raise ValueError(f"{path}: fixture.toml names no commit, and there is no head/")
-        return cls(path.name, spec["check"], origin)
+        trees = {"head": path / "head", "base": base if (base := path / "base").is_dir() else None}
+        try:
+            return cls.model_validate({**spec, "name": path.name, "origin": spec | trees})
+        except ValidationError as e:
+            raise ValueError(f"{path}: fixture.toml is invalid: {e}") from None
 
-    def run_check(self, repo: Path, env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    def run_check(self, repo: Path) -> subprocess.CompletedProcess[str]:
         """Runs the fixture's check in repo and returns the finished process, with its output as text."""
-        return subprocess.run(
-            self.check, shell=True, cwd=repo, env=env, capture_output=True, text=True, errors="replace"
-        )
+        return subprocess.run(self.check, shell=True, cwd=repo, capture_output=True, text=True, errors="replace")
 
     def materialize(self, repo: Path) -> None:
         """Creates a git repo at repo whose HEAD is the fixture's base and whose working tree is its head."""
@@ -194,11 +202,11 @@ class Fixture:
         # The round commits are scratch state, so they must not trigger the user's signing setup.
         git(repo, "config", "commit.gpgsign", "false")
         match self.origin:
-            case Commit(source, rev):
+            case Commit(source=source, rev=rev):
                 copy_tree(source, f"{rev}^", repo)
                 commit_base(repo)
                 copy_tree(source, rev, repo)
-            case Trees(base, head):
+            case Trees(base=base, head=head):
                 if base:
                     shutil.copytree(base, repo, dirs_exist_ok=True)
                 commit_base(repo)
@@ -228,27 +236,9 @@ class RunDir:
     def report(self) -> Path:
         return self.path / "report.json"
 
-    def log(self, n: int) -> Path:
-        """Returns the path of round n's claude output."""
-        return self.path / f"round-{n}.json"
-
-    def reply(self, n: int) -> "Reply":
-        """Returns round n's claude reply.
-
-        Errors when its output is not JSON.
-        """
-        return Reply.parse(self.log(n).read_text())
-
-    def record(self, n: int) -> Path:
-        """Returns the path that holds round n's skill run directories (§3.0 of SKILL.md)."""
-        return self.path / f"round-{n}"
-
-    def keep_record(self, n: int) -> None:
-        """Moves the skill's record of round n, if it left one, out of the repo to record(n)."""
-        record = self.repo / ".git" / "unsmell"
-        if record.exists():
-            shutil.move(record, self.record(n))
-            git(self.repo, "worktree", "prune")  # editors' worktrees the skill left behind
+    def round(self, n: int) -> "RunRound":
+        """Returns round n of the run, counting the fixture's head as round 0."""
+        return RunRound(self, n)
 
     def stamp_skill_hash(self) -> None:
         """Records which skill text the rounds ran, so that their changes can be traced to it."""
@@ -259,19 +249,50 @@ class RunDir:
         stamp = self.path / "skill.sha256"
         return stamp.read_text().strip() if stamp.exists() else "unknown"
 
-    def tag_round(self, n: int, tree: str) -> None:
-        """Keeps tree as round n's result, at refs/rounds/n in the repo."""
-        commit = git(self.repo, "commit-tree", tree, "-m", f"round {n}").strip()
-        git(self.repo, "update-ref", f"refs/rounds/{n}", commit)
 
-    def round_patch(self, n: int) -> str:
-        """Returns the binary diff of what round n changed."""
-        return git(self.repo, "diff", "--binary", f"refs/rounds/{n - 1}", f"refs/rounds/{n}")
+@dataclass(frozen=True)
+class RunRound:
+    """One round of an eval run: what run.py keeps of it in the run directory, and its tree in the run's repo."""
+
+    run: RunDir
+    n: int
+
+    @property
+    def log(self) -> Path:
+        """The path of the round's claude output."""
+        return self.run.path / f"round-{self.n}.json"
+
+    def reply(self) -> "Reply":
+        """Returns the round's claude reply.
+
+        Errors with ValidationError when its output is not claude's JSON reply.
+        """
+        return Reply.model_validate_json(self.log.read_text())
+
+    @property
+    def record(self) -> Path:
+        """The path that holds the round's skill run directories (§3.0 of SKILL.md)."""
+        return self.run.path / f"round-{self.n}"
+
+    def keep_record(self) -> None:
+        """Moves the skill's record of the round, if it left one, out of the repo to record."""
+        record = self.run.repo / ".git" / "unsmell"
+        if record.exists():
+            shutil.move(record, self.record)
+            git(self.run.repo, "worktree", "prune")  # editors' worktrees the skill left behind
+
+    def tag(self, tree: str) -> None:
+        """Keeps tree as the round's result, at refs/rounds/n in the repo."""
+        commit = git(self.run.repo, "commit-tree", tree, "-m", f"round {self.n}").strip()
+        git(self.run.repo, "update-ref", f"refs/rounds/{self.n}", commit)
+
+    def patch(self) -> str:
+        """Returns the binary diff of what the round changed."""
+        return git(self.run.repo, "diff", "--binary", f"refs/rounds/{self.n - 1}", f"refs/rounds/{self.n}")
 
 
-@dataclass
-class Round:
-    """One round's row in report.json. Reports from early runs lack some fields, which load as zero."""
+class Round(BaseModel):
+    """One round's row in report.json. Rows from early runs lack the fields after round, which load as zero."""
 
     round: int
     cost_usd: float = 0.0
@@ -289,56 +310,38 @@ class Round:
         )
 
 
-class RoundRow(TypedDict):
-    """A round as stored in report.json. Rows from early runs lack the fields after round."""
+class Report(BaseModel):
+    """The outcome of one eval run, kept as report.json in its run directory.
 
-    round: int
-    cost_usd: NotRequired[float]
-    added: NotRequired[int]
-    removed: NotRequired[int]
-    reversals: NotRequired[int]
-    rework: NotRequired[int]
-    check: NotRequired[bool]
-    tree: NotRequired[str]
+    Reports from older runs also hold `workdir`, which is ignored.
+    """
 
+    run: RunDir = Field(exclude=True)  # where the report lives; not stored in it
+    fixture_name: str = Field(alias="fixture")
+    rounds: list[Round] = Field(default_factory=list[Round])
+    # The exception that stopped the run, or None when no round raised.
+    error: str | None = None
 
-class ReportFile(TypedDict):
-    """A report.json as stored. Reports from older runs also hold `workdir`, which is ignored."""
-
-    fixture: str
-    rounds: list[RoundRow]
-
-
-@dataclass
-class Report:
-    """The outcome of one eval run, kept as report.json in its run directory."""
-
-    run: RunDir  # where the report lives; not stored in it
-    fixture_name: str
-    rounds: list[Round] = field(default_factory=list[Round])
-
+    @computed_field
     @property
     def converged(self) -> bool:
-        return self.rounds[-1].added == self.rounds[-1].removed == 0
+        return self.error is None and bool(self.rounds) and self.rounds[-1].added == self.rounds[-1].removed == 0
 
+    @computed_field
     @property
     def oscillated(self) -> bool:
         return any(r.reversals for r in self.rounds)
 
     @classmethod
     def load(cls, run: RunDir) -> Self:
-        """Reads the run's report.json."""
-        data = cast(ReportFile, json.loads(run.report.read_text()))
-        return cls(run, data["fixture"], [Round(**r) for r in data["rounds"]])
+        """Reads the run's report.json.
+
+        Errors with ValidationError when it does not hold a report.
+        """
+        return cls.model_validate(json.loads(run.report.read_text()) | {"run": run})
 
     def save(self) -> None:
-        data = {
-            "fixture": self.fixture_name,
-            "rounds": [asdict(r) for r in self.rounds],
-            "converged": self.converged,
-            "oscillated": self.oscillated,
-        }
-        self.run.report.write_text(json.dumps(data, indent=2))
+        self.run.report.write_text(self.model_dump_json(by_alias=True, indent=2, exclude_none=True))
 
     def __str__(self) -> str:
         return (
@@ -347,37 +350,13 @@ class Report:
         )
 
 
-class ReplyFile(TypedDict, total=False):
-    """The fields of claude's JSON stdout that Reply reads."""
-
-    result: str
-    structured_output: dict[str, object]
-    total_cost_usd: float
-    is_error: bool
-
-
-@dataclass(frozen=True)
-class Reply:
+class Reply(BaseModel, frozen=True):
     """The JSON reply of one headless claude call."""
 
-    result: str
-    structured: dict[str, object] | None  # the reply under --json-schema
-    cost_usd: float
+    result: str = ""
+    structured: dict[str, object] | None = Field(None, alias="structured_output")  # the reply under --json-schema
+    cost_usd: float = Field(0.0, alias="total_cost_usd")
     is_error: bool = False
-
-    @classmethod
-    def parse(cls, text: str) -> Self:
-        """Reads a reply from claude's JSON stdout.
-
-        Errors when text is not JSON.
-        """
-        data = cast(ReplyFile, json.loads(text))
-        return cls(
-            data.get("result", ""),
-            data.get("structured_output"),
-            data.get("total_cost_usd", 0.0),
-            data.get("is_error", False),
-        )
 
 
 def claude(*args: str, prompt: str | None = None, cwd: Path | None = None, log: Path | None = None) -> Reply:
@@ -388,7 +367,7 @@ def claude(*args: str, prompt: str | None = None, cwd: Path | None = None, log: 
         prompt: Text to send on stdin. Without it, stdin is closed.
         log: File that gets stdout. Stderr goes beside it as .stderr when there is any.
 
-    Errors when claude exits non-zero, its stdout is not JSON, or the reply has is_error.
+    Errors when claude exits non-zero, its stdout is not a JSON reply, or the reply has is_error.
     """
     out = subprocess.run(
         ["claude", "-p", "--output-format", "json", "--no-session-persistence", *args],
@@ -404,18 +383,18 @@ def claude(*args: str, prompt: str | None = None, cwd: Path | None = None, log: 
         if out.stderr:
             log.with_suffix(".stderr").write_text(out.stderr)
     try:
-        reply = Reply.parse(out.stdout)
-    except json.JSONDecodeError:
+        reply = Reply.model_validate_json(out.stdout)
+    except ValidationError:
         raise RuntimeError(
-            f"claude exited {out.returncode} without JSON: {(out.stderr.strip() or out.stdout)[:200]}"
+            f"claude exited {out.returncode} without a JSON reply: {(out.stderr.strip() or out.stdout)[:200]}"
         ) from None
     if out.returncode or reply.is_error:
         raise RuntimeError(f"claude exited {out.returncode}: {(reply.result or out.stderr.strip())[:200]}")
     return reply
 
 
-def run_skill(run: RunDir, n: int, args: str) -> float:
-    """Runs round n of the skill on the run's repo and returns its cost in USD.
+def run_skill(rnd: RunRound, args: str) -> float:
+    """Runs the skill on the run's repo as the given round and returns its cost in USD.
 
     Errors as claude does.
     """
@@ -430,41 +409,51 @@ def run_skill(run: RunDir, n: int, args: str) -> float:
         # No --max-budget-usd: the agent sees the cap and skips the survey agents to stay under it.
         "--allowedTools",
         *ALLOWED,
-        cwd=run.repo,
-        log=run.log(n),
+        cwd=rnd.run.repo,
+        log=rnd.log,
     ).cost_usd
 
 
 def evaluate(fixture: Fixture, rounds: int, args: str) -> Report:
+    """Runs the skill on the fixture for at most `rounds` rounds and returns the report.
+
+    Errors with the exception of a round that fails. The report is saved first, with the error in it.
+    """
     run = RunDir.for_fixture(fixture.name)
     fixture.materialize(run.repo)
     run.stamp_skill_hash()
-    trees, report = [snapshot(run.repo)], Report(run, fixture.name)
+    trees, report = [snapshot(run.repo)], Report(run=run, fixture=fixture.name)
     deltas: list[Delta] = []
-    run.tag_round(0, trees[0])
-    for n in range(1, rounds + 1):
-        cost = run_skill(run, n, args)
-        run.keep_record(n)
-        trees.append(snapshot(run.repo))
-        delta = Delta.between(run.repo, trees[-2], trees[-1])
-        report.rounds.append(
-            Round(
-                round=n,
-                cost_usd=cost,
-                added=len(delta.added),
-                removed=len(delta.removed),
-                reversals=delta.reversals(deltas),
-                rework=delta.rework(deltas),
-                check=fixture.run_check(run.repo).returncode == 0,
-                tree=trees[-1],
+    run.round(0).tag(trees[0])
+    try:
+        for n in range(1, rounds + 1):
+            rnd = run.round(n)
+            cost = run_skill(rnd, args)
+            rnd.keep_record()
+            trees.append(snapshot(run.repo))
+            delta = Delta.between(run.repo, trees[-2], trees[-1])
+            report.rounds.append(
+                Round(
+                    round=n,
+                    cost_usd=cost,
+                    added=len(delta.added),
+                    removed=len(delta.removed),
+                    reversals=delta.reversals(deltas),
+                    rework=delta.rework(deltas),
+                    check=fixture.run_check(run.repo).returncode == 0,
+                    tree=trees[-1],
+                )
             )
-        )
-        run.tag_round(n, trees[-1])
-        print(f"{fixture.name} {report.rounds[-1]}", flush=True)
-        if delta.empty():
-            break
-        deltas.append(delta)
-    report.save()
+            rnd.tag(trees[-1])
+            print(f"{fixture.name} {report.rounds[-1]}", flush=True)
+            if delta.empty():
+                break
+            deltas.append(delta)
+    except Exception as e:
+        report.error = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        report.save()
     return report
 
 

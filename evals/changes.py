@@ -19,16 +19,28 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from functools import cached_property
 from pathlib import Path
-from typing import ClassVar, Literal, NamedTuple, NotRequired, Required, Self, TypedDict, cast, get_args
+from typing import (
+    Annotated,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    NotRequired,
+    Required,
+    Self,
+    TypedDict,
+    TypeVar,
+    cast,
+    get_args,
+)
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
-from run import CACHE, SKILL_MD, Fixture, Report, RunDir, changed_lines, claude, git, positive_int
+from pydantic import BaseModel, Field, SkipValidation, ValidationError
+from run import CACHE, SKILL_MD, Fixture, Report, RunDir, RunRound, changed_lines, claude, git, positive_int
 
 EVALS = Path(__file__).resolve().parent
 CHANGES = EVALS / "changes"
@@ -42,17 +54,15 @@ CURRENT = REVIEW / "current"
 # The least similarity at which prior offers a labelled change as a precedent.
 MIN_SIMILARITY = 1 / 3
 # ANSI SGR codes for show's output; NO_COLOR or a pipe turns them off.
-COLORS = {"FIX": "32", "ASK": "33", "PLAN": "36", "KEEP": "35", "SKIP": "90", "DISCARD": "90"}
+BOLD = "1"
+DIM = "2"
 TTY = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 
 
-class Label(StrEnum):
-    color: str  # the ANSI SGR code that show paints the label in
+class Painted(StrEnum):
+    """A vocabulary that show paints, each member in its own color."""
 
-    GOOD = "good", "32"
-    BAD = "bad", "31"
-    NEUTRAL = "neutral", "33"
-    UNSURE = "unsure", "90"  # looked at, but cannot judge it
+    color: str  # the ANSI SGR code that show paints the member in
 
     def __new__(cls, value: str, color: str) -> Self:
         member = str.__new__(cls, value)
@@ -60,9 +70,27 @@ class Label(StrEnum):
         return member
 
 
+class Label(Painted):
+    GOOD = "good", "32"
+    BAD = "bad", "31"
+    NEUTRAL = "neutral", "33"
+    UNSURE = "unsure", "90"  # looked at, but cannot judge it
+
+
+class Decision(Painted):
+    """The bucket that the skill's triage puts a finding in."""
+
+    FIX = "FIX", "32"
+    ASK = "ASK", "33"
+    KEEP = "KEEP", "35"
+    PLAN = "PLAN", "36"
+    SKIP = "SKIP", "90"
+    DISCARD = "DISCARD", "90"
+
+
 # The labels that the judge is told the meaning of, and so the ones it may answer and learn from.
 JudgeLabel = Literal[Label.GOOD, Label.BAD, Label.NEUTRAL]
-JUDGE_LABELS: tuple[Label, ...] = get_args(JudgeLabel)
+JUDGE_LABELS: frozenset[Label] = frozenset(get_args(JudgeLabel))
 
 
 class CheckStatus(StrEnum):
@@ -105,47 +133,33 @@ class FindingsFile(TypedDict, total=False):
     findings: list[RawFinding] | None
 
 
-class SeenRow(TypedDict):
-    """A sighting as stored in change.yaml."""
-
-    run: str
-    round: int
-    change: str
-
-
-class LabelRow(TypedDict):
-    """A label entry as stored in change.yaml."""
-
-    label: str
-    finding: NotRequired[str]
-    note: NotRequired[str]
-    by: NotRequired[str]
-    date: str
+T = TypeVar("T")
+# A field of change.yaml that is left out when it is empty.
+Omittable = Annotated[T, Field(exclude_if=lambda v: not v)]
+# Findings kept as read: validating them as Finding would drop and reorder the keys it does not list.
+StoredFindings = Annotated[list[Finding], SkipValidation]
 
 
-class ChangeFile(TypedDict):
-    """A change.yaml as stored."""
-
-    id: str
-    fixture: str
-    seen: list[SeenRow]
-    judge: dict[str, object] | None  # Judgement's fields, which it validates
-    labels: list[LabelRow]
-    findings: list[Finding]
-    after: NotRequired[list[str]]
-    check: NotRequired[str]
+def paint(text: object, code: str) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if TTY else str(text)
 
 
-def paint(text: object, code: str | None) -> str:
-    return f"\x1b[{code}m{text}\x1b[0m" if TTY and code else str(text)
+def paint_term(term: Painted) -> str:
+    """Returns a label or a decision in its color."""
+    return paint(term, term.color)
 
 
-def paint_label(text: str | None) -> str:
-    """Returns a label or a verdict in the label's color.
+def verdict_text(verdict: frozenset[Label]) -> str:
+    """Returns a verdict as its labels joined by a plus, as in bad+good, or an empty string when it has none."""
+    return "+".join(sorted(verdict))
 
-    A verdict that joins several labels stays plain.
+
+def paint_verdict(verdict: frozenset[Label]) -> str:
+    """Returns a verdict in its label's color.
+
+    A verdict of several labels stays plain.
     """
-    return paint(text, Label(text).color if text in Label else None)
+    return paint_term(min(verdict)) if len(verdict) == 1 else verdict_text(verdict)
 
 
 def load(path: Path) -> object:
@@ -154,6 +168,15 @@ def load(path: Path) -> object:
 
 def dump(path: Path, data: object) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True, width=100))
+
+
+def read_patch(path: Path) -> str | None:
+    """Returns the diff in a patch file.
+
+    Returns None when the file is missing or blank, which means the editor made no patch.
+    """
+    text = path.read_text() if path.exists() else ""
+    return text if text.strip() else None
 
 
 def change_id(patch: str) -> str:
@@ -168,11 +191,15 @@ def change_id(patch: str) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:10]
 
 
-def changes(skill_run: Path) -> dict[str, list[Finding]]:
-    """Returns the findings of one skill run directory, keyed by the id that the skill run gave each change.
+class LocalChange(NamedTuple):
+    """One change of a skill run, as its findings/*.yaml and decisions.yaml give it."""
 
-    Each finding carries its decision entry under `triage`.
-    """
+    findings: list[Finding]  # each carries its decision entry under `triage`
+    after: list[str]  # the ids that the skill run gave the changes it is stacked on
+
+
+def changes(skill_run: Path) -> dict[str, LocalChange]:
+    """Returns the changes of one skill run directory, keyed by the id that the skill run gave each."""
     findings = {
         f["id"]: f
         for p in sorted((skill_run / "findings").glob("*.yaml"))
@@ -182,15 +209,16 @@ def changes(skill_run: Path) -> dict[str, list[Finding]]:
     for d in cast(list[Triage] | None, load(skill_run / "decisions.yaml")) or []:
         if local_id := d.get("change") or d.get("task"):  # older runs wrote `task`
             by_change.setdefault(local_id, []).append({**findings.get(d["id"], {"id": d["id"]}), "triage": d})
-    return by_change
+    return {local_id: LocalChange(members, stacked_on(members)) for local_id, members in by_change.items()}
 
 
-def parse_after(value: str | list[str] | None) -> list[str]:
-    """Returns the ids that a decision's `after` names, as the skill run gave them.
+def stacked_on(members: list[Finding]) -> list[str]:
+    """Returns the ids that the first `after` among a change's decisions names.
 
-    `after` is a string such as "c1, c2" or a list.
+    `after` is a string such as "c1, c2" or a list of such strings.
     """
-    return re.findall(r"\w+", value) if isinstance(value, str) else value or []
+    after = next((a for f in members if (a := f["triage"].get("after"))), list[str]())
+    return [i for value in ([after] if isinstance(after, str) else after) for i in re.findall(r"\w+", value)]
 
 
 @dataclass(frozen=True)
@@ -208,21 +236,35 @@ class StoredRun:
     def meta(self) -> Path:
         return self.path / "meta.yaml"
 
-    def patch(self, n: int) -> Path:
-        """Returns the path of the diff that round n made."""
-        return self.path / f"round-{n}.patch"
-
-    def report(self, n: int) -> Path:
-        """Returns the path of the skill's report on round n."""
-        return self.path / f"round-{n}.md"
-
-    def record(self, n: int) -> Path:
-        """Returns the path that holds round n's skill run directories (§3.0 of SKILL.md)."""
-        return self.path / f"round-{n}"
+    def round(self, n: int) -> "StoredRound":
+        """Returns the stored copy of round n of the run."""
+        return StoredRound(self, n)
 
 
-@dataclass
-class Seen:
+@dataclass(frozen=True)
+class StoredRound:
+    """The copy of one round of an eval run, which save_round writes and the review of its changes reads."""
+
+    run: StoredRun
+    n: int
+
+    @property
+    def patch(self) -> Path:
+        """The path of the diff that the round made."""
+        return self.run.path / f"round-{self.n}.patch"
+
+    @property
+    def report(self) -> Path:
+        """The path of the skill's report on the round."""
+        return self.run.path / f"round-{self.n}.md"
+
+    @property
+    def record(self) -> Path:
+        """The path that holds the round's skill run directories (§3.0 of SKILL.md)."""
+        return self.run.path / f"round-{self.n}"
+
+
+class Seen(BaseModel):
     """A sighting of a change: the eval run and round in which the skill made it, and the id the skill run gave it."""
 
     run: str
@@ -230,18 +272,14 @@ class Seen:
     change: str
 
 
-@dataclass(kw_only=True)
-class LabelEntry:
+class LabelEntry(BaseModel):
     """A label that the user gave to a change, or to one of its findings."""
 
     label: Label
-    finding: str | None = None
-    note: str = ""
-    by: str | None = None  # written by older versions of label, and kept so that their files round-trip
-    date: str
-
-    def to_dict(self) -> dict[str, str]:
-        return {k: str(v) for k, v in vars(self).items() if v}
+    finding: Omittable[str | None] = None
+    note: Omittable[str] = ""
+    by: Omittable[str | None] = None  # written by older versions of label, and kept so that their files round-trip
+    date: date
 
 
 class JudgeReply(BaseModel, frozen=True):
@@ -265,8 +303,7 @@ class Match(NamedTuple):
     share: float
 
 
-@dataclass
-class Change:
+class Change(BaseModel):
     """A change that unsmell made in an eval run, stored in its own directory under CHANGES.
 
     It is the one way to read and write a change.yaml.
@@ -275,40 +312,21 @@ class Change:
     FILE: ClassVar[str] = "change.yaml"
 
     id: str
-    fixture_name: str
+    fixture_name: str = Field(alias="fixture")
     seen: list[Seen]
-    findings: list[Finding]  # the findings and decisions of the first sighting, which the patch was made for
-    labels: list[LabelEntry] = field(default_factory=list[LabelEntry])
     judge: Judgement | None = None
-    after: list[str] = field(default_factory=list[str])  # the ids of the changes it is stacked on
-    check: CheckStatus | None = None
+    labels: list[LabelEntry] = Field(default_factory=list[LabelEntry])
+    findings: StoredFindings  # the findings and decisions of the first sighting, which the patch was made for
+    after: Omittable[list[str]] = Field(default_factory=list[str])  # the ids of the changes it is stacked on
+    check: Omittable[CheckStatus | None] = None
 
     @classmethod
     def load(cls, id: str) -> Self:
         """Returns the stored change with the given id.
 
-        Errors when the change has no change.yaml.
+        Errors when the change has no change.yaml, and with ValidationError when the file does not fit Change.
         """
-        d = cast(ChangeFile, load(CHANGES / id / cls.FILE))
-        return cls(
-            id=d["id"],
-            fixture_name=d["fixture"],
-            seen=[Seen(**s) for s in d["seen"]],
-            findings=d["findings"],
-            labels=[
-                LabelEntry(
-                    label=Label(row["label"]),
-                    finding=row.get("finding"),
-                    note=row.get("note", ""),
-                    by=row.get("by"),
-                    date=row["date"],
-                )
-                for row in d["labels"]
-            ],
-            judge=Judgement.model_validate(d["judge"]) if d["judge"] else None,
-            after=d.get("after", []),
-            check=CheckStatus(d["check"]) if "check" in d else None,
-        )
+        return cls.model_validate(load(CHANGES / id / cls.FILE))
 
     @classmethod
     def all(cls) -> list[Self]:
@@ -316,19 +334,8 @@ class Change:
         return sorted((cls.load(p.parent.name) for p in CHANGES.glob(f"*/{cls.FILE}")), key=lambda c: c.id)
 
     def save(self) -> None:
-        data: dict[str, object] = {
-            "id": self.id,
-            "fixture": self.fixture_name,
-            "seen": [asdict(s) for s in self.seen],
-            "judge": self.judge and self.judge.model_dump(mode="json"),
-            "labels": [entry.to_dict() for entry in self.labels],
-            "findings": self.findings,
-        }
-        if self.after:
-            data["after"] = self.after
-        if self.check:
-            data["check"] = str(self.check)
-        dump(self.file, data)
+        # The findings go in as read, so that the YAML anchors they share survive.
+        dump(self.file, self.model_dump(mode="json", by_alias=True) | {"findings": self.findings})
 
     @property
     def dir(self) -> Path:
@@ -343,9 +350,9 @@ class Change:
         return self.dir / "change.patch"
 
     @property
-    def patch(self) -> str:
-        """The diff of the change, empty when the editor made none."""
-        return self.patch_file.read_text()
+    def patch(self) -> str | None:
+        """The diff of the change, as read_patch reads it."""
+        return read_patch(self.patch_file)
 
     @property
     def log_file(self) -> Path:
@@ -364,7 +371,7 @@ class Change:
     @property
     def report(self) -> Path:
         """The path of the skill's report on the round of the first sighting."""
-        return StoredRun.named(self.first.run).report(self.first.round)
+        return StoredRun.named(self.first.run).round(self.first.round).report
 
     @cached_property
     def fixture(self) -> Fixture:
@@ -374,7 +381,7 @@ class Change:
     @property
     def decisions(self) -> str:
         """The decisions of the findings, joined as in FIX/ASK."""
-        return "/".join(sorted({f["triage"]["decision"] for f in self.findings}))
+        return "/".join(sorted({Decision(f["triage"]["decision"]) for f in self.findings}))
 
     @property
     def claim(self) -> str:
@@ -391,13 +398,9 @@ class Change:
         return list({entry.finding: entry for entry in self.labels}.values())
 
     @property
-    def verdict(self) -> str | None:
-        """The label that counts, or None when the change has none.
-
-        Each finding's newest label counts, and so does the newest label on the whole change. When these labels
-        differ, the result joins them, as in good+bad.
-        """
-        return "+".join(sorted({entry.label for entry in self.newest_labels})) or None
+    def verdict(self) -> frozenset[Label]:
+        """The labels that count, one per finding and one for the whole change. Empty when the change has none."""
+        return frozenset(entry.label for entry in self.newest_labels)
 
     @property
     def notes(self) -> str:
@@ -407,7 +410,7 @@ class Change:
     @cached_property
     def tokens(self) -> set[str]:
         """The words of the changed lines and of the findings' claims."""
-        texts = [line.text for _, line in changed_lines(self.patch)]
+        texts = [line.text for _, line in changed_lines(patch)] if (patch := self.patch) is not None else []
         texts += [f.get("claim", "") for f in self.findings]
         return set(re.findall(r"\w+", "\n".join(texts)))
 
@@ -432,8 +435,8 @@ class Change:
         return next((m for m in self.ranked(others)[:1] if m.share >= MIN_SIMILARITY), None)
 
     def neighbours(self, labelled: list["Change"], k: int = 5) -> list["Change"]:
-        """Returns the k labelled changes most similar to this one."""
-        return [m.change for m in self.ranked(labelled)[:k]]
+        """Returns the k labelled changes most similar to this one, leaving this one out."""
+        return [m.change for m in self.ranked([c for c in labelled if c.id != self.id])[:k]]
 
     def ancestors(self) -> list[str]:
         """Returns the ids of the changes that this one is stacked on, directly or not, each before its dependents."""
@@ -451,25 +454,29 @@ def extract(run: RunDir) -> list[str]:
     out = StoredRun.named(run.name)
     out.path.mkdir(parents=True, exist_ok=True)
     dump(out.meta, {"fixture": report.fixture_name, "skill": run.skill_hash(), "rounds": len(report.rounds)})
-    return [cid for r in report.rounds for cid in save_round(run, r.round, report.fixture_name, out)]
+    return [
+        cid for r in report.rounds for cid in save_round(run.round(r.round), out.round(r.round), report.fixture_name)
+    ]
 
 
-def save_round(run: RunDir, n: int, fixture_name: str, out: StoredRun) -> list[str]:
-    """Stores round n of run in out, with each of its changes in CHANGES, and returns the changes' ids."""
-    out.patch(n).write_text(run.round_patch(n))
-    out.report(n).write_text(run.reply(n).result)
+def save_round(rnd: RunRound, out: StoredRound, fixture_name: str) -> list[str]:
+    """Stores the round in out, with each of its changes in CHANGES, and returns the changes' ids."""
+    out.patch.write_text(rnd.patch())
+    out.report.write_text(rnd.reply().result)
     ids: list[str] = []
-    for skill_run in sorted(p.parent for p in run.record(n).glob("*/decisions.yaml")):
+    for skill_run in sorted(p.parent for p in rnd.record.glob("*/decisions.yaml")):
         shutil.copytree(
             skill_run,
-            out.record(n) / skill_run.name,
+            out.record / skill_run.name,
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("index", "worktrees", "target"),
         )
         found = changes(skill_run)
         saved = {
-            local_id: save_change(skill_run, fixture_name, Seen(run.name, n, local_id), members)
-            for local_id, members in found.items()
+            local_id: save_change(
+                skill_run, fixture_name, Seen(run=rnd.run.name, round=rnd.n, change=local_id), local.findings
+            )
+            for local_id, local in found.items()
         }
         link_stacked(saved, found)
         ids += [c.id for c in saved.values()]
@@ -478,30 +485,28 @@ def save_round(run: RunDir, n: int, fixture_name: str, out: StoredRun) -> list[s
 
 def save_change(skill_run: Path, fixture_name: str, seen: Seen, members: list[Finding]) -> Change:
     """Stores one change of a skill run directory in CHANGES, adding seen to its sightings, and returns it."""
-    patch_file = skill_run / "fixes" / f"{seen.change}.patch"
-    patch = patch_file.read_text() if patch_file.exists() else ""
-    cid = change_id(patch) if patch.strip() else f"{seen.run}-{seen.round}-{seen.change}"
+    patch = read_patch(skill_run / "fixes" / f"{seen.change}.patch")
+    cid = change_id(patch) if patch is not None else f"{seen.run}-{seen.round}-{seen.change}"
     try:
         change = Change.load(cid)
     except FileNotFoundError:
-        change = Change(cid, fixture_name, seen=[], findings=members)
+        change = Change(id=cid, fixture=fixture_name, seen=[], findings=members)
     if seen not in change.seen:
         change.seen.append(seen)
     change.dir.mkdir(parents=True, exist_ok=True)
     if not change.patch_file.exists():
-        change.patch_file.write_text(patch)
+        change.patch_file.write_text("" if patch is None else patch)
     change.save()
     return change
 
 
-def link_stacked(saved: dict[str, Change], found: dict[str, list[Finding]]) -> None:
+def link_stacked(saved: dict[str, Change], found: dict[str, LocalChange]) -> None:
     """Records on each stacked change of one skill run (SKILL.md §3.0, step 4) the changes it is reviewed on top of.
 
-    saved and found map the id that the skill run gave each change to its stored Change and to its findings.
+    saved and found map the id that the skill run gave each change to its stored Change and to its LocalChange.
     """
     for local_id, change in saved.items():
-        after = next((after for f in found[local_id] if (after := f["triage"].get("after"))), None)
-        if parents := [saved[p].id for p in parse_after(after) if p in saved]:
+        if parents := [saved[p].id for p in found[local_id].after if p in saved]:
             change.after = parents
             change.save()
 
@@ -509,7 +514,8 @@ def link_stacked(saved: dict[str, Change], found: dict[str, list[Finding]]) -> N
 def judge_prompt(change: Change, examples: list[Change], skill: str) -> str:
     """Returns the prompt that asks the judge to label the change, showing it the labelled examples."""
     shown = "\n\n".join(
-        f"### Example {o.id}: labelled {o.verdict}\nNote: {o.notes}\n```diff\n{o.patch}```" for o in examples
+        f"### Example {o.id}: labelled {verdict_text(o.verdict)}\nNote: {o.notes}\n```diff\n{o.patch or ''}```"
+        for o in examples
     )
     return (
         "You label one change that a refactoring skill made, as good (worth making), bad (should not "
@@ -519,16 +525,16 @@ def judge_prompt(change: Change, examples: list[Change], skill: str) -> str:
         f"## The round's own report\n\n{change.report.read_text()[:6000]}\n\n"
         "## The findings and decisions the change was made for\n\n"
         f"{yaml.safe_dump(change.findings, allow_unicode=True)}\n\n"
-        f"## The change to label\n\n```diff\n{change.patch}```\n\n"
+        f"## The change to label\n\n```diff\n{change.patch or ''}```\n\n"
         f"## The skill\n\n{skill}"
     )
 
 
-def judge(ids: list[str], model: str, jobs: int) -> None:
+def judge(changes: list[Change], model: str, jobs: int) -> None:
     skill = SKILL_MD.read_text()
     stored = Change.all()
-    labelled = [c for c in stored if c.verdict in JUDGE_LABELS]
-    todo = [c for c in stored if (c.id in ids if ids else not c.judge and not c.verdict)]
+    labelled = [c for c in stored if len(c.verdict) == 1 and c.verdict <= JUDGE_LABELS]
+    todo = changes or [c for c in stored if not c.judge and not c.verdict]
 
     def one(change: Change) -> float:
         prompt = judge_prompt(change, change.neighbours(labelled), skill)
@@ -573,10 +579,14 @@ def build_rounds(fixture: Fixture, stored: StoredRun, upto: int, build: Path) ->
     git(build, "commit", "-q", "-m", "fixture head (round 0)")
     git(build, "tag", "round-0")
     for n in range(1, upto):
-        git(build, "apply", "--binary", str(stored.patch(n)))
+        git(build, "apply", "--binary", str(stored.round(n).patch))
         git(build, "add", "-A")
         git(build, "commit", "-q", "-m", f"round {n}")
     return build
+
+
+class PatchDoesNotApply(Exception):
+    """A change's patch, or the patch of a change it is stacked on, no longer applies."""
 
 
 def review_repo(change: Change, repo: Path = REVIEW_REPO) -> Path:
@@ -585,6 +595,8 @@ def review_repo(change: Change, repo: Path = REVIEW_REPO) -> Path:
     HEAD is the fixture's base. The index holds the changeset under review, any earlier rounds, and the changes
     this one is stacked on. The working tree adds the change. The repo is reset on each call, never recreated, so
     an editor can keep it open across changes.
+
+    Errors with PatchDoesNotApply when the change or a change it is stacked on no longer applies.
     """
     build = build_rounds(change.fixture, StoredRun.named(change.first.run), change.first.round, repo.parent / "build")
     if not (repo / ".git").exists():
@@ -606,17 +618,24 @@ def review_repo(change: Change, repo: Path = REVIEW_REPO) -> Path:
     git(repo, "checkout", "-q", "-f", "--detach", "FETCH_HEAD")
     git(repo, "reset", "-q", "--soft", "base")
     shutil.rmtree(build)
-    for parent in change.ancestors():  # staged with the changeset, so that git diff shows only what this change adds
-        git(repo, "apply", "--index", str(Change.load(parent).patch_file))
-    if change.patch.strip():
-        git(repo, "apply", "--intent-to-add", str(change.patch_file))  # new files show up in git diff too
+    try:
+        for parent in change.ancestors():  # staged with the changeset, so git diff shows only what this change adds
+            git(repo, "apply", "--index", str(Change.load(parent).patch_file))
+        if change.patch is not None:
+            git(repo, "apply", "--intent-to-add", str(change.patch_file))  # new files show up in git diff too
+    except subprocess.CalledProcessError as e:
+        raise PatchDoesNotApply(f"{e.cmd}\n{e.stderr}") from e
     return repo
 
 
-def current() -> str:
+def current() -> Change:
+    """Returns the change in the review repo.
+
+    Exits when no change is selected yet.
+    """
     if not CURRENT.exists():
         sys.exit("no change selected yet: run next, or show ID")
-    return CURRENT.read_text().strip()
+    return Change.load(CURRENT.read_text().strip())
 
 
 def select(change: Change) -> None:
@@ -628,59 +647,58 @@ def select(change: Change) -> None:
 def show(change: Change) -> None:
     """Prints the change in the review repo."""
     print(
-        paint(f"change {change.id}", "1") + f": {change.fixture_name} round {change.first.round}"
+        paint(f"change {change.id}", BOLD) + f": {change.fixture_name} round {change.first.round}"
         f" (seen {len(change.seen)}x)"
     )
     if change.after:
         print(f"  stacked on {', '.join(change.after)}, staged with the changeset")
     for f in change.findings:
         t = f["triage"]
-        decision = paint(f"{t['decision']} {t.get('score')}", COLORS.get(t["decision"]))
+        decision = Decision(t["decision"])
         print(
-            f"\n  {paint(f['id'], '1')}  {decision}  {f.get('row', '')}  {paint(', '.join(f.get('at', [])), '2')}"
-            f"\n    {paint('claim:', '2')}  {f.get('claim', '').strip()}"
-            f"\n    {paint('fix:', '2')}    {f.get('fix', '').strip()}"
-            f"\n    {paint('triage:', '2')} {t.get('reason', '').strip()}"
+            f"\n  {paint(f['id'], BOLD)}  {paint(f'{decision} {t.get("score")}', decision.color)}  {f.get('row', '')}"
+            f"  {paint(', '.join(f.get('at', [])), DIM)}"
+            f"\n    {paint('claim:', DIM)}  {f.get('claim', '').strip()}"
+            f"\n    {paint('fix:', DIM)}    {f.get('fix', '').strip()}"
+            f"\n    {paint('triage:', DIM)} {t.get('reason', '').strip()}"
         )
-    if not change.patch.strip():
+    if change.patch is None:
         print("\n  (no patch: the editor could not make this fix, see the triage reasons)")
     if match := change.prior():
         other = match.change
         print(
             f"\n  closest labelled change from an earlier run: {other.id}, {match.share:.0%} of words shared,"
-            f" labelled {paint_label(other.verdict)}{': ' + other.notes if other.notes else ''}"
+            f" labelled {paint_verdict(other.verdict)}{': ' + other.notes if other.notes else ''}"
         )
     if change.judge:
         j = change.judge
-        print(f"judge: {paint_label(j.label)} ({j.confidence:.2f}): {j.reason}")
+        print(f"judge: {paint_term(j.label)} ({j.confidence:.2f}): {j.reason}")
     for entry in change.labels:
         about = f" on {entry.finding}" if entry.finding else ""
-        print(f"label: {paint_label(entry.label)}{about}: {entry.note}")
+        print(f"label: {paint_term(entry.label)}{about}: {entry.note}")
     color = "--color=always" if TTY else "--color=never"
     print("\n" + git(REVIEW_REPO, "diff", color, "--stat").rstrip())
     staged = git(REVIEW_REPO, "diff", color, "--cached", "--stat").rstrip()
     print(f"\nStaged, the changeset under review (git diff --cached):\n{staged}")
-    print(paint(f"\n  cd {REVIEW_REPO} && git diff        # the change", "2"))
-    print(paint("  git diff --cached            # the changeset under review", "2"))
-    print(paint(f"  report: {change.report}", "2"))
-    print(paint(f"  labels: {change.file}", "2"))
+    print(paint(f"\n  cd {REVIEW_REPO} && git diff        # the change", DIM))
+    print(paint("  git diff --cached            # the changeset under review", DIM))
+    print(paint(f"  report: {change.report}", DIM))
+    print(paint(f"  labels: {change.file}", DIM))
 
 
-def check(ids: list[str]) -> None:
+def check(changes: list[Change]) -> None:
     """Runs the fixture check on the given changes, or on every unchecked one.
 
     Records ok, fail or no-apply in each change's change.yaml, with check.log on failure.
     """
     root = CACHE / "check"
-    env = os.environ | {"CARGO_TARGET_DIR": str(root / "target")}
-    todo = [c for c in Change.all() if (c.id in ids if ids else c.check is None)]
-    for change in todo:
+    for change in changes or [c for c in Change.all() if c.check is None]:
         try:
             repo = review_repo(change, root / "repo")
-        except subprocess.CalledProcessError as e:
-            change.check, log = CheckStatus.NO_APPLY, f"{e.cmd}\n{e.stderr}"
+        except PatchDoesNotApply as e:
+            change.check, log = CheckStatus.NO_APPLY, str(e)
         else:
-            out = change.fixture.run_check(repo, env)
+            out = change.fixture.run_check(repo)
             change.check, log = (
                 (CheckStatus.FAIL, out.stdout + out.stderr) if out.returncode else (CheckStatus.OK, None)
             )
@@ -698,10 +716,11 @@ def list_changes() -> None:
     Each line shows the change's verdict, its decisions, its size, its check status and its first claim.
     """
     for change in sorted(Change.all(), key=lambda c: (c.fixture_name, c.first.round, c.first.change)):
-        signs = [sign for sign, _ in changed_lines(change.patch)]
+        signs = [sign for sign, _ in changed_lines(patch)] if (patch := change.patch) is not None else []
         added, removed = signs.count("+"), signs.count("-")
         print(
-            f"{change.id}  {change.verdict or '-':7}  {change.fixture_name} r{change.first.round}  {change.decisions:9}"
+            f"{change.id}  {verdict_text(change.verdict) or '-':7}  {change.fixture_name} r{change.first.round}"
+            f"  {change.decisions:9}"
             f"  {f'+{added} -{removed}':>9}  {change.check or '-':4}  {' '.join(change.claim.split())[:80]}"
         )
 
@@ -709,7 +728,7 @@ def list_changes() -> None:
 def score(runs: list[RunDir]) -> None:
     for run in runs:
         counts = Counter(
-            change.verdict or (f"judge:{change.judge.label}" if change.judge else "unlabelled")
+            verdict_text(change.verdict) or (f"judge:{change.judge.label}" if change.judge else "unlabelled")
             for change in Change.all()
             if run.name in change.runs
         )
@@ -719,29 +738,28 @@ def score(runs: list[RunDir]) -> None:
 def next_change() -> None:
     """Selects and prints the unlabelled change whose judgement is least certain."""
     # A change without a patch (an editor that made none), or one that no longer applies, has nothing to review.
-    todo = [c for c in Change.all() if not c.verdict and c.patch.strip() and c.check != CheckStatus.NO_APPLY]
+    todo = [c for c in Change.all() if not c.verdict and c.patch is not None and c.check != CheckStatus.NO_APPLY]
     if not todo:
         sys.exit("every change has a user label")
     # The least certain judgements first: they are where a label teaches the judge most.
     change = min(todo, key=lambda c: c.judge.confidence if c.judge else -1)
     select(change)
     show(change)
-    print(paint(f"\n{len(todo)} unlabelled, this one included", "1"))
+    print(paint(f"\n{len(todo)} unlabelled, this one included", BOLD))
 
 
-def show_change(id: str | None) -> None:
-    """Prints the current change, selecting the one with the given ID first when there is one."""
-    if id:
-        select(Change.load(id))
-    show(Change.load(current()))
+def show_change(change: Change | None) -> None:
+    """Prints the current change, selecting the given one first when there is one."""
+    if change:
+        select(change)
+    show(current())
 
 
-def label(id: str, label: Label, finding: str | None, note: str) -> None:
+def label(change: Change, label: Label, finding: str | None, note: str) -> None:
     """Appends a label to a change's change.yaml."""
-    change = Change.load(id)
     if finding and finding not in {f["id"] for f in change.findings}:
         sys.exit(f"{change.id} has no finding {finding}")
-    change.labels.append(LabelEntry(label=label, finding=finding, note=note, date=date.today().isoformat()))
+    change.labels.append(LabelEntry(label=label, finding=finding, note=note, date=date.today()))
     change.save()
     print(f"{change.id}: {label}")
 
@@ -764,21 +782,31 @@ def main() -> None:
     def run_dir(path: str) -> RunDir:
         return RunDir(Path(path).resolve())
 
+    def stored(id: str) -> Change:
+        try:
+            return Change.load(id)
+        except FileNotFoundError:
+            raise argparse.ArgumentTypeError(f"no change {id}") from None
+
     x = command("extract", "split each round of a run into changes", lambda a: extract_runs(a.runs))
     x.add_argument("runs", nargs="+", type=run_dir)
-    j = command("judge", "propose a label for changes with none", lambda a: judge(a.ids, a.model, a.jobs))
-    j.add_argument("ids", nargs="*")
+    j = command("judge", "propose a label for changes with none", lambda a: judge(a.changes, a.model, a.jobs))
+    j.add_argument("changes", nargs="*", type=stored, metavar="ID")
     j.add_argument("--model", default="opus")
     j.add_argument("--jobs", type=positive_int, default=6)
-    c = command("check", "run the fixture's check on each change (a failure leaves check.log)", lambda a: check(a.ids))
-    c.add_argument("ids", nargs="*", help="default: every change not checked yet")
+    c = command(
+        "check", "run the fixture's check on each change (a failure leaves check.log)", lambda a: check(a.changes)
+    )
+    c.add_argument("changes", nargs="*", type=stored, metavar="ID", help="default: every change not checked yet")
     command("list", "list every change with its label, unlabelled ones marked", lambda a: list_changes())
     command("next", "open the next change no human has labelled", lambda a: next_change())
-    s = command("show", "open a change in the review repo; no ID: print the current one", lambda a: show_change(a.id))
-    s.add_argument("id", nargs="?", help="default: the change in the review repo")
-    lab = command("label", "label a change", lambda a: label(a.id or current(), Label(a.label), a.finding, a.note))
-    lab.add_argument("id", nargs="?", help="default: the change in the review repo")
-    lab.add_argument("label", choices=Label)
+    s = command(
+        "show", "open a change in the review repo; no ID: print the current one", lambda a: show_change(a.change)
+    )
+    s.add_argument("change", nargs="?", type=stored, metavar="ID", help="default: the change in the review repo")
+    lab = command("label", "label a change", lambda a: label(a.change or current(), a.label, a.finding, a.note))
+    lab.add_argument("change", nargs="?", type=stored, metavar="ID", help="default: the change in the review repo")
+    lab.add_argument("label", type=Label, choices=Label)
     lab.add_argument(
         "-f", "--finding", help="the finding of the change that the label is about; the whole change when left out"
     )

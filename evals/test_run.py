@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
-"""Checks the round diffing of run.py on a scratch repo. Run: python3 evals/test_run.py"""
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pydantic"]
+# ///
+"""Checks the round diffing of run.py on a scratch repo. Run: evals/test_run.py"""
 
 import tempfile
 from pathlib import Path
