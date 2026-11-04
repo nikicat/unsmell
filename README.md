@@ -56,13 +56,16 @@ step writes its result to a file under `.git/unsmell/<run>/` — batches,
 inventories, findings, decisions, one patch per change — so you can read what
 was found and decided before looking at any edit.
 
-You then review the changes one at a time, highest value first, in a single
-review worktree where `git diff` shows exactly the change under review: accept,
-reject, plan it with a note on the direction, or leave it for later. After the
-last verdict the project's full check runs once, and fresh re-check agents
-survey the code the accepted fixes touched until one finds nothing (at most
-three rounds). The report's counts come from the agents' inventory lines, so a
-skipped pass or file shows up as an incomplete run rather than as numbers.
+You then review the changes one at a time, highest value first, in your own
+worktree, where the unstaged diff — `git diff`, or your editor's source control
+view — shows exactly the change under review: accept, reject, plan it with a
+note on the direction, or leave it for later. After the last verdict the
+project's full check runs once, and fresh re-check agents survey the code the
+accepted fixes touched until one finds nothing (at most three rounds). Then your
+index comes back as you left it, plus every accepted line staged, so nothing you
+reviewed shows up for review again. The report's counts come from the agents'
+inventory lines, so a skipped pass or file shows up as an incomplete run rather
+than as numbers.
 
 Reading for flow finds smells in logic and walks past smells in types, so there
 is a second pass that ignores the prose entirely: every field, parameter, return

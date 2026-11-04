@@ -144,9 +144,15 @@ never become part of the next run's changeset.
    ```sh
    run=$(git rev-parse --git-dir)/unsmell/<run>
    tree=$(GIT_INDEX_FILE=$run/index sh -c 'git read-tree HEAD && git add -A && git write-tree')
-   base=$(git commit-tree "$tree" -p HEAD -m "unsmell base")   # once per run
+   base=$(git -c commit.gpgsign=false commit-tree "$tree" -p HEAD -m "unsmell base")   # once per run
    git worktree add --detach "$run/worktrees/<change>" "$base"   # once per change
    ```
+
+   Every commit the run makes is a temporary one, such as `$base` here or a
+   stacked change's start, and is made the same way: `git commit-tree` with
+   `-c commit.gpgsign=false`, never `git commit`. Such a commit is never pushed.
+   Signing one would wait on the user's signing agent each time, and
+   `git commit` would run the project's hooks and move a branch.
 
    **The build check** is the project's fastest command that fails on code that
    does not compile or type-check: `cargo check`, `go build ./...`,
@@ -175,7 +181,7 @@ never become part of the next run's changeset.
 
    ```sh
    git -C "$run/worktrees/<change>" add -A
-   git -C "$run/worktrees/<change>" diff --cached "$base" > "$run/fixes/<change>.patch"
+   git -C "$run/worktrees/<change>" diff --cached --no-renames "$base" > "$run/fixes/<change>.patch"
    git worktree remove --force "$run/worktrees/<change>"
    ```
 
@@ -187,33 +193,46 @@ never become part of the next run's changeset.
 6. **The user reviews the changes one at a time.** One change mixed into twenty
    is hard to judge; one at a time, each gets a real verdict. The FIX and ASK
    changes are reviewed, highest score first, and an alternative comes right
-   after the change it is stacked on. The user reviews each change in one review
-   worktree, which stays at the same path for the whole run, so that an editor
-   or diff viewer can stay open on it. Its HEAD is the snapshot with every
-   change accepted so far, and its working tree adds the change under review,
-   unstaged, so that `git diff` there shows exactly that change:
+   after the change it is stacked on. The user reviews in the main worktree,
+   where their editor is already open. The review borrows the index: it holds
+   the snapshot with every change accepted so far, and the working tree adds the
+   change under review, unstaged, so that `git diff` and the editor's source
+   control view show exactly that change. The user's own index is saved first
+   and given back at the end, so the borrowing never loses what they staged:
 
    ```sh
-   git worktree add --detach "$run/review" "$base"         # once per run
-   git -C "$run/review" reset -q --hard && git -C "$run/review" clean -qfd
-   git -C "$run/review" apply --intent-to-add "$run/fixes/<change>.patch"
+   # once, before the first change; stop if the working tree moved since $base
+   test "$(GIT_INDEX_FILE=$run/index sh -c 'git read-tree HEAD && git add -A && git write-tree')" = "$(git rev-parse "$base^{tree}")"
+   git update-ref "refs/unsmell/<run>/index" "$(git -c commit.gpgsign=false commit-tree "$(git write-tree)" -m "unsmell index")"
+   git update-ref "refs/unsmell/<run>/base" "$base"
+   git read-tree "$base"
+
+   # each change
+   git apply "$run/fixes/<change>.patch"
    ```
 
-   After an accept, the review worktree moves on to a commit of the accepted
-   patch (`git commit-tree`, as for the snapshot), so that the next change is
-   shown on top of it. For each change, the main agent prints the review
-   worktree's path, the change's findings (row, claim, decision and score) and
-   `git diff --stat`, then asks one question (`AskUserQuestion`) with four
-   answers. The question holds everything the user needs to find the change,
-   because the question box covers the text printed before it. It names the
-   change by what it does, not only by its id. It gives the review worktree's
-   absolute path, and the command that shows the change:
-   `cd /abs/path/.git/unsmell/<run>/review && git diff`. The `accept` answer's
-   preview shows the findings and the `--stat`.
+   While a `refs/unsmell/*/index` ref exists, some run has not given the index
+   back. A new run stops at its start and asks the user to finish or restore
+   that one (below); the main agent prints the restore commands when the review
+   begins, so that a run that dies can be restored by hand. The working tree
+   holds the user's own untracked files, so nothing here runs `git clean` or
+   `git reset --hard`. A patch that no longer applies, because an accepted one
+   changed its lines, is redone by hand on the current code, to the same final
+   shape, before it is shown.
 
-   - **accept**: apply the patch to the working tree with `git apply`. A patch
-     that no longer applies, because an accepted one changed its lines, is
-     redone by hand on the current code, to the same final shape.
+   For each change, the main agent prints the change's findings (row, claim,
+   decision and score) and `git apply --stat` of its patch, then asks one
+   question (`AskUserQuestion`) with four answers. The question holds everything
+   the user needs to find the change, because the question box covers the text
+   printed before it. It names the change by what it does, not only by its id,
+   and says that it is the unstaged diff (`git diff`, and `git status` for a new
+   file). The `accept` answer's preview shows the findings and the `--stat`. The
+   user may edit the change in place before answering; the accept takes their
+   edit with it.
+
+   - **accept**: stage the paths the patch touches. The index then holds every
+     accepted change, and the next change is shown on top of it:
+     `git apply --numstat "$run/fixes/<change>.patch" | cut -f3 | xargs git add -A --`.
    - **reject**: the change is not wanted. The patch stays in the run directory,
      so that it can be reconsidered later. When the user says that a finding is
      wrong, the report lists it as a rule of this skill to fix.
@@ -225,14 +244,20 @@ never become part of the next run's changeset.
      project keeps its decisions, such as its ADRs or design docs, instead.
    - **later**: nothing is applied, and the report lists the change as open.
 
+   Every answer but accept takes the change out of the working tree again with
+   `git apply -R` of its patch. When the user edited it and the patch no longer
+   reverses, `git restore` its paths from the index and delete the files that
+   the patch added.
+
    Each verdict and the user's note go into the change's entries in
    `decisions.yaml`, as `verdict` and `note`. The SKIP changes are not reviewed;
    their patches stay in the run directory, and the report lists them.
 
    The PLAN changes come last, and each asks one question before its plan entry
    is written: plan it, or **implement it now**. Implementing it now runs an
-   editor (step 5) in a worktree that starts from the review worktree's HEAD, so
-   that a change too large to judge against the base is made on top of
+   editor (step 5) in a worktree that starts from a commit of the borrowed index
+   (`git -c commit.gpgsign=false commit-tree "$(git write-tree)" -p "$base"`),
+   so that a change too large to judge against the base is made on top of
    everything accepted so far. Its patch is then reviewed like the others. When
    no user can answer, as in a headless run, the run stops before this step, as
    `patches only` does.
@@ -247,10 +272,32 @@ never become part of the next run's changeset.
    the newest code and the least read, and it writes
    `findings/recheck-<n>.yaml`. Its findings go back to step 4, and the fixes
    that come out of them go through steps 5 and 6 and get a new re-check agent.
-   Stop when a re-check returns no finding that the run would fix, or after
-   three re-checks; then every finding still open is planned (§5). A fix that
-   the next run would refactor again was not finished, and the re-check is where
-   it gets finished.
+   Their editors start from a commit of the borrowed index, as an implemented
+   PLAN change does, and their patches are diffs from that commit. Stop when a
+   re-check returns no finding that the run would fix, or after three re-checks;
+   then every finding still open is planned (§5). A fix that the next run would
+   refactor again was not finished, and the re-check is where it gets finished.
+
+8. **The index goes back to the user, with every accepted line staged.** The
+   user has read every line of an accepted change, so it is staged, even where
+   it lands on code they had not staged: a line left unstaged would be reviewed
+   twice. Everything else stays as they left it. A three-way merge from the
+   snapshot computes that index: the user's index is one side, the accepted
+   state the other, and `-X theirs` gives an accepted line the place of the
+   unstaged one it replaced. This step also runs when the run stops early, and
+   the main agent runs it by hand for a run that died:
+
+   ```sh
+   i0=refs/unsmell/<run>/index base=refs/unsmell/<run>/base
+   out=$(git merge-tree --write-tree --name-only -X theirs --merge-base="$base" "$i0" "$(git write-tree)")
+   git read-tree "$(echo "$out" | head -1)"
+   echo "$out" | sed -n '2,/^$/p' | sed '/^$/d' | xargs -r git reset -q "$i0" --
+   git update-ref -d "$i0" && git update-ref -d "$base"
+   ```
+
+   The last but one line handles what the merge cannot: a fix in a file the user
+   never added, which was untracked. Staging the fix would stage the whole file,
+   so the file keeps the fix and stays untracked, and the report lists it.
 
 A findings file:
 
