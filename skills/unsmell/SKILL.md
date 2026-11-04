@@ -623,17 +623,19 @@ documented item:
      stdin or writes a file is how, and its doc does not say so. A caller's doc
      never repeats a callee's effects: listing them mixes two layers in one
      comment, and cutting them later as duplicates is the reversal it causes;
-   - the exits: every `bail!`, `ensure!`, `?` with a context, or early return a
-     caller could cause (grep for `bail!|ensure!|context\(`);
+   - the errors a caller can tell apart: a sentinel, a typed error, or a failure
+     the caller handles differently from the others. Every other exit is "it
+     failed", which the signature's error already says, and a doc that lists the
+     branches is narration;
    - the sibling: another method whose difference from this one is one of those
      effects. Each effect must be in the doc's main clause, not in a participle
-     ("…, registering it when …"). Each caller-caused exit must be named. A
-     sibling must be pointed at from the one with the surprising effect. Two
-     further findings: your expectation was wrong or blank — the doc does not
-     state the contract; or the doc could only have been written after reading
-     the body — it names sort keys, tie-breaks or branch order that the caller
-     does not rely on, a SQL or regex mechanism, or what the *caller* does with
-     the result ("in the order they are tried").
+     ("…, registering it when …"). Each error a caller can tell apart must be
+     named. A sibling must be pointed at from the one with the surprising
+     effect. Two further findings: your expectation was wrong or blank — the doc
+     does not state the contract; or the doc could only have been written after
+     reading the body — it names sort keys, tie-breaks or branch order that the
+     caller does not rely on, a SQL or regex mechanism, or what the *caller*
+     does with the result ("in the order they are tried").
 
 3. A precondition phrased as "must" ("it must exist and be enabled") is a third:
    name the error instead.
@@ -648,7 +650,7 @@ documented item:
    re-read. Before the report, run step 1 on every doc you rewrote as if seen
    cold, and run the grep of step 4 over it; a rewrite that needs a second
    reading, or that satisfied a rule by cramming the mechanism into a clause,
-   goes back. Presence of the effects and exits is necessary, not sufficient.
+   goes back. Presence of the effects and errors is necessary, not sufficient.
    Two shapes pass every rule above and still read as nonsense, so check for
    them by form: a stand-in main verb (gives, makes, handles, deals with,
    matches, verifies) with the real contract in an appositive after a colon
@@ -723,10 +725,8 @@ documented item:
      within the ceiling", "more settled than", "of more varint bytes than a
      zero's". Write the verb and the articles out.
    - **"Returns an error if…"** for the error contract. The user's house style
-     is "Errors when…" ("Errors with ErrX when…", and "Errors on any of these:"
-     before a bulleted list of three or more conditions). It overrides Google
-     style here. Never rewrite an existing "Errors when…" doc into the Google
-     form.
+     is "Errors when…" ("Errors with ErrX when…"). It overrides Google style
+     here. Never rewrite an existing "Errors when…" doc into the Google form.
    - **A trailing comment on a field or constant that is longer than a few
      words.** Move it to its own line above the item and write it as sentences.
 
@@ -738,8 +738,8 @@ documented item:
    ```
 
    Neither the two-sentence target nor the two-to-three-line limit may be met by
-   compression. If the plain version is longer, keep the plain version. If it is
-   much longer, the item probably does too much (the long-comment rule below).
+   compression. A plain version that comes out longer means the item does too
+   much (the long-comment rule below).
 
 8. A long comment is a symptom, not the smell. The same holds for a comment that
    a fix wants to lengthen. A comment grows long for one of two reasons, and
@@ -822,17 +822,17 @@ read each for a list of verbs or of members — the flow read walks straight pas
 them.
 
 A doc comment is two sentences unless it earns a third: what comes out and what
-it does, then the errors a caller can cause. Its first clause says why the item
-is called, in the caller's terms, and a reader who finishes it still not knowing
-why the call exists has read a useless comment whatever else it lists ("adds
-every output of tx paying a tail pkScript to the tracked outpoints" tells the
-mechanism; "remembers tx's outputs to tail pkScripts so the scan can recognise a
-later spend by its input alone" tells the reason). One or two lines is the
-target; a doc that needs more to say why is describing a function that does too
-much, so refactor before rewording. Leave out what the types, defaults, or the
-type's own doc already say, and infrastructure failures (the database, the
-network), which every method has. If the rewrite is longer than the signature
-block below it, cut before shipping.
+it does, then the errors a caller can tell apart. Its first clause says why the
+item is called, in the caller's terms, and a reader who finishes it still not
+knowing why the call exists has read a useless comment whatever else it lists
+("adds every output of tx paying a tail pkScript to the tracked outpoints" tells
+the mechanism; "remembers tx's outputs to tail pkScripts so the scan can
+recognise a later spend by its input alone" tells the reason). One or two lines
+is the target; a doc that needs more to say why is describing a function that
+does too much, so refactor before rewording. Leave out what the types, defaults,
+or the type's own doc already say, and infrastructure failures (the database,
+the network), which every method has. If the rewrite is longer than the
+signature block below it, cut before shipping.
 
 **A doc names a value by what it is at the signature.** A parameter is bare
 (`want`); a field is its path (`Query.need`); a method is its path
@@ -1001,7 +1001,7 @@ which cause it was.
 | **Ambiguous noun** | A doc uses a word the project overloads — request, call, logs, lists, chunk, rate — without saying which; or a name the code no longer has | Name the referent ("JSON-RPC request", "the configured token lists", "reports on stderr"); check stale names and claims against the code (§3) |
 | **Wrong-layer doc** | An interface doc (a subcommand, a flag, a public item, a unit's description) carrying another layer's facts. From above: the callers ("as the service manager, the puller or a developer starts it") or a caller's reason ("for a phone, whose hostname is its model"). From below: the mechanism ("to stdout, read-only", "logging to the event log"), or a check that the function runs on its own result ("every returned record matches its source") | Cut each sentence that would go false when the callers change, or when the implementation changes and the behaviour does not. The reason moves to the caller's doc or the ADR, the mechanism to a comment at the code (§3, own layer) |
 | **Garbled sentence** | A doc that does not parse as plain English: a "whose"/"which" clause standing as a noun phrase ("Whose buckets the export reports them as."), a question word that does not fit the value's kind ("whose" on a name), a clause trailing off in a preposition and pronoun ("… them as"), a pronoun with two referents or none. A "what"/"where"/"when" free relative that names the value ("What the puller asks for") is sound | Rewrite as one complete sentence in the Google style form: a noun phrase for a type or field, a verb first for a function (§3, step 6) |
-| **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence (a colon that lists the items its sentence announces is fine), an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Returns an error if…" instead of the house "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Errors when…" for the error contract, a bulleted list for three or more conditions. A longer plain doc beats a short compressed one (§3, step 7) |
+| **Compressed doc** | A doc that parses but has to be read twice: a colon or semicolon joining a second idea onto a sentence (a colon that lists the items its sentence announces is fine), an appositive or reduced clause in place of a sentence ("…, the one it extends", "…, keeping none"), a parameter name used as a noun inside a clause ("the pending portal tx parent is"), dropped verbs and articles, "Returns an error if…" instead of the house "Errors when…", a long trailing comment on a field. The user calls this style "AI slop" | Rewrite in plain Google developer-docs English: short sentences with a subject and a verb, "Errors when…" for the error contract. A plain doc that comes out longer means the item does too much (§3, step 7) |
 | **Narrating doc comment** | The function's doc retells the body — "takes X, walks back, stamps each row, then…" — so the reader learns the steps, not the contract. Tells: it lists sort keys, tie-breaks, or branch order that the caller does not rely on; it names a mechanism (`coalesce`, a regex, a flag); it describes what the caller does with the result; it states a precondition as "must" instead of naming the error | Rewrite as the interface in Google developer documentation style (§3): verb first, present tense — what comes out, from what goes in, and the edge cases. Steps stay in the body; a *why* goes in a `//` comment. A mechanism the doc had to explain is often a smell of its own — a policy in the wrong layer — so check the code, not just the prose |
 
 Not exhaustive. If it reads badly and you can say why in one sentence, it
@@ -1021,7 +1021,7 @@ threshold. The threshold is 5 unless the arguments set another (§1).
 | -- | -- |
 | 9–10 | fixes a bug, or a doc or name that states something false |
 | 7–8 | removes a structural smell with a catalog tell met in full: a duplicated rule, a missing receiver, unparsed input, a misplaced rule, a hidden effect |
-| 5–6 | narrows a type, removes dead code, states a missing outcome or error in a doc; removes or shortens a comment that repeats the code, narrates history or states a fact twice |
+| 5–6 | narrows a type, removes dead code; removes or shortens a comment that repeats the code, narrates history or states a fact twice |
 | 3–4 | a doc fact that is true but adds little |
 | 0–2 | rewording a correct doc or message, renaming a name that is not wrong, reshaping code that has no smell; a rewrite that makes a comment longer without correcting something false in it |
 
@@ -1059,19 +1059,19 @@ the edge is a smell fix, even though the type now rejects what it cannot hold
 (§3, the edge pass). Replacing a generic error with a more specific one, without
 any new type behind it, is a feature: a wrapper that turns `KeyError` into
 `BankError`, or a new error class for the same failure. It is not a bug fix and
-not a smell fix, and it is planned (§5, PLAN). So a doc that leaves out an exit
-is fixed by documenting what the code does now, not by changing what it does.
+not a smell fix, and it is planned (§5, PLAN).
 
 A name or a doc is a finding only when it is wrong: it says something false or
 less than the code does, gives one thing two names, states a fact twice, or
-leaves out an effect or an error. Effects and errors count only within the
-item's abstraction level: the one domain its caller works in. Every function
-spends CPU time and allocates memory, and no doc says so; a module doc of a
-command-line tool names what the user meets, not the API calls made to get it.
-When an item has no single level, or mixes several, that is a finding about the
-code (§4, mixed altitude or concept mixing), and it is fixed before the doc. A
-doc rewritten first describes the mix, and it is wrong again after the split. A
-correct name or doc is not a finding because another wording reads better, or
+leaves out the outcome the caller calls it for. A doc that leaves out an error
+is not wrong: the signature already says the call can fail. Effects count only
+within the item's abstraction level: the one domain its caller works in. Every
+function spends CPU time and allocates memory, and no doc says so; a module doc
+of a command-line tool names what the user meets, not the API calls made to get
+it. When an item has no single level, or mixes several, that is a finding about
+the code (§4, mixed altitude or concept mixing), and it is fixed before the doc.
+A doc rewritten first describes the mix, and it is wrong again after the split.
+A correct name or doc is not a finding because another wording reads better, or
 because a neighbour spells it differently; rewording it only gives the next run
 something new to reword. A doc says what the item is or does for its caller, not
 how it is used or how it works: `owned` is "whether the bridge holds the name",
