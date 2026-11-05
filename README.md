@@ -114,12 +114,17 @@ the file is smelly.
 
 ## Install
 
-In Claude Code (the repo is its own single-plugin marketplace):
+In Claude Code, from the shared
+[nikicat/claude-plugins](https://github.com/nikicat/claude-plugins) marketplace:
 
 ```
-/plugin marketplace add nikicat/unsmell
-/plugin install unsmell@unsmell
+/plugin marketplace add nikicat/claude-plugins
+/plugin install unsmell@nikicat
 ```
+
+The repo is still its own marketplace too
+(`/plugin marketplace add nikicat/unsmell`, then
+`/plugin install unsmell@unsmell`).
 
 For local development: `claude --plugin-dir /path/to/unsmell` (single session),
 or `/plugin marketplace add /path/to/unsmell` (tracks your working tree).
@@ -132,12 +137,12 @@ Before committing, run `pre-commit install` once. The hook wraps the markdown at
 ## Update
 
 ```
-/plugin marketplace update unsmell
-/plugin update unsmell@unsmell
+/plugin marketplace update nikicat
+/plugin update unsmell@nikicat
 ```
 
-Then restart Claude Code. The first command refreshes the marketplace (this
-repo) so the second one sees the new version.
+Then restart Claude Code. The first command refreshes the marketplace so the
+second one sees the new version.
 
 ## Use
 
