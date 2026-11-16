@@ -3,114 +3,45 @@
 ![unsmell](assets/banner.webp)
 
 A [Claude Code](https://claude.com/claude-code) skill that refactors the smells
-out of your working changes before you commit them.
+out of your working changes before you commit them. Every rule lives in
+[SKILL.md](skills/unsmell/SKILL.md); this page says what the skill does for you
+and where each rule is.
 
-It reads what you've actually changed — unstaged, staged, and untracked — then
-checks it against a catalog of smells: duplication, unnamed tuples and unnamed
-returns, boolean and algebraic blindness, long functions and files, if-forests,
-parameter bloat, data clumps, missing receivers, misplaced rules, request-scoped
-values threaded through methods, unparsed input, split protocols, repeated
-derivations, concept mixing, primitive obsession, speculative generality,
-generic machinery (caches, retries, bounded parallel maps) written inline in
-domain code, locks that outgrew what they guard, one fact stated in two
-comments, and comments that narrate the code instead of stating its contract or
-do not parse as English, docs compressed into shorthand that has to be read
-twice, and interface docs that retell their callers or their implementation.
+## What it finds
 
-Functions that grew a second job get their own pass, because reading hunk by
-hunk never sees them: every changed function is taken apart line by line and
-each block tagged with one role — step, detail, decision, effect, assembly. Two
-roles written inline is a finding (named steps with builder chains wedged
-between them, a policy written inside the code that acts on it, a loop that both
-selects and mutates), and so is the opposite: a function whose whole body is one
-call to a callee only it calls.
+It reads what you have changed (unstaged, staged and untracked) and checks it
+against a catalog of smells in a few families: duplication and repeated facts,
+blind types and unnamed values, functions and files that do too much, missing
+receivers and misplaced rules, unparsed input, generic machinery written inline,
+and docs that restate the code instead of linking its design decision. The full
+list is the catalog, SKILL.md §4.
 
-Free functions that should have been methods get caught across siblings rather
-than one at a time: for every file, unsmell tables each function against the
-parameters it takes, naming columns by what the value is. A store, client,
-config or callback that two or more functions take besides their real input is a
-missing receiver — the shared values become fields of one type, the functions
-its methods, and the caller builds it once.
+## How it finds them
 
-Structure that no single function shows gets passes of its own:
+- **Whole files, not hunks.** Each touched file is read end to end, and a set of
+  passes looks for what a read for flow misses (SKILL.md §3.1).
+- **A role for every function.** Each changed function is taken apart by what
+  its lines do (§3.1, "Role pass").
+- **Docs from the design.** A doc links its item to the design decision in your
+  ADRs or design docs (§3.1, "A doc carries the design" and "Design link").
+- **Fresh eyes.** The survey runs in fresh subagents, one per batch of related
+  files, plus one that looks across batches (§3.0).
 
-- **Placement.** Each constant, check and derivation is matched to the type
-  whose invariant it serves, so a session's lifetime written in the auth code
-  moves onto the session.
-- **Lifetime.** Values are sorted by how long they live, so a per-request value
-  threaded through methods becomes a per-request object.
-- **The program's edge.** Every input entering the program (arguments, config,
-  request paths and headers, database rows, API bodies) is checked for being
-  parsed into a type where it enters.
-- **Repeats.** Three greps find a literal that a writer and a reader must both
-  spell the same way, an expression computed in two places, and a fact stated in
-  two comments.
+## What you see
 
-The agent that wrote the code is the worst one to survey it, because it
-remembers why each line is there. So the survey runs in fresh subagents, one per
-batch of a few related files, all in parallel, plus one that looks across their
-inventories for what no single batch can see. The main agent triages, and each
-change gets its own fresh editor in its own git worktree, all in parallel, so
-your working tree and index stay untouched until you accept something. Every
-step writes its result to a file under `.git/unsmell/<run>/` — batches,
-inventories, findings, decisions, one patch per change — so you can read what
-was found and decided before looking at any edit.
+Every step writes its result in a run directory under the repo's git directory,
+so you can read what was found and decided before looking at any edit (§3.0).
 
-You then review the changes one at a time, highest value first, in your own
-worktree, where the unstaged diff — `git diff`, or your editor's source control
-view — shows exactly the change under review: accept, reject, plan it with a
-note on the direction, or leave it for later. After the last verdict the
-project's full check runs once, and fresh re-check agents survey the code the
-accepted fixes touched until one finds nothing (at most three rounds). Then your
-index comes back as you left it, plus every accepted line staged, so nothing you
-reviewed shows up for review again. The report's counts come from the agents'
-inventory lines, so a skipped pass or file shows up as an incomplete run rather
-than as numbers.
+You review the changes one at a time in your own working tree and answer accept,
+reject, plan or later (§3.0, step 6). At the end your index comes back with
+every accepted line staged (§3.0, step 8). The run commits nothing to a branch
+(§3.0, step 5).
 
-Reading for flow finds smells in logic and walks past smells in types, so there
-is a second pass that ignores the prose entirely: every field, parameter, return
-and element type gets written down next to what the value actually *is*. Where
-that sentence says more than the type does — `id: u64` for "the id tying a
-response to its request", `&[&str]` for "paths relative to `$HOME`" — that's a
-finding. Every finding ends in one of five buckets:
+Every finding ends in one bucket, and the survey covers the whole changeset
+every time (§5). When you point at a smell it missed, it sweeps for every
+sibling of that kind (§5.1).
 
-- **Fixed** when there's one obviously correct, behaviour-preserving answer —
-  including when the real fix lives outside the changeset (the other copy of the
-  duplicated block, the type the data clump was implying).
-- **Asked** when the design is genuinely a judgement call — public API changes,
-  new modules, competing defensible options. The editor still writes the
-  recommended option as a patch, so the question is about real code.
-- **Kept** in the rare case where the smell is imposed from outside (framework
-  signature, external spec, hot path) — with a comment *in the file* naming the
-  reason and the trigger that ends it. That list of reasons is exhaustive: "only
-  one call site", "it's obvious here" and "it's small" are not on it, and a Keep
-  that appears only in the report is a silent skip rather than a Keep.
-- **Planned** when the smell is real but this run does not fix it — out of
-  scope, too large for the commit, or waiting on a decision. It goes into the
-  project's own TODO or issue tracker, with enough detail to act on without this
-  conversation.
-- **Discarded** when the finding does not hold, with a one-line reason you can
-  overrule.
-
-Comments get a pass of their own, because both of the other reads walk straight
-past them. A doc that narrates the body, restates the signature, or reads the
-interface back is not a style slip to trim — it is a second copy of the code
-with a shorter life, and it usually points at something structural: a doc that
-can't say why the call exists in a line is describing a function that does too
-much. So the fix goes to whichever is actually wrong, the comment or the thing
-it sits above.
-
-The survey covers the whole changeset every time; only the *fixing* is
-proportional to the diff. Anything surveyed and not fixed is planned in the
-project's own TODO or tracker, or discarded with a reason, rather than going
-quiet. And when you point at a smell it missed, that names a kind, not a line —
-it sweeps the changeset for every sibling before fixing, and tells you the
-count.
-
-Style comes from written rules only: `CLAUDE.md`, `CONTRIBUTING.md`, linter and
-formatter configs. It deliberately does **not** imitate the surrounding code —
-"the rest of the file does it this way" is not a justification if the rest of
-the file is smelly.
+Style comes from written rules only, never from the surrounding code (§2).
 
 ## Install
 
